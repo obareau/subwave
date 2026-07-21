@@ -423,21 +423,21 @@ export default function SkillsPanel() {
             What the DJ does between tracks.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            Each skill is an autonomous segment. A skill fires only when it is enabled here
-            <strong> and</strong> assigned to the persona on air. Assign DJs from each skill&apos;s
-            Edit sheet, or per-persona on the Personas page. “Run now” is an operator override
-            and ignores both.
+            Each skill is an autonomous segment. It fires only when it&apos;s enabled here
+            <strong> and</strong> assigned to the persona on air. Assign DJs from a skill&apos;s
+            Edit sheet, or per-persona on the Personas page. &quot;Run now&quot; is an operator
+            override and ignores both.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            Hit <strong>Edit</strong> on any skill to open its segment sheet — change the brief,
-            cooldown, or which real-world context (time, weather…) it may mention (and, for News,
-            its feed URL). Edits are saved to <code>state/skills/&lt;kind&gt;/SKILL.md</code>.
+            Hit <strong>Edit</strong> on any skill to open its segment sheet: change the brief,
+            cooldown, or which real-world context (time, weather) it may mention, plus the feed
+            URL for News. Edits save to <code>state/skills/&lt;kind&gt;/SKILL.md</code>.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            Add your own with <strong>New skill</strong> — it writes
-            <code> state/skills/&lt;name&gt;/SKILL.md</code> for you. (You can still drop a folder there
-            by hand — with an optional <code>tool.mjs</code> data tool — and hit <strong>Rescan</strong>.)
-            Custom skills arrive <strong>disabled</strong>, so review them, then enable them before they can air.
+            Add your own with <strong>New skill</strong> and it writes
+            <code> state/skills/&lt;name&gt;/SKILL.md</code> for you. (You can also drop a folder there
+            by hand, with an optional <code>tool.mjs</code> data tool, then hit <strong>Rescan</strong>.)
+            Custom skills arrive <strong>disabled</strong>, so review them before enabling.
           </div>
           <a
             href="/manual/skills"
@@ -623,83 +623,85 @@ export default function SkillsPanel() {
                 <Icon size={20} strokeWidth={1.75} aria-hidden />
               </span>
 
-              {/* body */}
-              <div className="grid min-w-0 flex-1 gap-2.5">
-                <div className="flex items-start gap-3">
+              {/* body — text stack + toggle rail as siblings, so the taller rail
+                  never inflates the name row and pushes the description down */}
+              <div className="flex min-w-0 flex-1 items-start gap-3">
+                {/* text stack — name, description, facets, actions stack tightly */}
+                <div className="grid min-w-0 flex-1 gap-2.5">
                   {/* name + custom flag */}
-                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-[17px] font-extrabold tracking-[-0.01em] text-ink">
                       {s.label || s.name}
                     </span>
                     {s.custom && <Pill className="text-[8px]">custom</Pill>}
                   </div>
 
-                  {/* right rail — the toggle + its state */}
-                  <div className="flex flex-none flex-col items-end gap-1 text-right">
-                    <span onClick={e => e.stopPropagation()}>
-                      <Toggle
-                        on={s.enabled}
-                        disabled={busy === s.name}
-                        onClick={() => toggle(s.name, !s.enabled)}
-                      />
+                  {s.ready === false && (
+                    <V3Alert tone="error" title="API key not set">
+                      This skill needs the <code>{s.requiresKey || 'required API key'}</code> environment
+                      variable set in <code>.env</code>. Until then it stays inert and never
+                      fires autonomously, even when enabled.
+                      {s.keyUrl && (
+                        <>
+                          {' '}
+                          <a
+                            href={s.keyUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                          >
+                            Get a key here
+                          </a>.
+                        </>
+                      )}
+                    </V3Alert>
+                  )}
+
+                  {/* brief */}
+                  <p className="line-clamp-2 text-[12px] leading-[1.55] text-muted italic">
+                    <SkillDescription text={s.description} keyUrl={s.keyUrl} />
+                  </p>
+
+                  {/* facets — cadence, reach, tags */}
+                  <div className="flex flex-wrap gap-1">
+                    <MetaChip>{cooldownLabel(s.cooldownMs)}</MetaChip>
+                    {assign && <MetaChip>{assign}</MetaChip>}
+                    {pinned && <MetaChip accent>pinned feature</MetaChip>}
+                    {(s.tags || []).map(t => (
+                      <MetaChip key={t}>#{t}</MetaChip>
+                    ))}
+                  </div>
+
+                  {/* actions — Run now on the left, Edit affordance on the right.
+                      Same cart-pad language as the dash DJ segment pads, slimmed
+                      to one line — LED arms on hover, blinks while running. */}
+                  <div className="flex items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); runNow(s.name); }}
+                      disabled={busy === s.name}
+                      className={cn('seg-pad seg-pad--slim', busy === s.name && 'is-firing')}
+                    >
+                      <span className="seg-led" aria-hidden />
+                      <span className="seg-label">{busy === s.name ? 'Working…' : 'Run now'}</span>
+                    </button>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-[0.16em] text-muted uppercase transition-colors group-hover:text-vermilion">
+                      Edit <span aria-hidden="true">→</span>
                     </span>
-                    <span className="caption">{s.enabled ? 'enabled' : 'disabled'}</span>
                   </div>
                 </div>
 
-                {s.ready === false && (
-                  <V3Alert tone="error" title="API key not set">
-                    This skill needs the <code>{s.requiresKey || 'required API key'}</code> environment
-                    variable set in <code>.env</code>. Until then it stays inert and never
-                    fires autonomously, even when enabled.
-                    {s.keyUrl && (
-                      <>
-                        {' '}
-                        <a
-                          href={s.keyUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={e => e.stopPropagation()}
-                          className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
-                        >
-                          Get a key here
-                        </a>.
-                      </>
-                    )}
-                  </V3Alert>
-                )}
-
-                {/* brief */}
-                <p className="line-clamp-2 text-[12px] leading-[1.55] text-muted italic">
-                  <SkillDescription text={s.description} keyUrl={s.keyUrl} />
-                </p>
-
-                {/* facets — cadence, reach, tags */}
-                <div className="flex flex-wrap gap-1">
-                  <MetaChip>{cooldownLabel(s.cooldownMs)}</MetaChip>
-                  {assign && <MetaChip>{assign}</MetaChip>}
-                  {pinned && <MetaChip accent>pinned feature</MetaChip>}
-                  {(s.tags || []).map(t => (
-                    <MetaChip key={t}>#{t}</MetaChip>
-                  ))}
-                </div>
-
-                {/* actions — Run now on the left, Edit affordance on the right.
-                    Same cart-pad language as the dash DJ segment pads, slimmed
-                    to one line — LED arms on hover, blinks while running. */}
-                <div className="flex items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); runNow(s.name); }}
-                    disabled={busy === s.name}
-                    className={cn('seg-pad seg-pad--slim', busy === s.name && 'is-firing')}
-                  >
-                    <span className="seg-led" aria-hidden />
-                    <span className="seg-label">{busy === s.name ? 'Working…' : 'Run now'}</span>
-                  </button>
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-[0.16em] text-muted uppercase transition-colors group-hover:text-vermilion">
-                    Edit <span aria-hidden="true">→</span>
+                {/* right rail — the toggle + its state */}
+                <div className="flex flex-none flex-col items-end gap-1 text-right">
+                  <span onClick={e => e.stopPropagation()}>
+                    <Toggle
+                      on={s.enabled}
+                      disabled={busy === s.name}
+                      onClick={() => toggle(s.name, !s.enabled)}
+                    />
                   </span>
+                  <span className="caption">{s.enabled ? 'enabled' : 'disabled'}</span>
                 </div>
               </div>
             </div>

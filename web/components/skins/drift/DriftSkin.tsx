@@ -9,6 +9,7 @@
 // chip; everything else is corners.
 
 import { useEffect, useRef, useState } from 'react';
+import { Headphones, Heart } from 'lucide-react';
 import styles from './Drift.module.css';
 import {
   usePlayerActions,
@@ -31,9 +32,10 @@ import {
   lastVoiceLine,
   listenerCountOf,
   progressRatio,
+  stationIdentity,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useVolumeNudge } from '../sharedHooks';
+import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
 /** Lowercase weekday in the station's zone — "23:09 saturday". */
@@ -56,16 +58,13 @@ export default function DriftSkin(_props: SkinProps) {
   } = usePlayerFeed();
   const { tunedIn, volume, muted, offline, signal } = usePlayerAudio();
   const { toggleMute } = usePlayerActions();
-  const { showTuneIn, tuneInFromOverlay, handleTune } = useTuneInGate();
+  const { showOverlay, tuneInFromOverlay, handleTune } = useTuneInGate();
 
   const elapsed = useElapsed(trackStartedAt);
   const clock = useClock();
   const stationLocale = normalizeStationLocale(locale);
   const listenerCount = listenerCountOf(listeners);
-  const stationName = (typeof dj?.station === 'string' && dj.station) || 'SUB/WAVE';
-  const djName =
-    activeShow?.persona?.name || (typeof dj?.name === 'string' ? dj.name : '') || 'the DJ';
-  const showName = activeShow?.name || context?.time?.show || '';
+  const { stationName, djName, showName } = stationIdentity(dj, activeShow, context);
   const ratio = progressRatio(elapsed, nowPlaying?.duration);
   const voice = lastVoiceLine(session.messages);
   const upNext = state.upcoming?.[0];
@@ -88,6 +87,7 @@ export default function DriftSkin(_props: SkinProps) {
   useDynamicStyle(fillRef, { width: `${Math.round((ratio ?? 0) * 100)}%` });
 
   const adjustVolume = useVolumeNudge();
+  const like = useTrackLike();
 
   // The ··· chip: request + recent history in one quiet panel.
   const [panelOpen, setPanelOpen] = useState(false);
@@ -132,12 +132,14 @@ export default function DriftSkin(_props: SkinProps) {
         aria-hidden="true"
       />
 
-      {/* corners */}
-      <div className="absolute top-7 left-8 max-w-[45%] truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase">
+      {/* corners — on a phone the clock/context text is dropped so the station
+          line and the theme icon can't collide in the middle; it returns from
+          sm up where there's room for both halves. */}
+      <div className="absolute top-7 left-8 max-w-[70%] truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase sm:max-w-[45%]">
         {stationName} — {showName ? `${showName} with ${djName}` : `small hours with ${djName}`}
       </div>
       <div className="absolute top-7 right-8 flex max-w-[45%] items-center gap-3">
-        <span className="min-w-0 truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase">
+        <span className="hidden min-w-0 truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase sm:block">
           {clock
             ? [
                 `${turnClock(clock.getTime(), timezone, stationLocale)} ${stationWeekday(clock, timezone)}`,
@@ -151,12 +153,35 @@ export default function DriftSkin(_props: SkinProps) {
         {upNext?.title ? `up next · ${[upNext.title, upNext.artist].filter(Boolean).join(' — ')}` : ''}
       </div>
       <div className="absolute right-8 bottom-7 flex items-baseline gap-2 font-mono text-[10px] tracking-[0.18em] text-muted uppercase">
-        <span className="hidden sm:inline">
-          {[
-            listenerCount != null ? `${listenerCount} listening` : '',
-            signal.latencyMs != null && tunedIn ? `${signal.latencyMs} ms` : '',
-          ].filter(Boolean).join(' · ')}
+        <span className="hidden items-center gap-1.5 sm:inline-flex">
+          {listenerCount != null && (
+            <span className="inline-flex items-center gap-1" aria-label={`${listenerCount} listening`}>
+              <Headphones aria-hidden className="size-3" strokeWidth={1.5} />
+              {listenerCount}
+            </span>
+          )}
+          {listenerCount != null && signal.latencyMs != null && tunedIn && (
+            <span aria-hidden>·</span>
+          )}
+          {signal.latencyMs != null && tunedIn && <span>{signal.latencyMs} ms</span>}
         </span>
+        {like.available && (
+          <button
+            type="button"
+            onClick={() => void like.like()}
+            disabled={like.pending || like.liked}
+            aria-pressed={like.liked}
+            aria-label={like.liked ? 'Liked' : 'Like this track'}
+            className={cn(
+              'v3-focus inline-flex items-center gap-1 border-0 bg-transparent p-0',
+              like.liked ? 'text-[var(--accent)]' : 'cursor-pointer text-muted hover:text-ink',
+              like.pending && 'opacity-60',
+            )}
+          >
+            <Heart aria-hidden className={cn('size-3', like.liked && 'fill-current')} strokeWidth={1.5} />
+            {like.count > 0 && like.count}
+          </button>
+        )}
         <button type="button" aria-label="Volume down" onClick={() => adjustVolume(-0.05)}
           className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">−</button>
         <button
@@ -170,11 +195,14 @@ export default function DriftSkin(_props: SkinProps) {
           className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">+</button>
       </div>
 
-      {/* the ten percent of type. pointer-events-none so this full-screen
-          centering layer doesn't sit over the corner controls (ThemeSwitcher,
-          volume) and eat their clicks — the one interactive child (the title,
-          which tunes in) re-enables events on itself. */}
-      {!showTuneIn && (
+      {/* the ten percent of type. Shown whenever the full-bleed gate isn't
+          covering the screen (!showOverlay) — so when the operator disables the
+          tune-in overlay, this layer is drift's tune affordance: the label reads
+          "tap to listen" and the title tunes in. pointer-events-none so this
+          full-screen centering layer doesn't sit over the corner controls
+          (ThemeSwitcher, volume) and eat their clicks — the one interactive
+          child (the title, which tunes in) re-enables events on itself. */}
+      {!showOverlay && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 text-center">
           {coverSrc && !offline && (
             <div className="h-[128px] w-[128px] border border-soft-border sm:h-[152px] sm:w-[152px]">
@@ -220,13 +248,13 @@ export default function DriftSkin(_props: SkinProps) {
         </div>
       )}
 
-      {/* the ··· chip */}
-      {!showTuneIn && (
+      {/* the ··· chip — available whenever the poster is up (gate not covering) */}
+      {!showOverlay && (
         <button
           type="button"
           onClick={() => setPanelOpen(o => !o)}
           aria-expanded={panelOpen}
-          className="v3-focus absolute bottom-6 left-1/2 -translate-x-1/2 cursor-pointer border border-soft-border bg-[var(--field)] px-4 py-1 font-mono text-[12px] tracking-[0.3em] text-muted hover:text-ink"
+          className="v3-focus absolute bottom-6 left-1/2 -translate-x-1/2 cursor-pointer border border-soft-border/50 bg-[var(--field)]/25 px-4 py-1 font-mono text-[12px] tracking-[0.3em] text-muted backdrop-blur-md hover:bg-[var(--field)]/45 hover:text-ink"
         >
           ···
         </button>
@@ -291,7 +319,7 @@ export default function DriftSkin(_props: SkinProps) {
       )}
 
       {/* the gate: just the wash and one lowercase word */}
-      {showTuneIn && !offline && (
+      {showOverlay && !offline && (
         <button
           type="button"
           onClick={tuneInFromOverlay}

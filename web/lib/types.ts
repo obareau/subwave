@@ -115,6 +115,21 @@ export interface ListenerCount {
   [key: string]: unknown;
 }
 
+/** Structured description of the live broadcast mounts (`stream` on
+ *  `/now-playing`). mount/format/bitrate describe the always-served MP3 floor;
+ *  the *Enabled flags advertise which optional mounts (`/stream.opus`,
+ *  `/stream.flac`, `/stream.aac`) are also live. */
+export interface StreamInfo {
+  mount?: string;
+  format?: string;
+  bitrate?: number | null;
+  sampleRate?: number | null;
+  channels?: number | null;
+  opusEnabled?: boolean;
+  flacEnabled?: boolean;
+  aacEnabled?: boolean;
+}
+
 /** `/now-playing` response. */
 export interface NowPlayingResponse {
   nowPlaying: NowPlayingTrack | null;
@@ -125,6 +140,8 @@ export interface NowPlayingResponse {
   streamOnline?: boolean;
   /** kbps of the first attached broadcast mount; null when offline. */
   streamBitrate?: number | null;
+  /** Broadcast mount descriptor — drives the listener stream-format picker. */
+  stream?: StreamInfo;
   /** Cumulative since-boot LLM token total — the player's token ticker. */
   llmTokens?: number | null;
   /** Station IANA timezone — render on-air timestamps in it (issue #418). */
@@ -181,8 +198,9 @@ export interface StationState {
   timezone?: string;
   locale?: StationLocale;
   /** Station-wide listener-player UI settings (from GET /state). `skin` is
-   *  the operator's player-skin pick (see components/skins). */
-  ui?: { boothBuddy?: boolean; skin?: string };
+   *  the operator's player-skin pick (see components/skins); `tuneInOverlay`
+   *  gates the full-bleed tap-to-tune gate (default on). */
+  ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
 }
 
 /** A single turn in the live DJ session — `voice` (spoken on-air), `dj` (the
