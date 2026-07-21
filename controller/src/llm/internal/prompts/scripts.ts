@@ -16,7 +16,7 @@ import { introBudgetPhrase, introMsFor, bpmKeyFor } from './intro-budget.js';
 // segment skill, which is cooldown- and change-gated. The weather-pushing
 // narrative angles were trimmed to match — without the weather line in front of
 // it, a model told to "mention the weather" would only invent it.
-const SCRIPT_CONTEXT_FIELDS = ['date', 'clock', 'time', 'festival', 'show', 'listeners'];
+const SCRIPT_CONTEXT_FIELDS = ['date', 'clock', 'time', 'festival', 'show', 'listeners', 'cat'];
 
 export async function generateIntro({ track, context, requestedBy = null, requestText = null, artistMiss = null, recap = null, recentTracks = null, recentOpeners = null }: any) {
   const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS });

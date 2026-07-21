@@ -13,7 +13,7 @@ import { buildContextLines } from './context.js';
 // Same field set as the free-text script generators (scripts.ts): ambient
 // weather stays out (issue #471 — it dominated every segment); the dedicated
 // weather skill owns that beat.
-const BANTER_CONTEXT_FIELDS = ['date', 'clock', 'time', 'festival', 'show', 'listeners'];
+const BANTER_CONTEXT_FIELDS = ['date', 'clock', 'time', 'festival', 'show', 'listeners', 'cat'];
 
 // The exchange stays short by construction: radio banter that runs past ~6
 // lines stops being a break and starts being a podcast.

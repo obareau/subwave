@@ -17,7 +17,7 @@ import { buildContextLines, decoratePrompt, randomSeed } from './context.js';
 
 // Same field set as the free-text script generators (scripts.ts): ambient
 // weather stays out (issue #471); the dedicated weather skill owns that beat.
-const PROGRAMME_CONTEXT_FIELDS = ['date', 'clock', 'time', 'festival', 'listeners'];
+const PROGRAMME_CONTEXT_FIELDS = ['date', 'clock', 'time', 'festival', 'listeners', 'cat'];
 
 // A plan is bounded: one feature per scheduled hour, capped so a marathon
 // scheduling mistake can't make the producer write a 24-item rundown.

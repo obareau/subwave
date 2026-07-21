@@ -84,7 +84,7 @@ export function randomSeed() {
 // The "right now" fields buildContextLines can emit — the vocabulary every
 // per-skill / per-generator context allowlist is drawn from (issue #471). Order
 // is the order the lines are emitted in. Keep in sync with the guards below.
-export const CONTEXT_FIELDS = ['date', 'clock', 'time', 'weather', 'festival', 'show', 'listeners'] as const;
+export const CONTEXT_FIELDS = ['date', 'clock', 'time', 'weather', 'festival', 'show', 'listeners', 'cat'] as const;
 export type ContextField = (typeof CONTEXT_FIELDS)[number];
 
 // Normalise a contextFields spec (array | comma-string | null/undefined) to a
@@ -175,6 +175,9 @@ export function buildContextLines(
     lines.push(n === 0
       ? `No one is tuned in right now.`
       : `Listeners tuned in right now: ${n}.`);
+  }
+  if (on('cat') && context?.cat?.justChanged) {
+    lines.push(`Studio note: ${context.cat.name}, the studio's small cat, just ${context.cat.inside ? 'wandered back in' : 'slipped back out'}. Nobody has ever settled whether it's a real animal, a small robot, a synthetic creature, or just a projection — it behaves like a cat either way, so don't resolve the question, just notice it if it feels natural. Don't force a mention every time you see this line; most segments should ignore it entirely.`);
   }
   if (recentTracks && recentTracks.length) {
     const list = recentTracks.slice(0, 5).map((t: any) => `"${t.title}" by ${t.artist || 'unknown'}`).join('; ');

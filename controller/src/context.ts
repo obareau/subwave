@@ -6,6 +6,8 @@ import { resolveActiveShow, get as getSettings } from './settings.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase } from './time.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 export function getTimeContext(date = new Date()) {
   const h = zonedParts(date).hour;
@@ -44,6 +46,56 @@ export function getFestivalContext(date = new Date()) {
     }
   }
   return null;
+}
+
+// Shortwave — the studio's resident/stray (nobody's sure which) cat. Real
+// persisted state (in/out + since when), NOT re-invented per prompt: before
+// this, DJs kept improvising ungrounded cat imagery independently (issue
+// noticed 2026-07-21 — same motif surfacing in unrelated sessions with no
+// shared truth behind it). Now there is one truth, and the model narrates
+// FROM it instead of inventing it. Nature deliberately unresolved — synthetic,
+// biological, holographic, nobody knows, and the DJs should never claim to.
+const STUDIO_CAT_NAME = 'Shortwave';
+const STUDIO_CAT_FILE = path.join(config.stateDir, 'studio-cat.json');
+const CAT_MIN_DWELL_MS = 45 * 60 * 1000; // au moins 45 min avant de pouvoir changer d'état
+const CAT_FLIP_CHANCE = 0.12; // par appel, une fois le dwell minimum passé
+
+interface CatState { inside: boolean; since: string }
+
+function loadCatState(): CatState {
+  try {
+    return JSON.parse(fs.readFileSync(STUDIO_CAT_FILE, 'utf-8'));
+  } catch {
+    return { inside: true, since: new Date().toISOString() };
+  }
+}
+
+function saveCatState(s: CatState) {
+  try {
+    fs.mkdirSync(path.dirname(STUDIO_CAT_FILE), { recursive: true });
+    fs.writeFileSync(STUDIO_CAT_FILE, JSON.stringify(s));
+  } catch {
+    // pas bloquant : au pire Shortwave "oublie" son état au prochain redémarrage
+  }
+}
+
+/**
+ * Fait/renvoie l'état de Shortwave. `justChanged` ne passe à true que sur le
+ * tick où l'état bascule — c'est ce qui permet au prompt de ne le mentionner
+ * qu'à l'entrée/sortie, pas en continu (même logique que weather's
+ * changedSinceLastMention).
+ */
+export function getStudioCatContext(now = new Date()) {
+  const s = loadCatState();
+  const dwellMs = now.getTime() - new Date(s.since).getTime();
+  let justChanged = false;
+  if (dwellMs >= CAT_MIN_DWELL_MS && Math.random() < CAT_FLIP_CHANCE) {
+    s.inside = !s.inside;
+    s.since = now.toISOString();
+    saveCatState(s);
+    justChanged = true;
+  }
+  return { name: STUDIO_CAT_NAME, inside: s.inside, justChanged };
 }
 
 // Weather via Open-Meteo (no API key required)
@@ -324,6 +376,7 @@ export async function getFullContext(at?: Date) {
   // Live audience size, from the cached Icecast monitor. `count` is null when
   // it couldn't be read — callers treat that as "unknown" and stay quiet.
   const listeners = { count: getListenerCount() };
+  const cat = getStudioCatContext(now);
 
-  return { time, weather, festival, dominantMood, date, clock, activeShow, listeners };
+  return { time, weather, festival, dominantMood, date, clock, activeShow, listeners, cat };
 }
