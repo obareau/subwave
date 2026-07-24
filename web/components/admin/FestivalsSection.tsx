@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { Card, Btn } from './ui';
@@ -12,6 +12,9 @@ import {
 } from '../ui/select';
 import { Modal } from '../ui/modal';
 import { V3AlertDialog } from '../ui/alert-dialog';
+import { SkeletonRows } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 
 interface Festival {
   month: number;
@@ -69,6 +72,8 @@ export default function FestivalsSection() {
   const [editing, setEditing] = useState<Festival | null>(null);
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  // Base id for wiring each field's <Label htmlFor> to its control's id.
+  const fieldId = useId();
 
   const load = useCallback(async () => {
     try {
@@ -192,7 +197,7 @@ export default function FestivalsSection() {
       <SectionHeader
         eyebrow="festivals"
         title="Festival calendar."
-        sub="Mood-forming dates the DJ leans into around the year. Add your local holidays, regional celebrations, or personal landmarks; the station's mood shifts to match the nearest active festival."
+        sub="Dates that set a mood, marked across the year. Add your local holidays, regional celebrations, or personal landmarks — the station leans into the nearest one as it comes around."
         metrics={festivals ? [{ n: String(festivals.length), l: `date${festivals.length === 1 ? '' : 's'}`, accent: true }] : undefined}
         actions={
           <Btn tone="accent" onClick={startAdd} disabled={festivals === null}>
@@ -201,15 +206,9 @@ export default function FestivalsSection() {
         }
       />
 
-      {err && (
-        <Card>
-          <div className="text-[var(--danger)]">{err}</div>
-        </Card>
-      )}
+      {err && <ErrorState error={err} onRetry={load} />}
 
-      {festivals === null && !err && (
-        <div className="text-[13px] text-muted italic">loading…</div>
-      )}
+      {festivals === null && !err && <SkeletonRows rows={4} />}
 
       {festivals !== null && (
         <Card
@@ -217,9 +216,10 @@ export default function FestivalsSection() {
           sub={`${festivals.length} date${festivals.length === 1 ? '' : 's'} · click one to edit`}
         >
           {festivals.length === 0 ? (
-            <div className="text-[13px] text-muted italic">
-              No festivals defined. Add one to get started.
-            </div>
+            <EmptyState
+              title="Nothing on the calendar yet"
+              description="Add your first date to get started."
+            />
           ) : (
             <div className="grid">
               {months.map(({ month, rows }) => (
@@ -303,8 +303,9 @@ export default function FestivalsSection() {
         {editing && (
           <div className="grid gap-4">
             <div className="field">
-              <Label>Name</Label>
+              <Label htmlFor={`${fieldId}-name`}>Name</Label>
               <Input
+                id={`${fieldId}-name`}
                 value={editing.name}
                 onChange={e => updateField('name', e.target.value)}
                 placeholder="e.g. New Year's Day"
@@ -314,7 +315,7 @@ export default function FestivalsSection() {
 
             <div className="grid grid-cols-2 gap-3">
               <div className="field">
-                <Label>Month</Label>
+                <Label htmlFor={`${fieldId}-month`}>Month</Label>
                 <Select
                   value={String(editing.month)}
                   onValueChange={v => {
@@ -328,7 +329,7 @@ export default function FestivalsSection() {
                     }));
                   }}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id={`${fieldId}-month`} aria-label="Month">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -340,12 +341,12 @@ export default function FestivalsSection() {
               </div>
 
               <div className="field">
-                <Label>Day</Label>
+                <Label htmlFor={`${fieldId}-day`}>Day</Label>
                 <Select
                   value={String(editing.day)}
                   onValueChange={v => updateField('day', Number(v))}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id={`${fieldId}-day`} aria-label="Day">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -358,26 +359,27 @@ export default function FestivalsSection() {
             </div>
 
             <div className="field">
-              <Label>Description <span className="text-muted">(optional)</span></Label>
+              <Label htmlFor={`${fieldId}-desc`}>Description <span className="text-muted">(optional)</span></Label>
               <Input
+                id={`${fieldId}-desc`}
                 value={editing.description || ''}
                 onChange={e => updateField('description', e.target.value)}
                 placeholder="Short note about the festival"
                 maxLength={200}
               />
               <div className="field-hint mt-1">
-                A brief note the DJ can weave into its on-air talk when the festival is active.
+                A short note your DJ can weave into its chat while the festival is on.
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div className="field">
-                <Label>Mood</Label>
+                <Label htmlFor={`${fieldId}-mood`}>Mood</Label>
                 <Select
                   value={editing.mood}
                   onValueChange={v => updateField('mood', v)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id={`${fieldId}-mood`} aria-label="Mood">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -389,8 +391,9 @@ export default function FestivalsSection() {
               </div>
 
               <div className="field">
-                <Label>Window <span className="text-muted">(days)</span></Label>
+                <Label htmlFor={`${fieldId}-window`}>Window <span className="text-muted">(days)</span></Label>
                 <Input
+                  id={`${fieldId}-window`}
                   type="number"
                   min={0}
                   max={14}
@@ -400,8 +403,8 @@ export default function FestivalsSection() {
               </div>
             </div>
             <div className="field-hint -mt-2">
-              Music selection and spoken tone shift into the mood for the window around
-              the date, e.g. a 3-day window spans a full week.
+              Music and spoken tone shift into the mood for the days around the date — a 3-day
+              window covers a full week.
             </div>
           </div>
         )}

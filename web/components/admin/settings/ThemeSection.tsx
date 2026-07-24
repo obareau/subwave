@@ -10,6 +10,7 @@ import { Modal } from '../../ui/modal';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { Card, Btn, Pill, Seg } from '../ui';
+import { SkeletonRows } from '../../ui/skeleton';
 import { AiFill } from '../AiFill';
 import { cn } from '../../../lib/cn';
 import { SkinGallery } from './SkinGallery';
@@ -314,7 +315,7 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
 
   const choose = async (theme: ThemeDef) => {
     if (theme.id === activeId || busy) return;
-    // Save through the existing settings flow. ThemeBootstrap's 30 s poll
+    // Save through the existing settings flow. ThemeProvider's 30 s poll
     // would pick this up eventually, but the admin viewing this page wants
     // the swatch swap to feel instant — apply locally on click.
     applyTheme(theme);
@@ -396,9 +397,7 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
               Couldn’t load themes: {error}
             </div>
           )}
-          {!themes && !error && (
-            <div className="text-[13px] text-muted italic">loading…</div>
-          )}
+          {!themes && !error && <SkeletonRows rows={4} />}
           {themes && (
             <div className="grid gap-2">
               {themes.map(t => {

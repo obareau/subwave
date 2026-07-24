@@ -9,13 +9,18 @@
 // local librosa venv). When no backend is available this is a clean no-op, so
 // it's always safe to call as a tagger phase.
 
-import { rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
+import * as stemCacheStore from './stem-cache.js';
+import * as subsonic from './subsonic.js';
 import * as settings from '../settings.js';
 import { config } from '../config.js';
+import { deriveVocalFromLyrics, clipRangesToTail, type LyricVocalResult } from './lyric-vocal.js';
 import { runAudioMoodPass } from './audio-moods.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
+import { quietGateDecision, type QuietState } from './analyze-quiet-pure.js';
+import { probeListenerCount } from '../broadcast/listeners.js';
 
 // Structured status events for the panel, mirrored to the terse `[analyze] …`
 // console line. Shared by the tagger's analyze phase and the standalone CLI.
@@ -80,6 +85,105 @@ export function audioEmbeddingWanted(): boolean {
   return audioBackfillDefault();
 }
 
+// Quiet-times gate (#1099) — same env-wins-on precedence as the toggles above:
+// ANALYZE_QUIET_ONLY=1 forces it on, else the admin toggle
+// (settings.audio.analyzeQuietOnly).
+//
+// Unlike the other audio toggles this one is re-read from DISK on every gate
+// check, not once per pass: settings.load() caches for the child process's
+// lifetime, and a pass over a big library runs for hours — an operator who
+// flips the toggle mid-scan (the reporter's overnight run in #1102) expects
+// the running pass to react, in both directions. Raw read, no normalization:
+// two scalar fields, and any parse failure falls back to the boot-time
+// snapshot (settings.get()) and then the defaults.
+interface QuietConfig {
+  enabled: boolean;
+  minutes: number;
+}
+
+async function readQuietConfig(): Promise<QuietConfig> {
+  const v = (process.env.ANALYZE_QUIET_ONLY || '').toLowerCase();
+  const envOn = v === '1' || v === 'true' || v === 'yes';
+  let enabled = envOn;
+  let minutes = 10;
+  let audio: any = null;
+  try {
+    audio = JSON.parse(await readFile(`${config.stateDir}/settings.json`, 'utf8'))?.audio;
+  } catch {
+    try {
+      audio = settings.get()?.audio;
+    } catch {
+      audio = null;
+    }
+  }
+  if (!enabled) enabled = audio?.analyzeQuietOnly === true;
+  const m = audio?.analyzeQuietMinutes;
+  if (Number.isFinite(m) && m >= 1 && m <= 120) minutes = Math.floor(m);
+  return { enabled, minutes };
+}
+
+// How often the paused pass re-checks Icecast. One cheap status fetch per
+// tick (probeListenerCount — no history write); 30s keeps the resume latency
+// small without hammering a stream that's busy for hours.
+const QUIET_POLL_MS = 30_000;
+
+interface QuietGate {
+  state: QuietState;
+  paused: boolean; // for one-per-transition logging, not decision logic
+}
+
+// Block until the gate allows the next track (immediately when disabled).
+// Sits BETWEEN tracks: an in-flight track finishes (seconds) and the pending
+// prefetch download is left to resolve — only the next *compute* waits. The
+// wait is unbounded by design; the escape hatches are the tagger Stop button
+// and the admin toggle, which readQuietConfig() re-reads on every check so a
+// mid-pass flip takes effect within one track / one 30s poll.
+async function waitForQuiet(gate: QuietGate, progress: { done: number; total: number }): Promise<void> {
+  for (;;) {
+    const quiet = await readQuietConfig();
+    // Skip the Icecast probe entirely while the gate is off (the default
+    // path stays one cheap file read per track); the pure helper still runs
+    // so a disabled gate resets the quiet clock.
+    const count = quiet.enabled ? await probeListenerCount() : null;
+    const d = quietGateDecision(gate.state, {
+      enabled: quiet.enabled,
+      count,
+      now: Date.now(),
+      quietAfterMs: quiet.minutes * 60_000,
+    });
+    gate.state = d.state;
+    if (d.proceed) {
+      if (gate.paused) {
+        gate.paused = false;
+        logEvent('info', 'Stream is quiet — resuming analysis');
+        // Restore the normal label now — the per-track reporter only fires
+        // every 25 tracks, which would leave "Waiting for quiet" on the panel
+        // long after the pass resumed.
+        reportProgress({ phase: 'analyze', label: 'Analysing audio', done: progress.done, total: progress.total });
+      }
+      return;
+    }
+    // count>0: someone is tuned in. count===0: the room just emptied and the
+    // quiet window is still draining (an unknown count never reaches here —
+    // the gate fails open).
+    const why = count && count > 0 ? `${count} listening` : 'waiting out the quiet window';
+    if (!gate.paused) {
+      gate.paused = true;
+      logEvent(
+        'info',
+        `Analysis paused — ${why}; resumes after ${quiet.minutes} min with no listeners`,
+      );
+    }
+    reportProgress({
+      phase: 'analyze',
+      label: `Waiting for quiet (${why})`,
+      done: progress.done,
+      total: progress.total,
+    });
+    await new Promise((r) => setTimeout(r, QUIET_POLL_MS));
+  }
+}
+
 export interface AnalyzeStats {
   available: boolean;
   backend: string;
@@ -123,6 +227,12 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // produce it (a sidecar without Demucs reports vocalActivityAvailable===false).
   const vocalWanted = opts.vocalBackfill ?? vocalBackfillDefault();
   const vocalBackfill = vocalWanted && analyzer.vocalActivityAvailable() !== false;
+  // Stem cache (feature: stem-blend transitions): when the operator opted in
+  // and the backend has Demucs, every analysed track also persists its head/
+  // tail stems (the worker shares one separation with vocal detection, so
+  // this is near-free compute — the spend is disk, LRU-swept below).
+  const stemCache = settings.get()?.audio?.stemCache === true
+    && analyzer.vocalActivityAvailable() !== false;
 
   // A re-scan re-analyse is scoped to the tracks that were ALREADY analysed —
   // snapshot them before the clear wipes the bpm marker. A raw --re-analyze
@@ -187,9 +297,14 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // Widening is suppressed under a fixed re-scan scope for the same reason as
   // audio above; the per-track vocal:true flag below still re-runs Demucs for the
   // in-scope tracks, so vocal ranges are rebuilt without dragging in the remainder.
+  // Tail widening (feature: vocal-aware transitions): also re-target tracks
+  // whose outro predates tail vocal detection — ONLY when the backend
+  // advertises the capability (=== true). Old sidecars never report the flag,
+  // so a stale image keeps the original head-only scope and can't churn.
+  const includeTailMissing = analyzer.tailVocalAvailable() === true;
   if (vocalBackfill && !reAnalyzeScope) {
     const seen = new Set(ids);
-    const vocalIds = db.needsVocalIds(cap).filter(id => !seen.has(id));
+    const vocalIds = db.needsVocalIds(cap, includeTailMissing).filter(id => !seen.has(id));
     const before = ids.length;
     ids = cap ? [...ids, ...vocalIds].slice(0, cap) : [...ids, ...vocalIds];
     if (ids.length > before) {
@@ -216,6 +331,19 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   let failed = 0;
   let audioEmbedded = 0;
   let vocalAnalyzed = 0;
+  // Quiet-times gate (#1099). The toggle itself is re-read from disk on every
+  // check (see readQuietConfig); only the quiet-clock STATE lives here, so it
+  // carries across tracks instead of resetting each loop iteration.
+  const quietGate: QuietGate = { state: { quietSince: null }, paused: false };
+  {
+    const quiet = await readQuietConfig();
+    if (quiet.enabled) {
+      logEvent(
+        'info',
+        `Quiet-times gate on — analysis only runs once the stream has had no listeners for ${quiet.minutes} min`,
+      );
+    }
+  }
   // Stamp the audio-embedding provenance row once, on the first vector written
   // this run. Cheap idempotent guard so we don't touch the meta table per track.
   let audioMetaStamped = false;
@@ -239,6 +367,10 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   let inflight: Prefetch | null = ids.length > 0 ? prefetch(ids[0]) : null;
 
   for (let i = 0; i < ids.length; i++) {
+    // Gate BEFORE the next prefetch is kicked off: while paused, only the
+    // already-inflight download (this track's) is outstanding — the pass
+    // doesn't keep pulling audio for a queue it isn't going to compute yet.
+    await waitForQuiet(quietGate, { done: i, total: ids.length });
     const id = ids[i];
     const downloadPromise = inflight;
     // Kick off the NEXT download before awaiting this one's analysis so the
@@ -266,16 +398,68 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       // doesn't have ANALYZE_AUDIO_EMBEDDING (the admin-toggle path); omitted
       // when audio is off so the backend keeps its env-driven default.
       const embed = audioBackfill ? true : undefined;
+      // Lyric-first vocal ranges (#1125): when vocal activity is wanted, try the
+      // track's timed Navidrome lyrics before spending a Demucs separation. A
+      // synced-lyric or explicit-instrumental track is decided here — accurately,
+      // with no separation bleed — and skips Demucs. Anything inconclusive (no
+      // lyrics, or unsynced text) still runs Demucs (now with the mix floor).
+      // Best-effort: a lyric-fetch failure just falls through to Demucs.
+      let lyricVocal: LyricVocalResult | null = null;
+      if (vocalBackfill) {
+        try {
+          lyricVocal = deriveVocalFromLyrics(await subsonic.getStructuredLyrics(id));
+        } catch {
+          lyricVocal = null;
+        }
+      }
+      // stems_dir asks the worker to persist the stems it separates anyway —
+      // wire-named (spread verbatim into the worker request). Implies the
+      // separation even when the vocal toggle is off.
+      const stems_dir = stemCache ? stemCacheStore.dirFor(id) : undefined;
       // vocal:true forces the Demucs pass for this track (admin/backfill path),
-      // mirroring embed; omitted when vocal activity is off.
-      const vocal = vocalBackfill ? true : undefined;
+      // mirroring embed. A lyric-decided track sends an EXPLICIT false — the
+      // worker only skips Demucs on undefined when its OWN env has vocal off,
+      // and the analyzer service/AIO can carry ANALYZE_VOCAL_ACTIVITY, which
+      // would pay the whole separation just to have its result overridden
+      // below. Omitted when vocal activity is off.
+      // …unless this track is caching stems: explicit false wins over stems_dir
+      // in the worker, and the stem cache IS the separation, so skipping it to
+      // save a Demucs pass we're paying for anyway would just lose the stems.
+      // Lyrics still override the stored ranges below either way.
+      const vocal = vocalBackfill ? (lyricVocal && !stems_dir ? false : true) : undefined;
       const a = localPath
-        ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete })
-        : await analyzer.analyze(id, { embed, vocal });
+        ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete, stems_dir })
+        : await analyzer.analyze(id, { embed, vocal, stems_dir });
+      // Lyrics win over the worker's vocal output when present: the ranges are
+      // ground truth, and a synced onset is a truer intro than the energy
+      // heuristic the worker returns once Demucs is skipped. An instrumental
+      // marker (introMs null) keeps the energy-based intro.
+      const vocalRanges = lyricVocal ? lyricVocal.vocalRanges : a.vocalRanges;
+      // Tail ranges for lyric-decided tracks (feature: vocal-aware
+      // transitions): vocal:false above skips the worker's tail Demucs pass,
+      // so a.outro comes back with NO vocalRanges — and without a fill here
+      // the sung tracks the feature exists for never get tail data
+      // (mix.vocalTailFor stays null) while the tail-widened backfill
+      // re-targets them on every pass, forever — the same churn class as the
+      // "275/7093" report. Lyrics are tail ground truth exactly as they are
+      // for the head: clip the whole-track ranges into the outro window
+      // (20s mirrors the worker's ANALYZE_OUTRO_SECONDS default; the
+      // wind-down start bounds it when the tagged duration is unknown).
+      // Lyric-decided ⇒ override, matching vocalRanges above — a
+      // stems-forced Demucs tail is still trumped by synced timing.
+      let outro = a.outro;
+      if (lyricVocal && outro) {
+        const durMs = (Number(db.getTrack(id)?.durationSec) || 0) * 1000;
+        const windowStartMs = durMs > 0 ? Math.min(outro.startMs, durMs - 20_000) : outro.startMs;
+        outro = {
+          ...outro,
+          vocalRanges: clipRangesToTail(lyricVocal.vocalRanges, windowStartMs, durMs > 0 ? durMs : null),
+        };
+      }
       db.upsertTrackAnalysis(id, {
         bpm: a.bpm,
         musicalKey: a.musicalKey,
-        introMs: a.introMs,
+        introMs: lyricVocal?.introMs != null ? lyricVocal.introMs : a.introMs,
         confidence: a.confidence,
         loudnessLufs: a.loudnessLufs,
         peakDb: a.peakDb,
@@ -284,10 +468,25 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         beats: a.beats,
         bars: a.bars,
         keyRanges: a.keyRanges,
-        vocalRanges: a.vocalRanges,
-        outro: a.outro,
+        vocalRanges,
+        outro,
       });
-      if (a.vocalRanges != null) vocalAnalyzed += 1;
+      if (vocalRanges != null) vocalAnalyzed += 1;
+      // Stuck-case telemetry (vocal-aware transitions): a vocal pass that
+      // produced head ranges but NO outro (incomplete download — the file
+      // grew past ANALYZE_MAX_BYTES since its outro was stored) can't write
+      // tail vocal data, and the upsert's COALESCE keeps the old tail-missing
+      // outro — so the widened backfill will re-target this track every pass.
+      // Say so instead of churning silently. Lyric-decided tracks hit the
+      // same wall (no outro → nothing for the lyric fill above to clip into);
+      // otherwise keyed off the WORKER's ranges, not the lyric-resolved ones:
+      // it's the Demucs tail pass that's stuck.
+      if (a.outro == null && (lyricVocal != null || (vocal && a.vocalRanges != null))) {
+        const prior = db.getTrack(id);
+        if (prior?.outro && prior.outro.vocalRanges == null) {
+          console.log(`[analyze] ${id}: tail vocals not computable (incomplete download; stored outro predates tail detection) — stays in the vocal backfill scope`);
+        }
+      }
       // Opportunistically store the CLAP audio vector whenever the backend
       // carried one. Independent of the bpm/key write above: a track analysed
       // before CLAP was enabled simply gets its vector on the next pass once
@@ -328,7 +527,17 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   // Best-effort sweep of the staging dir in case a prefetch left an orphan
   // (e.g. a download that resolved after its analyze slot already errored).
-  await rm(`${config.stateDir}/analyze-tmp`, { recursive: true, force: true }).catch(() => {});
+  await rm(`${config.stateRoot}/analyze-tmp`, { recursive: true, force: true }).catch(() => {});
+
+  // Keep the stem cache inside the operator's byte budget after a pass that
+  // may have written hundreds of new stem dirs (LRU by dir mtime; the hourly
+  // cleanup cron sweeps too, this just settles the bill promptly).
+  if (stemCache) {
+    const swept = await stemCacheStore.sweep().catch(() => null);
+    if (swept && swept.removed > 0) {
+      console.log(`[analyze] stem cache sweep: evicted ${swept.removed} track dirs (${Math.round(swept.freedBytes / 1024 ** 2)} MB)`);
+    }
+  }
 
   // Zero-shot audio moods over the vectors this pass (and past passes) wrote —
   // one CLAP text-tower round-trip + in-process cosines (music/audio-moods.ts).

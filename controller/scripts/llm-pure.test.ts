@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability, modelTolerant, schemaHint, clipText } from '../src/llm/internal/core/pure.js';
+import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability, modelTolerant, schemaHint, clipText, soulBrief, SOUL_BRIEF_MAX } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -708,6 +708,30 @@ async function main() {
     // Garbage pace values fall back to the historical 1.0 assumption.
     assert.equal(enforceIntroBudget('Short line.', 5000, NaN), 'Short line.');
   });
+  await test('enforceIntroBudget: measured first-vocal entry (vocal-aware transitions)', () => {
+    // A MEASURED vocal start under 2.5s drops the line outright — the <2500
+    // leniency only exists because the energy heuristic is noise down there.
+    assert.equal(enforceIntroBudget('Short line.', 1000, 1, 1000), '');
+    assert.equal(enforceIntroBudget('Short line.', null, 1, 800), '');
+    // Un-measured (null/undefined — analysed instrumentals included) keeps the
+    // historical leniency byte-for-byte.
+    assert.equal(enforceIntroBudget('Short line.', 1000, 1, null), 'Short line.');
+    assert.equal(enforceIntroBudget('Short line.', 1000), 'Short line.');
+    // A measured entry ≥2500 IS the runway — it budgets like intro_ms.
+    assert.equal(enforceIntroBudget('Short line.', null, 1, 5000), 'Short line.');
+    const long = 'One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen';
+    assert.equal(enforceIntroBudget(long, null, 1, 4000), '');            // over 10-word ceiling, no boundary → drop
+    // A measured ≥18s runway stays lenient (any line fits).
+    assert.equal(enforceIntroBudget(long, null, 1, 20000), long);
+  });
+  await test('introBudgetPhrase: vocals-immediate variant', () => {
+    // Measured vocal start under 2.5s → tell the model to skip the line.
+    assert.match(introBudgetPhrase(1000, 900), /skip the spoken intro/i);
+    assert.match(introBudgetPhrase(null, 2000), /skip the spoken intro/i);
+    // Un-measured keeps the historical phrases.
+    assert.equal(introBudgetPhrase(1000, null), '');
+    assert.match(introBudgetPhrase(4000, 4000), /4s/);
+  });
 
   // ---- persona tone dials (humour / local colour / warmth) ----
   console.log('personaToneDirectives / normalizeDial:');
@@ -1204,6 +1228,34 @@ async function main() {
     assert.equal(clipText(undefined, 20), undefined);
     assert.equal(clipText(42, 20), 42);
     assert.equal(clipText(null, 20), null);
+  });
+
+  console.log('soulBrief (persona souls inlined where they are NOT the speaking seat):');
+  await test('passes a within-cap soul through untouched — the common case stays byte-identical', () => {
+    const soul = 'warm and dry, never corny, favours one good image over a list';
+    assert.equal(soulBrief(soul), soul);
+  });
+  await test('clamps a full-length soul well under the 2000-char settings cap', () => {
+    // A soul written up to SOUL_MAX is a character document; the cast blocks
+    // and the per-line TTS hint must not carry all of it.
+    const out = soulBrief('character detail '.repeat(140).trim()); // ~2000 chars
+    assert.ok(out.length <= SOUL_BRIEF_MAX + 1, `len ${out.length} <= ${SOUL_BRIEF_MAX}+ellipsis`);
+    assert.ok(out.endsWith('…'), 'abridged sketches are marked as abridged');
+  });
+  await test('collapses newlines so a multi-line soul cannot break a cast bullet', () => {
+    const out = soulBrief('line one\nline two\n\nline three');
+    assert.equal(out.includes('\n'), false);
+    assert.equal(out, 'line one line two line three');
+  });
+  await test('never leaves a dangling separator before the ellipsis', () => {
+    const out = soulBrief('alpha, bravo, charlie, delta,   echo', 14);
+    assert.equal(/[,;:.\s]…$/.test(out), false, `got ${JSON.stringify(out)}`);
+    assert.ok(out.endsWith('…'));
+  });
+  await test('coerces empty/absent souls to "" so callers can fall back to "no notes"', () => {
+    assert.equal(soulBrief(undefined), '');
+    assert.equal(soulBrief(null), '');
+    assert.equal(soulBrief('   '), '');
   });
 
   console.log('programme planSchema (the 207-char angle regression — a soft cap, clipped not rejected):');

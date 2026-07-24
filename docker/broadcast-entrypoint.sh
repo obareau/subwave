@@ -30,7 +30,27 @@
 
 set -eu
 
-SECRETS=/var/sub-wave/icecast-secrets.env
+# ---- Multi-station pointer resolution ---------------------------------------
+# state/stations/active.json (controller-written, {"activeId":"<slug>"}) picks
+# which station dir this boot serves. Everything below reads from $STATE_DIR;
+# only install-level files (icecast secrets) stay at $STATE_ROOT. No jq in
+# this image — the sed matches the controller's canonical output and the slug
+# charset [a-z0-9-], so a hand-mangled file falls back to the root.
+STATE_ROOT=/var/sub-wave
+STATE_DIR="$STATE_ROOT"
+ACTIVE_FILE="$STATE_ROOT/stations/active.json"
+if [ -f "$ACTIVE_FILE" ]; then
+    ACTIVE_ID=$(sed -n 's/.*"activeId"[[:space:]]*:[[:space:]]*"\([a-z0-9][a-z0-9-]\{0,40\}\)".*/\1/p' "$ACTIVE_FILE" | head -n1)
+    if [ -n "$ACTIVE_ID" ] && [ -d "$STATE_ROOT/stations/$ACTIVE_ID" ]; then
+        STATE_DIR="$STATE_ROOT/stations/$ACTIVE_ID"
+        echo "broadcast: active station '$ACTIVE_ID' → $STATE_DIR" >&2
+    else
+        echo "broadcast: WARNING stations/active.json unresolvable (id='$ACTIVE_ID') — using root" >&2
+    fi
+fi
+export SUBWAVE_STATE_DIR="$STATE_DIR"
+
+SECRETS=$STATE_ROOT/icecast-secrets.env
 TEMPLATE=/etc/icecast2/icecast.xml.template
 RENDERED=/etc/icecast2/icecast.xml
 
@@ -39,30 +59,32 @@ RENDERED=/etc/icecast2/icecast.xml
 # this hands-off — operators don't have to chown bind-mount sources before
 # the first boot succeeds.
 
-mkdir -p /var/sub-wave \
-         /var/sub-wave/voice \
-         /var/sub-wave/voices \
-         /var/sub-wave/archive \
-         /var/sub-wave/jingles \
-         /var/sub-wave/logs \
-         /var/sub-wave/sessions \
-         /var/sub-wave/sfx
-chmod 777 /var/sub-wave \
-          /var/sub-wave/voice \
-          /var/sub-wave/voices \
-          /var/sub-wave/archive \
-          /var/sub-wave/jingles \
-          /var/sub-wave/logs \
-          /var/sub-wave/sessions \
-          /var/sub-wave/sfx
+mkdir -p "$STATE_ROOT" \
+         "$STATE_DIR" \
+         "$STATE_DIR/voice" \
+         "$STATE_DIR/voices" \
+         "$STATE_DIR/archive" \
+         "$STATE_DIR/jingles" \
+         "$STATE_DIR/logs" \
+         "$STATE_DIR/sessions" \
+         "$STATE_DIR/sfx"
+chmod 777 "$STATE_ROOT" \
+          "$STATE_DIR" \
+          "$STATE_DIR/voice" \
+          "$STATE_DIR/voices" \
+          "$STATE_DIR/archive" \
+          "$STATE_DIR/jingles" \
+          "$STATE_DIR/logs" \
+          "$STATE_DIR/sessions" \
+          "$STATE_DIR/sfx"
 # Bootstrap empty m3u files Liquidsoap's reload_mode="watch" needs to see.
-touch /var/sub-wave/auto.m3u /var/sub-wave/jingles.m3u
-chmod 666 /var/sub-wave/auto.m3u /var/sub-wave/jingles.m3u
+touch "$STATE_DIR/auto.m3u" "$STATE_DIR/jingles.m3u"
+chmod 666 "$STATE_DIR/auto.m3u" "$STATE_DIR/jingles.m3u"
 # Tell a co-located Navidrome to skip the archive dir — its hourly mixdowns are
 # the station's own recordings, not library tracks, and otherwise get scanned in
 # as junk "HH-00" entries that confuse the DJ (issue #273). Harmless when
 # Navidrome lives elsewhere / doesn't overlap this path.
-touch /var/sub-wave/archive/.ndignore
+touch "$STATE_DIR/archive/.ndignore"
 
 # Liquidsoap writes radio.log to /var/log/liquidsoap as uid 10000. Compose
 # usually bind-mounts ${STATE_DIR}/logs over this path; that bind mount lands
@@ -136,11 +158,121 @@ case "$ICECAST_MAX_CLIENTS" in
         ;;
 esac
 
+# Listener buffer depth (<burst-size>) — audio bursted to a client on connect
+# so a coverage gap drains the buffer instead of stalling (issue #993).
+#
+# Sized in SECONDS and converted to bytes here, because burst-size is a byte
+# count and a fixed one means wildly different depths per bitrate: the old
+# hardcoded 512 KB was ~22s at 192k but ~66s at 64k, so the stations least able
+# to afford lag got the most of it (issue #1114). Deriving from the live
+# bitrate keeps the depth an operator picks the depth they actually get.
+#
+# Sources, in precedence order: env override > settings (written by the
+# controller on save) > default. Read from the shared state dir rather than
+# passed in, so a settings change applies on the next broadcast bounce with no
+# compose edit.
+read_state_num() {
+    # $1 = filename, $2 = fallback. Non-numeric or missing → fallback.
+    _v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)
+    case "$_v" in
+        ''|*[!0-9]*) echo "$2" ;;
+        *) echo "$_v" ;;
+    esac
+}
+
+STREAM_BITRATE="${ICECAST_STREAM_BITRATE:-$(read_state_num liquidsoap_stream_bitrate.txt 192)}"
+BUFFER_SECONDS="${ICECAST_BUFFER_SECONDS:-$(read_state_num liquidsoap_stream_buffer_seconds.txt 22)}"
+case "$STREAM_BITRATE" in *[!0-9]*|'') STREAM_BITRATE=192 ;; esac
+case "$BUFFER_SECONDS" in *[!0-9]*|'') BUFFER_SECONDS=22 ;; esac
+[ "$BUFFER_SECONDS" -gt 60 ] && BUFFER_SECONDS=60
+
+# Per-mount bitrates for the optional encoders, same sources as above. FLAC is
+# VBR with no bitrate setting — 900 kbps is a typical average for 44.1/16
+# stereo at default compression, close enough for a buffer depth (the players
+# align their displays to MEASURED lag, not this figure).
+OPUS_BITRATE="${ICECAST_OPUS_BITRATE:-$(read_state_num liquidsoap_opus_bitrate.txt 96)}"
+AAC_BITRATE="${ICECAST_AAC_BITRATE:-$(read_state_num liquidsoap_aac_bitrate.txt 192)}"
+case "$OPUS_BITRATE" in *[!0-9]*|'') OPUS_BITRATE=96 ;; esac
+case "$AAC_BITRATE" in *[!0-9]*|'') AAC_BITRATE=192 ;; esac
+FLAC_BITRATE_EST=900
+
+# kbps → bytes/sec is bitrate * 1000 / 8 = bitrate * 125.
+ICECAST_BURST_SIZE=$(( BUFFER_SECONDS * STREAM_BITRATE * 125 ))
+
+# queue-size is the per-client backlog before Icecast drops a lagging listener.
+# It must comfortably exceed burst-size or a client is evicted the moment it
+# falls behind its own primed buffer. 4x the burst (floored at the historical
+# 2 MB) preserves the ~minute of rope issue #993 wanted at the default depth
+# while still scaling with a deeper buffer.
+ICECAST_QUEUE_SIZE=$(( ICECAST_BURST_SIZE * 4 ))
+[ "$ICECAST_QUEUE_SIZE" -lt 2097152 ] && ICECAST_QUEUE_SIZE=2097152
+
+echo "broadcast: listener buffer ${BUFFER_SECONDS}s @ mp3 ${STREAM_BITRATE}kbps" \
+     "/ opus ${OPUS_BITRATE}kbps / aac ${AAC_BITRATE}kbps / flac ~${FLAC_BITRATE_EST}kbps" >&2
+
+# Listener auth (#478). The controller writes state/icecast_listener_auth.txt
+# ('true'/'false') from settings.privacy.listenerAuth; only the literal value
+# "true" enables (mirroring the archive_enabled pattern — missing/garbled file
+# means public). When enabled, every stream mount gets an
+# <authentication type="url"> block: icecast POSTs each listener connect to
+# the controller, which admits it with an `icecast-auth-user: 1` header. The
+# password itself lives ONLY in the controller's settings.json — password
+# changes apply live, and this render only matters when the toggle flips
+# (which the admin UI routes through the existing restart-mixer flow).
+LISTENER_AUTH_FLAG=$STATE_DIR/icecast_listener_auth.txt
+LISTENER_AUTH_URL="${LISTENER_AUTH_URL:-http://controller:7701/listener-auth}"
+LISTENER_AUTH=false
+if [ "$(cat "$LISTENER_AUTH_FLAG" 2>/dev/null | tr -d '[:space:]')" = "true" ]; then
+    LISTENER_AUTH=true
+    echo "broadcast: listener auth ON — mounts require credentials via $LISTENER_AUTH_URL" >&2
+fi
+
+# One <mount> block per stream mount, ALWAYS rendered (not just under listener
+# auth): burst-size is a BYTE count, so the global <limits> value — sized for
+# the MP3 bitrate — lands wildly wrong on the other mounts (the same 528 KB
+# that means 22s at mp3-192k is ~43s at opus-96k and ~6s of FLAC), and the
+# whole point of sizing in seconds (#1114) is that the operator's chosen depth
+# is the depth every listener gets. queue-size scales with each mount's burst
+# for the same reason it does globally: a client must never be evicted for
+# falling behind its own primed buffer.
+MOUNTS_XML=/etc/icecast2/stream-mounts.xml
+: > "$MOUNTS_XML"
+emit_mount() {
+    # $1 = mount path, $2 = kbps used to size this mount's burst
+    _burst=$(( BUFFER_SECONDS * $2 * 125 ))
+    _queue=$(( _burst * 4 ))
+    [ "$_queue" -lt 2097152 ] && _queue=2097152
+    echo "broadcast:   $1 @ ${2}kbps → burst-size ${_burst}B, queue-size ${_queue}B" >&2
+    {
+        echo '    <mount type="normal">'
+        echo "        <mount-name>$1</mount-name>"
+        echo "        <burst-size>$_burst</burst-size>"
+        echo "        <queue-size>$_queue</queue-size>"
+        if [ "$LISTENER_AUTH" = true ]; then
+            echo '        <authentication type="url">'
+            echo "            <option name=\"listener_add\" value=\"$LISTENER_AUTH_URL\"/>"
+            echo '            <option name="auth_header" value="icecast-auth-user: 1"/>'
+            echo '        </authentication>'
+        fi
+        echo '    </mount>'
+    } >> "$MOUNTS_XML"
+}
+emit_mount /stream.mp3  "$STREAM_BITRATE"
+emit_mount /stream.opus "$OPUS_BITRATE"
+emit_mount /stream.flac "$FLAC_BITRATE_EST"
+emit_mount /stream.aac  "$AAC_BITRATE"
+
+# `r` splices the generated mount blocks (empty file = nothing) where the
+# marker sits, then the marker line itself is deleted.
 sed \
     -e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
     -e "s|\${ICECAST_ADMIN_PASSWORD}|$ICECAST_ADMIN_PASSWORD|g" \
     -e "s|\${ICECAST_RELAY_PASSWORD}|$ICECAST_RELAY_PASSWORD|g" \
     -e "s|\${ICECAST_MAX_CLIENTS}|$ICECAST_MAX_CLIENTS|g" \
+    -e "s|\${ICECAST_BURST_SIZE}|$ICECAST_BURST_SIZE|g" \
+    -e "s|\${ICECAST_QUEUE_SIZE}|$ICECAST_QUEUE_SIZE|g" \
+    -e "/<!--@STREAM_MOUNTS@-->/r $MOUNTS_XML" \
+    -e "/<!--@STREAM_MOUNTS@-->/d" \
     "$TEMPLATE" > "$RENDERED"
 chown icecast2 "$RENDERED" 2>/dev/null || true
 

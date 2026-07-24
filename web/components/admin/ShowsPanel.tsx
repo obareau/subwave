@@ -15,7 +15,7 @@
 // touch, a tap toggles one cell and a long-press arms drag-painting — a
 // plain swipe only scrolls (see HOLD_MS below).
 import type { ChangeEvent, RefObject, TouchEvent } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Users, Share2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
@@ -30,13 +30,20 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Metric, MetaChip, Toggle } from './ui';
+import RosterViewToggle from './RosterViewToggle';
+import { SkeletonRows } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { EditorDialog } from '../ui/editor-dialog';
 import { Modal } from '../ui/modal';
 import { AiFill } from './AiFill';
 import GenreSuggest from './GenreSuggest';
 import { PersonaPicker, GuestPersonaPicker, ThemePicker } from './ShowPickers';
+import ShowsTable from './ShowsTable';
+import type { ShowFacet, ShowRow } from './ShowsTable';
 import { cn } from '../../lib/cn';
+import { useRosterView } from '../../lib/adminView';
 import { showSubmitUrl } from '../../lib/repo';
 
 const NAME_MAX = 60;
@@ -452,6 +459,8 @@ export default function ShowsPanel() {
   // Community show catalog + install state (best-effort; null = still loading).
   const [community, setCommunity] = useState<CommunityShow[] | null>(null);
   const [communityOpen, setCommunityOpen] = useState(false);          // catalog modal open?
+  // Show definitions as cards (default) or a dense table. Per-surface pref.
+  const [view, setView] = useRosterView('shows');
   const [installing, setInstalling] = useState<string | null>(null);  // community slug installing, or null
 
   // Inline editor: `focusIdx` is the show open in the editor below the list
@@ -472,7 +481,7 @@ export default function ShowsPanel() {
   // cell is destructive enough to gate behind a yes/no.
   const [confirmClearWeek, setConfirmClearWeek] = useState(false);
   // Theme list for the per-show override dropdown. Public endpoint, no auth
-  // needed — same source the player ThemeBootstrap reads.
+  // needed — same source the player ThemeProvider reads.
   const [themes, setThemes] = useState<ThemeOption[]>([]);
   const [skills, setSkills] = useState<SkillOption[]>([]);
   const [activeThemeId, setActiveThemeId] = useState('');
@@ -1028,7 +1037,7 @@ export default function ShowsPanel() {
     return (
       <div className="grid gap-4">
         <Card title="Shows" sub="weekly grid">
-          <div className="text-[13px] text-[var(--danger)]">controller error: {err}</div>
+          <ErrorState error={err} onRetry={load} />
         </Card>
       </div>
     );
@@ -1037,7 +1046,7 @@ export default function ShowsPanel() {
     return (
       <div className="grid gap-4">
         <Card title="Shows" sub="weekly grid">
-          <div className="text-[13px] text-muted italic">loading…</div>
+          <SkeletonRows rows={4} />
         </Card>
       </div>
     );
@@ -1121,7 +1130,7 @@ export default function ShowsPanel() {
           ) : (
             <>
               <Select value={pinShowId} onValueChange={setPinShowId}>
-                <SelectTrigger className="h-8 w-52 text-[13px]">
+                <SelectTrigger className="h-8 w-52 text-[13px]" aria-label="Pin a show">
                   <SelectValue placeholder="pin a show…" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1297,6 +1306,7 @@ export default function ShowsPanel() {
       <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
         <span className="caption">show definitions · {form.shows.length}/{SHOWS_MAX} shows</span>
         <div className="flex items-center gap-2">
+          <RosterViewToggle view={view} onChange={setView} />
           <Btn
             onClick={() => setCommunityOpen(true)}
             disabled={!community}
@@ -1317,12 +1327,20 @@ export default function ShowsPanel() {
         </div>
       </div>
       {form.shows.length === 0 && (
-        <p className="text-[12px] text-muted">
-          No shows yet. Add one to start programming the week.
-        </p>
+        <EmptyState
+          title="No shows scheduled"
+          description="Add one to start programming the week."
+        />
       )}
 
-      {form.shows.map((s, i) => {
+      {view === 'list' && form.shows.length > 0 && (
+        <ShowsTable
+          rows={form.shows.map((s, i) => showRow(s, i, personas, apiBase, countHours(s.id)))}
+          onEdit={r => focusShow(r.index)}
+        />
+      )}
+
+      {view === 'cards' && form.shows.map((s, i) => {
         const ok = showValid(s);
         const hrs = countHours(s.id);
         const host = personas.find(p => p.id === s.personaId) ?? null;
@@ -1559,6 +1577,19 @@ function ShowEditor({
     update({ genres: [...show.genres, v] });
     setGenreDraft('');
   };
+  // Genres this show asks for that no track actually carries. The controller
+  // resolves a free-text genre onto the nearest library tag, which silently
+  // broadens the show ("Pop Punk" → "Pop") or drops the filter altogether when
+  // nothing is close — invisible on air unless we say it here, at the moment
+  // the operator is looking at the field. Mirrors show-filter.normGenre so the
+  // UI and the station agree on what counts as "the same tag". Only meaningful
+  // once the library list has loaded (empty = not fetched yet, or the endpoint
+  // failed — never warn on a fetch failure).
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const knownGenres = useMemo(() => new Set(genres.map(norm)), [genres]);
+  const unknownGenres = genres.length
+    ? show.genres.filter(g => !knownGenres.has(norm(g)))
+    : [];
   return (
     <EditorDialog
       open
@@ -1654,6 +1685,7 @@ function ShowEditor({
                     on={show.banter && (show.guestPersonaIds?.length ?? 0) > 0}
                     disabled={(show.guestPersonaIds?.length ?? 0) === 0}
                     onClick={() => update({ banter: !show.banter })}
+                    ariaLabel="Banter breaks"
                   />
                 </div>
                 <div className="grid gap-0.5">
@@ -1677,6 +1709,7 @@ function ShowEditor({
                 <Toggle
                   on={show.programme}
                   onClick={() => update({ programme: !show.programme })}
+                  ariaLabel="Programme (produced episode)"
                 />
               </div>
               <div className="grid gap-0.5">
@@ -1695,7 +1728,7 @@ function ShowEditor({
                   value={show.segmentSkill || ANY_SENTINEL}
                   onValueChange={val => update({ segmentSkill: val === ANY_SENTINEL ? '' : val })}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="Feature segment skill">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1842,6 +1875,18 @@ function ShowEditor({
             <span className="field-hint">
               Up to {FILTER_VALUES_MAX}; a track matching any of them qualifies.
             </span>
+            {unknownGenres.length > 0 && (
+              <span role="alert" className="field-hint text-vermilion">
+                No track in your library is tagged{' '}
+                {unknownGenres.map((g, i) => (
+                  <span key={g}>{i > 0 ? ', ' : ''}&ldquo;{g}&rdquo;</span>
+                ))}
+                . The station falls back to the closest tag it can find, so this show
+                will air broader results than you asked for — or, if nothing is close,
+                the genre filter switches off entirely. Pick a genre from the
+                suggestions, or re-tag the tracks in Navidrome.
+              </span>
+            )}
           </Field>
 
           <GenreSuggest
@@ -1856,6 +1901,7 @@ function ShowEditor({
                 on={show.filtersStrict}
                 disabled={!hasAnyMusicFilter(show)}
                 onClick={() => update({ filtersStrict: !show.filtersStrict })}
+                ariaLabel="Strict filter"
               />
             </div>
             <div className="grid gap-0.5">
@@ -1928,6 +1974,7 @@ function ShowEditor({
                 <Toggle
                   on={show.playlistStrict}
                   onClick={() => update({ playlistStrict: !show.playlistStrict })}
+                  ariaLabel="Playlist only (strict)"
                 />
               </div>
               <div className="grid gap-0.5">
@@ -2256,10 +2303,68 @@ function ShowAvatar({
   );
 }
 
+// "What it plays" facets — moods, genres, eras, energies as chips, plus the
+// hard-lock / playlist / length flags. The visual counterpart to the text
+// showFilterSummary() the strip cards still use. Shared by the slate card and
+// the table row so the two views can't drift.
+function showFacets(s: Show): ShowFacet[] {
+  const facets: ShowFacet[] = [];
+  if (s.moods.length) s.moods.forEach(m => facets.push({ key: `mood-${m}`, label: m }));
+  else facets.push({ key: 'mood-any', label: 'any mood' });
+  s.genres.forEach(g => facets.push({ key: `genre-${g}`, label: g }));
+  s.eras.forEach((e, idx) => facets.push({ key: `era-${idx}`, label: eraLabelOf(e) }));
+  s.energies.forEach(en => facets.push({ key: `energy-${en}`, label: en }));
+  if (s.filtersStrict && hasAnyMusicFilter(s)) facets.push({ key: 'strict', label: 'strict', accent: true });
+  const nPl = s.playlistIds?.length ?? 0;
+  if (nPl) facets.push({ key: 'playlists', label: `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' · strict' : ''}` });
+  const nEx = s.excludedPlaylistIds?.length ?? 0;
+  if (nEx) facets.push({ key: 'excluded', label: `${nEx} excluded` });
+  if (s.maxTrackSeconds != null) {
+    facets.push({ key: 'length', label: s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s` });
+  }
+  return facets;
+}
+
 // Grammatical name join: "Kai", "Kai & Rae", "Kai, Rae & Sol".
 function joinNames(names: string[]): string {
   if (names.length <= 1) return names[0] ?? '';
   return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
+}
+
+// A persona as a table face — resolved avatar URL plus the initials to fall
+// back to. `index` is carried on the row because the panel keys colour and
+// editing off the show's position in the array.
+function faceOf(p: Persona, apiBase: string) {
+  return {
+    key: p.id,
+    initials: abbrev(p.name?.trim() || ''),
+    src: p.avatar ? `${apiBase}/persona-avatar/${encodeURIComponent(p.id)}` : null,
+  };
+}
+
+// Flatten one show into the table's view-model. Everything the row needs is
+// derived here, so ShowsTable never has to know the `Show` shape.
+function showRow(s: Show, index: number, personas: Persona[], apiBase: string, hrs: number): ShowRow {
+  const host = personas.find(p => p.id === s.personaId) ?? null;
+  const guests = (s.guestPersonaIds || [])
+    .map(id => personas.find(p => p.id === id))
+    .filter((p): p is Persona => Boolean(p));
+  return {
+    id: s.id,
+    index,
+    name: s.name.trim(),
+    colour: SHOW_COLORS[index % SHOW_COLORS.length] ?? '#000',
+    programme: !!s.programme,
+    skillPin: s.programme && s.segmentSkill ? s.segmentSkill : '',
+    banter: !!s.banter,
+    host: host ? faceOf(host, apiBase) : null,
+    hostName: host ? (host.name?.trim() || 'Unnamed') : (s.personaId ? 'Unnamed' : ''),
+    guests: guests.map(g => faceOf(g, apiBase)),
+    guestNames: joinNames(guests.map(g => g.name?.trim() || 'Unnamed')),
+    facets: showFacets(s),
+    hrs,
+    ok: showValid(s),
+  };
 }
 
 interface ShowDefRowProps {
@@ -2286,23 +2391,7 @@ function ShowDefRow({ show: s, index: i, ok, hrs, host, guests, apiBase, onEdit 
   const guestNames = guests.map(g => g.name?.trim() || 'Unnamed');
   const skillPin = s.programme && s.segmentSkill ? s.segmentSkill : '';
 
-  // "What it plays" facets — moods, genres, eras, energies as chips, plus the
-  // hard-lock / playlist / length flags. The visual counterpart to the text
-  // showFilterSummary() the strip cards still use.
-  const facets: { key: string; label: string; accent?: boolean }[] = [];
-  if (s.moods.length) s.moods.forEach(m => facets.push({ key: `mood-${m}`, label: m }));
-  else facets.push({ key: 'mood-any', label: 'any mood' });
-  s.genres.forEach(g => facets.push({ key: `genre-${g}`, label: g }));
-  s.eras.forEach((e, idx) => facets.push({ key: `era-${idx}`, label: eraLabelOf(e) }));
-  s.energies.forEach(en => facets.push({ key: `energy-${en}`, label: en }));
-  if (s.filtersStrict && hasAnyMusicFilter(s)) facets.push({ key: 'strict', label: 'strict', accent: true });
-  const nPl = s.playlistIds?.length ?? 0;
-  if (nPl) facets.push({ key: 'playlists', label: `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' · strict' : ''}` });
-  const nEx = s.excludedPlaylistIds?.length ?? 0;
-  if (nEx) facets.push({ key: 'excluded', label: `${nEx} excluded` });
-  if (s.maxTrackSeconds != null) {
-    facets.push({ key: 'length', label: s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s` });
-  }
+  const facets = showFacets(s);
 
   return (
     <article

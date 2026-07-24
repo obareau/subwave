@@ -585,30 +585,118 @@ export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs', 'openai-compatible']
 // meta-search via settings.search.baseUrl.
 export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'brave', 'searxng'] as const;
 
-// Canonical mood vocabulary. Shared by the library tagger (music/tag-library.js
-// imports this as MOOD_VOCAB) and the Shows scheduler — a show's `moods` (lead
-// entry) override the autonomous dominantMood, so every entry must come from
-// this list. An empty list means "Any": the show pins no mood and the
-// autonomous chain (festival > weather > time) applies while it's on air.
-export const SHOW_MOODS = [
-  'energetic',
-  'calm',
-  'reflective',
-  'celebratory',
-  'romantic',
-  'spiritual',
-  'focus',
-  'workout',
-  'driving',
-  'cooking',
-  'rainy',
-  'sunny',
-  'night',
-  'morning',
-  'evening',
-  'festival',
-  'cultural',
+// Canonical mood vocabulary + each mood's CLAP sound-prompt. This is the SEED:
+// the operator edits the live list from /admin/moods (settings.moods), and every
+// consumer reads it through the moodVocab()/moodEntries()/moodPromptFor()
+// accessors below — NOT this constant. `clapPrompt` is the zero-shot audio
+// sound-description (music/audio-moods.ts); '' falls back to `${name} music`.
+// A show's `moods` (lead entry) override the autonomous dominantMood; every
+// entry must come from the live vocabulary. Empty show moods means "Any".
+export const MOOD_DEFAULTS: Array<{ name: string; clapPrompt: string }> = [
+  { name: 'energetic', clapPrompt: 'high-energy, upbeat, powerful music with a strong driving beat' },
+  { name: 'calm', clapPrompt: 'calm, peaceful, soft, soothing, gentle music' },
+  { name: 'reflective', clapPrompt: 'reflective, introspective, melancholic, emotional music' },
+  { name: 'celebratory', clapPrompt: 'joyful, festive, celebratory party music' },
+  { name: 'romantic', clapPrompt: 'romantic, intimate, tender, loving music' },
+  { name: 'spiritual', clapPrompt: 'spiritual, devotional, sacred, meditative music' },
+  { name: 'focus', clapPrompt: 'minimal, unobtrusive, ambient instrumental background music for concentration' },
+  { name: 'workout', clapPrompt: 'intense, pounding, adrenaline-pumping workout music' },
+  { name: 'driving', clapPrompt: 'steady, groovy, mid-tempo cruising music for a road trip' },
+  { name: 'cooking', clapPrompt: 'light, cheerful, breezy, feel-good easy-listening music' },
+  { name: 'rainy', clapPrompt: 'mellow, wistful, cozy music for a rainy day' },
+  { name: 'sunny', clapPrompt: 'bright, warm, sunny, feel-good summer music' },
+  { name: 'night', clapPrompt: 'dark, atmospheric, moody late-night music' },
+  { name: 'morning', clapPrompt: 'fresh, gentle, optimistic early-morning music' },
+  { name: 'evening', clapPrompt: 'smooth, warm, relaxed evening music' },
+  { name: 'festival', clapPrompt: 'big, anthemic, euphoric festival crowd music' },
+  { name: 'cultural', clapPrompt: 'traditional folk music with regional acoustic instruments' },
 ];
+
+// Back-compat: the default mood NAMES. Kept for the community catalog (shared
+// configs validate against the canonical set, not a local custom vocab) and as
+// the accessor fallback before load(). Live reads go through moodVocab().
+export const SHOW_MOODS = MOOD_DEFAULTS.map((m) => m.name);
+
+// The 8 fixed day-periods (context.ts getTimeContext) and their seed moods.
+// Operators re-point each period's mood from /admin/moods (settings.moodSchedule);
+// the hour ranges + vibe/show labels stay in code.
+export const MOOD_PERIODS = [
+  'early-morning', 'morning', 'midday', 'afternoon',
+  'drive-time', 'evening', 'late-evening', 'after-hours',
+] as const;
+export const PERIOD_MOOD_DEFAULTS: Record<string, string> = {
+  'early-morning': 'morning',
+  morning: 'morning',
+  midday: 'energetic',
+  afternoon: 'focus',
+  'drive-time': 'driving',
+  evening: 'evening',
+  'late-evening': 'night',
+  'after-hours': 'reflective',
+};
+
+// The 6 fixed weather conditions (context.ts mapWeatherCode) and their seed
+// moods. '' = no mood steer for that condition. Editable via settings.weatherMoods.
+export const WEATHER_CONDITIONS = [
+  'clear', 'cloudy', 'foggy', 'rainy', 'snowy', 'stormy',
+] as const;
+export const WEATHER_MOOD_DEFAULTS: Record<string, string> = {
+  clear: 'sunny',
+  cloudy: '',
+  foggy: 'rainy',
+  rainy: 'rainy',
+  snowy: 'reflective',
+  stormy: 'rainy',
+};
+
+// --- Mood vocabulary validation (the seeded-but-editable pattern) ---
+export const MOODS_LIMIT = 40;
+const MOOD_NAME_MAX = 40;
+const MOOD_PROMPT_MAX = 200;
+
+// Normalise a raw mood name to the canonical id form (lowercase, [a-z0-9-]).
+function normalizeMoodName(raw: unknown): string {
+  return String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+// Lenient on-load pass: never throws, drops malformed/duplicate entries so a
+// hand-edited settings.json can't wedge boot. Empty → the seed defaults (an
+// empty vocabulary is unusable — shows, festivals, and the tagger all need it).
+function normalizeMoods(raw: any): Array<{ name: string; clapPrompt: string }> {
+  if (!Array.isArray(raw)) return MOOD_DEFAULTS;
+  const out: Array<{ name: string; clapPrompt: string }> = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (out.length >= MOODS_LIMIT) break;
+    if (!item || typeof item !== 'object') continue;
+    const name = normalizeMoodName(item.name);
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const clapPrompt = typeof item.clapPrompt === 'string'
+      ? item.clapPrompt.trim().slice(0, MOOD_PROMPT_MAX)
+      : '';
+    out.push({ name, clapPrompt });
+  }
+  return out.length ? out : MOOD_DEFAULTS;
+}
+
+// Lenient on-load pass for the fixed-key mood maps: fills every known key from
+// the stored value when it's a string, else from the seed default.
+function normalizeMoodMap(
+  raw: any,
+  keys: readonly string[],
+  defaults: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of keys) {
+    out[k] = typeof raw?.[k] === 'string' ? raw[k] : defaults[k];
+  }
+  return out;
+}
 
 // Energy bands a show can pin as a soft music-steering filter. Mirrors the
 // tagger's per-track energy classes and the `tracksByMood` agent-tool filter.
@@ -712,6 +800,16 @@ const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 // Exported for the community-persona install route (routes/personas.ts), which
 // gives a friendly 409 before settings.update() would throw on an oversize roster.
 export const PERSONA_LIMIT = 48;
+// Persona `soul` — the character sketch injected into EVERY free-text DJ
+// generation call, so each char is a recurring per-call token cost. Bounded
+// rather than unbounded for that reason alone; nothing structural depends on
+// the number. Keep in lockstep with SOUL_MAX in
+// web/components/admin/personas/constants.ts and the AI-fill draft schema in
+// llm/internal/prompts/generate.ts. Consumers that inline a soul somewhere it
+// is NOT the speaking seat (the multi-voice cast blocks, the cloud-TTS
+// delivery hint) clamp it further at their own boundary — see soulBrief() in
+// llm/internal/core/pure.ts.
+export const SOUL_MAX = 2000;
 export const SHOWS_LIMIT = 64;
 // Guest co-hosts per show. Small on purpose: each guest is a full persona the
 // speaker rotation can hand a segment to, and past ~3 the host stops sounding
@@ -864,8 +962,13 @@ function coerceShowList<T>(
 }
 
 function coerceShowMoods(item: unknown): string[] {
+  // Lenient on load: keep any non-empty string (moods are now operator-editable,
+  // so the effective vocabulary isn't known while the cache is still being
+  // built — filtering against the seed defaults here would strip an operator's
+  // custom moods). update()'s validateShowsStrict enforces the live vocabulary
+  // on save; a stale mood string just matches nothing at runtime.
   return coerceShowList(item, 'moods', 'mood',
-    (v) => (typeof v === 'string' && SHOW_MOODS.includes(v) ? v : null),
+    (v) => (typeof v === 'string' && v.trim() ? v.trim() : null),
     (v) => v);
 }
 
@@ -1126,6 +1229,20 @@ const DEFAULTS = {
     aacEnabled: false,
     aacBitrate: 192,
     bitrate: 192,
+    // Seconds of already-broadcast audio Icecast bursts to a client on
+    // connect (<burst-size>), so a cellular dead zone drains the buffer
+    // instead of stalling (issue #993). Specified in SECONDS, not bytes:
+    // burst-size is a byte count, so a fixed one silently stretches at low
+    // bitrates — the old flat 512 KB was ~22s at 192k but ~66s at 64k. The
+    // broadcast entrypoint converts this to bytes using stream.bitrate, so
+    // the depth an operator picks is the depth every bitrate gets.
+    //
+    // This is also exactly how far behind the live edge every listener sits
+    // for their whole connection, which is why /now-playing publishes it as
+    // stream.bufferSeconds — players subtract it to line the now-playing
+    // title and elapsed clock up with the audio actually in someone's ears
+    // rather than the live edge (issue #1114).
+    bufferSeconds: 22,
     // ICY (out-of-band) per-track titles on the Ogg mounts (/stream.opus +
     // /stream.flac). ON by default: most internet-radio clients (Ferrosonic,
     // Cast receivers, Symfonium) read the in-band Ogg comment only once at
@@ -1210,6 +1327,14 @@ const DEFAULTS = {
   // so operators can add/edit/remove entries from the admin UI. Fall back to
   // FESTIVAL_DEFAULTS when empty/absent.
   festivals: FESTIVAL_DEFAULTS,
+  // Operator-editable mood system (/admin/moods). `moods` is the vocabulary +
+  // per-mood CLAP prompt; `moodSchedule` maps each fixed day-period to a mood;
+  // `weatherMoods` maps each fixed weather condition to a mood ('' = no steer).
+  // All read live via the moodVocab()/moodScheduleFor()/weatherMoodFor()
+  // accessors. Seeded here; the operator's edits replace them.
+  moods: MOOD_DEFAULTS,
+  moodSchedule: PERIOD_MOOD_DEFAULTS,
+  weatherMoods: WEATHER_MOOD_DEFAULTS,
   // Listener-player UI toggles — purely presentational, station-wide. The web
   // player reads these via GET /state (alongside the theme) and applies them
   // live; no restart. `boothBuddy` gates the DJ-line mascot — OFF by default,
@@ -1221,6 +1346,15 @@ const DEFAULTS = {
   // OFF drops the takeover and listeners start via the skin's own play button
   // (browsers still can't autoplay, so a tap is always required somewhere).
   ui: { boothBuddy: false, skin: 'classic', tuneInOverlay: true },
+  // Private-station controls (issue #478). Two independent locks over ONE
+  // shared `password`. `privatePlayer` gates the public web pages behind a
+  // password prompt — UI-level only, applies live. `listenerAuth` puts
+  // Icecast listener auth on every stream mount via URL auth calling back
+  // into POST /listener-auth; no per-user accounts (Icecast can only do basic
+  // auth). Toggling listenerAuth re-renders icecast.xml, so it needs a mixer
+  // restart; password changes apply live (the controller validates every
+  // connect). Either lock being on requires a password — see update().
+  privacy: { privatePlayer: false, listenerAuth: false, password: '' },
   // Global DJ prompt template. '' means "use DEFAULT_DJ_PROMPT_TEMPLATE".
   // Always the RESOLVED text of the active djPrompts entry — kept so
   // renderDjPrompt() (and an older controller sharing the same settings.json)
@@ -1557,12 +1691,59 @@ const DEFAULTS = {
     // request is a clean no-op. ANALYZE_VOCAL_ACTIVITY=1 also enables it
     // regardless of this toggle (env wins on, never off). Expensive — opt-in.
     vocalActivity: false,
+    // Stem cache (feature: stem-blend transitions). When on, the analysis
+    // pass keeps the Demucs stems it already computes (head + tail windows)
+    // as FLAC under state/stems/<id>/ so transition renders are a fast mix
+    // instead of a fresh separation. Needs the demucs stack like
+    // vocalActivity; ~21-25 MB per track, LRU-swept to stemCacheGb.
+    stemCache: false,
+    stemCacheGb: 15,
+    // Quiet-times gate (#1099): pause the analysis pass while anyone is
+    // listening, resuming once the stream has been listener-free for
+    // analyzeQuietMinutes. Checked between tracks inside runAnalysisPass, so
+    // it covers both the server-spawned tagger child and `npm run analyze`,
+    // and applies to manual "Analyse now" runs too (a pass outlives the
+    // click; the bypass is turning this off). ANALYZE_QUIET_ONLY=1 also
+    // enables it (env wins on, never off), mirroring the toggles above.
+    analyzeQuietOnly: false,
+    analyzeQuietMinutes: 10,
+  },
+  // Transition scheduling + stem-blend rendering (docs/stem-transitions-research.md).
+  transitions: {
+    // Pair-aware drains (the #749 fix): hold each queued pick unsent until
+    // its successor is known (or the on-air track nears its end), so its
+    // exit stamps — adaptive crossfade length, and stem-blend clips when
+    // enabled — can be sized for the actual pair. Kill-switch: off reverts
+    // to the historical eager drain, byte-for-byte.
+    pairDrain: true,
+    // Pre-rendered stem-blend transitions (needs pairDrain + the heavy
+    // analyzer with the stem cache warmed). Off by default — opt-in like
+    // every heavy audio feature.
+    stemBlends: false,
   },
   // Sound-effects library. When disabled, the segment-director agent is never
   // shown the effect catalogue, so it stops garnishing spoken breaks with
   // stingers. The library files themselves stay on disk either way.
   sfx: {
     enabled: true,
+  },
+  // Beds — an instrumental bed between two songs for the DJ to talk over, so a
+  // long link isn't talked over the song it's introducing (broadcast/beds.ts +
+  // broadcast/bed-policy.ts). Off by default: it needs a bed the operator is
+  // happy to hear regularly, and a bed on EVERY link is morning-zoo radio.
+  //
+  // Controller-side only — no liquidsoap_*.txt, so toggling costs no mixer
+  // restart, unlike jingleRatio.
+  beds: {
+    enabled: false,
+    // Bed when the DJ's clip runs longer than this. Consulted ONLY where the
+    // incoming track's vocal onset is unknown; where the analyzer measured
+    // vocal ranges, the real onset wins and this is ignored. See
+    // bed-policy.rampBudgetMs.
+    thresholdSec: 12,
+    // The bed's own exit crossfade — how long the next song takes to ramp in
+    // under the DJ's closing words.
+    crossSec: 6,
   },
   // Outbound webhooks. Each entry POSTs station events (see broadcast/
   // webhooks.ts for the event list) to `url` with a fire-and-forget HTTP
@@ -1617,6 +1798,13 @@ const BOUNDS = {
   // ratio file reads 0 (issue #997: no way to disable the station stinger).
   jingleRatio: { min: 0, max: 1000, type: 'int' },
   crossfadeDuration: { min: 0, max: 30, type: 'float' },
+  // 0 = bed every link whose incoming vocal onset is unknown. The ceiling is
+  // deliberately low: past ~60s the DJ has outlasted any script the generators
+  // produce, so a higher value is indistinguishable from beds being off.
+  bedsThresholdSec: { min: 0, max: 60, type: 'float' },
+  // The bed's ramp into the next song. bed-policy clamps this against the bed's
+  // own length too, so a long ramp on a short link can't invert the arithmetic.
+  bedsCrossSec: { min: 0, max: 15, type: 'float' },
   // 0 = off; 36000 s (10h) is a generous ceiling that still leaves room for
   // long-form mix shows without letting a typo set an absurd value.
   maxTrackSeconds: { min: 0, max: 36000, type: 'int' },
@@ -1710,7 +1898,7 @@ function normalizePersona(raw: unknown) {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   const name = typeof r.name === 'string' ? r.name.trim().slice(0, 40) : '';
-  const soul = typeof r.soul === 'string' ? r.soul.trim().slice(0, 1000) : '';
+  const soul = typeof r.soul === 'string' ? r.soul.trim().slice(0, SOUL_MAX) : '';
   if (!name || !soul) return null;
   // Avatar — stored as a bare basename. Reset to '' if the persisted value
   // doesn't match the strict basename shape, so a hand-edited settings.json
@@ -2126,6 +2314,12 @@ export async function load() {
     // when the key is absent/invalid — a persisted empty array means the
     // operator deleted every entry and must stay empty (calendar off).
     festivals: Array.isArray(stored.festivals) ? stored.festivals : FESTIVAL_DEFAULTS,
+    // Mood system loaded from settings.json (lenient normalise — never wedges
+    // boot). An empty/absent vocabulary reseeds MOOD_DEFAULTS (unusable when
+    // empty); the two maps fill missing keys from their seed defaults.
+    moods: normalizeMoods(stored.moods),
+    moodSchedule: normalizeMoodMap(stored.moodSchedule, MOOD_PERIODS, PERIOD_MOOD_DEFAULTS),
+    weatherMoods: normalizeMoodMap(stored.weatherMoods, WEATHER_CONDITIONS, WEATHER_MOOD_DEFAULTS),
     ui: {
       boothBuddy:
         typeof stored.ui?.boothBuddy === 'boolean'
@@ -2139,6 +2333,20 @@ export async function load() {
         typeof stored.ui?.tuneInOverlay === 'boolean'
           ? stored.ui.tuneInOverlay
           : DEFAULTS.ui.tuneInOverlay,
+    },
+    privacy: {
+      privatePlayer:
+        typeof stored.privacy?.privatePlayer === 'boolean'
+          ? stored.privacy.privatePlayer
+          : DEFAULTS.privacy.privatePlayer,
+      listenerAuth:
+        typeof stored.privacy?.listenerAuth === 'boolean'
+          ? stored.privacy.listenerAuth
+          : DEFAULTS.privacy.listenerAuth,
+      password:
+        typeof stored.privacy?.password === 'string'
+          ? stored.privacy.password
+          : DEFAULTS.privacy.password,
     },
     personas,
     activePersonaId,
@@ -2412,9 +2620,29 @@ export async function load() {
     audio: {
       embeddings: typeof stored.audio?.embeddings === 'boolean' ? stored.audio.embeddings : DEFAULTS.audio.embeddings,
       vocalActivity: typeof stored.audio?.vocalActivity === 'boolean' ? stored.audio.vocalActivity : DEFAULTS.audio.vocalActivity,
+      stemCache: typeof stored.audio?.stemCache === 'boolean' ? stored.audio.stemCache : DEFAULTS.audio.stemCache,
+      stemCacheGb: Number.isFinite(stored.audio?.stemCacheGb) && stored.audio.stemCacheGb > 0
+        ? stored.audio.stemCacheGb
+        : DEFAULTS.audio.stemCacheGb,
+      analyzeQuietOnly:
+        typeof stored.audio?.analyzeQuietOnly === 'boolean'
+          ? stored.audio.analyzeQuietOnly
+          : DEFAULTS.audio.analyzeQuietOnly,
+      analyzeQuietMinutes: Number.isFinite(stored.audio?.analyzeQuietMinutes)
+        ? Math.max(1, Math.min(120, Math.floor(stored.audio.analyzeQuietMinutes)))
+        : DEFAULTS.audio.analyzeQuietMinutes,
+    },
+    transitions: {
+      pairDrain: typeof stored.transitions?.pairDrain === 'boolean' ? stored.transitions.pairDrain : DEFAULTS.transitions.pairDrain,
+      stemBlends: typeof stored.transitions?.stemBlends === 'boolean' ? stored.transitions.stemBlends : DEFAULTS.transitions.stemBlends,
     },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
+    },
+    beds: {
+      enabled: typeof stored.beds?.enabled === 'boolean' ? stored.beds.enabled : DEFAULTS.beds.enabled,
+      thresholdSec: Number.isFinite(stored.beds?.thresholdSec) ? stored.beds.thresholdSec : DEFAULTS.beds.thresholdSec,
+      crossSec: Number.isFinite(stored.beds?.crossSec) ? stored.beds.crossSec : DEFAULTS.beds.crossSec,
     },
     webhooks: normalizeWebhooks(stored.webhooks),
     webhooksPolicy: {
@@ -2531,6 +2759,30 @@ export function getDefaults() {
   return DEFAULTS;
 }
 
+// --- Live mood accessors — the single seam every consumer reads through, so an
+// operator edit takes effect with no restart. Pre-load, get() returns DEFAULTS,
+// so these still answer with the seed vocabulary (keeps the standalone
+// audio-moods unit test working without a settings.load()). ---
+export function moodEntries(): Array<{ name: string; clapPrompt: string }> {
+  const m = get().moods;
+  return Array.isArray(m) && m.length ? m : MOOD_DEFAULTS;
+}
+export function moodVocab(): string[] {
+  return moodEntries().map((m) => m.name);
+}
+export function moodPromptFor(name: string): string {
+  const e = moodEntries().find((m) => m.name === name);
+  return e?.clapPrompt ? e.clapPrompt : `${name} music`;
+}
+export function moodScheduleFor(period: string): string {
+  const s = get().moodSchedule || {};
+  return s[period] ?? PERIOD_MOOD_DEFAULTS[period] ?? '';
+}
+export function weatherMoodFor(condition: string): string {
+  const w = get().weatherMoods || {};
+  return (w[condition] ?? WEATHER_MOOD_DEFAULTS[condition] ?? '') || '';
+}
+
 // Resolve the operator-entered inline API key for a provider from the
 // per-provider map (issue #657). Returns '' when none is stored, in which case
 // the registry/embedding layer falls through to the provider's env var
@@ -2572,6 +2824,9 @@ export function getRedacted() {
   }
   if (clone.scrobble?.listenbrainz) {
     clone.scrobble.listenbrainz.userToken = s.scrobble?.listenbrainz?.userToken ? 'set' : '';
+  }
+  if (clone.privacy) {
+    clone.privacy.password = s.privacy?.password ? 'set' : '';
   }
   return clone;
 }
@@ -2687,8 +2942,8 @@ export function validatePersonasStrict(raw) {
     if (name.length < 1 || name.length > 40)
       throw new Error(`personas[${i}].name must be 1-40 chars`);
     const soul = String(item.soul ?? '').trim();
-    if (soul.length < 1 || soul.length > 1000)
-      throw new Error(`personas[${i}].soul must be 1-1000 chars`);
+    if (soul.length < 1 || soul.length > SOUL_MAX)
+      throw new Error(`personas[${i}].soul must be 1-${SOUL_MAX} chars`);
     const tagline = String(item.tagline ?? '').trim();
     if (tagline.length > 80) throw new Error(`personas[${i}].tagline must be 0-80 chars`);
     // language — optional free text ("Turkish", "Türkçe", …). Absent/empty →
@@ -2786,7 +3041,7 @@ export function validatePersonasStrict(raw) {
   });
 }
 
-function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
+export function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>, moodNames: string[] = SHOW_MOODS) {
   if (!Array.isArray(raw)) throw new Error('shows must be an array');
   if (raw.length > SHOWS_LIMIT) throw new Error(`shows must be at most ${SHOWS_LIMIT} entries`);
   const personaIds = personas.map(p => p.id);
@@ -2812,21 +3067,32 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
       throw new Error(`shows[${i}].moods must have at most ${SHOW_FILTER_VALUES_MAX} entries`);
     }
     for (const m of rawMoods) {
-      if (typeof m !== 'string' || !SHOW_MOODS.includes(m)) {
-        throw new Error(`shows[${i}].moods entries must be one of: ${SHOW_MOODS.join(', ')}`);
+      if (typeof m !== 'string' || !moodNames.includes(m)) {
+        throw new Error(`shows[${i}].moods entries must be one of: ${moodNames.join(', ')}`);
       }
     }
     const moods = coerceShowMoods({ moods: rawMoods });
     // Optional per-show theme override. Empty/missing means "fall back to the
     // station default while this show is on air". The allow-set is built once
     // by update() so we stay sync here.
+    //
+    // A stale id (a retired built-in like the old "sunset"/"neon" palettes,
+    // renamed in 58c3782b, or a custom theme file deleted under our feet) is
+    // DROPPED to "" rather than throwing — same tolerance as the lenient load
+    // path and the serve-time getTheme() fallback. Throwing here bricked EVERY
+    // shows/schedule save and full restore for any install still carrying one
+    // retired id on one show, because update() re-validates the whole array
+    // (issue #917 is the theme.active twin of this). Self-heals: the dead id
+    // is gone the next time the array is persisted. This never discards a fresh
+    // operator pick — those come from the live theme list — only a dead one.
     let themeId = '';
     if (item.themeId !== undefined && item.themeId !== null && item.themeId !== '') {
       const v = String(item.themeId).trim();
-      if (!allowedThemeIds.has(v)) {
-        throw new Error(`shows[${i}].themeId "${v}" is not a known theme id`);
+      if (allowedThemeIds.has(v)) {
+        themeId = v;
+      } else {
+        console.warn(`[shows] dropping unknown themeId "${v}" from "${name}" — falling back to the station theme`);
       }
-      themeId = v;
     }
     // Optional music-steering filters — all default to "no constraint" and all
     // multi-value lists (#929, legacy singular fields still accepted). Genres
@@ -3082,9 +3348,94 @@ function validateWebhooksStrict(raw: unknown, existing: Webhook[] = []) {
   });
 }
 
+// --- Strict update() validators for the mood system (the validateFestivalsStrict
+// shape: whole-value replace, indexed throws, rebuilt objects strip unknown
+// keys). `moodNames` is the effective vocabulary being saved, so a schedule /
+// weather / festival entry may reference a mood added in the SAME patch. ---
+// Exported for unit tests (scripts/moods.test.ts) — the pure validation/guard
+// logic that keeps the mood system consistent on every save.
+export function validateMoodsStrict(raw: any): Array<{ name: string; clapPrompt: string }> {
+  if (!Array.isArray(raw)) throw new Error('moods must be an array');
+  if (raw.length < 1) throw new Error('moods must have at least one entry');
+  if (raw.length > MOODS_LIMIT) throw new Error(`moods must be at most ${MOODS_LIMIT} entries`);
+  const seen = new Set<string>();
+  return raw.map((item, i) => {
+    if (!item || typeof item !== 'object') throw new Error(`moods[${i}] must be an object`);
+    const name = normalizeMoodName(item.name);
+    if (name.length < 1 || name.length > MOOD_NAME_MAX) {
+      throw new Error(`moods[${i}].name must be 1-${MOOD_NAME_MAX} chars (letters, digits, dashes)`);
+    }
+    if (seen.has(name)) throw new Error(`moods[${i}].name "${name}" is a duplicate`);
+    seen.add(name);
+    const clapPrompt = typeof item.clapPrompt === 'string'
+      ? item.clapPrompt.trim().slice(0, MOOD_PROMPT_MAX)
+      : '';
+    return { name, clapPrompt };
+  });
+}
+
+export function validateMoodScheduleStrict(raw: any, moodNames: string[]): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('moodSchedule must be an object');
+  }
+  const names = new Set(moodNames);
+  const out: Record<string, string> = {};
+  for (const period of MOOD_PERIODS) {
+    const v = String(raw[period] ?? '').trim();
+    if (!names.has(v)) {
+      throw new Error(`moodSchedule.${period} must be one of: ${moodNames.join(', ')}`);
+    }
+    out[period] = v;
+  }
+  return out;
+}
+
+export function validateWeatherMoodsStrict(raw: any, moodNames: string[]): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('weatherMoods must be an object');
+  }
+  const names = new Set(moodNames);
+  const out: Record<string, string> = {};
+  for (const cond of WEATHER_CONDITIONS) {
+    const v = String(raw[cond] ?? '').trim();
+    if (v && !names.has(v)) {
+      throw new Error(`weatherMoods.${cond} must be a mood (${moodNames.join(', ')}) or empty`);
+    }
+    out[cond] = v;
+  }
+  return out;
+}
+
+// Reject a vocabulary edit that would orphan a mood still referenced by the
+// festival calendar, either mood map, or a scheduled show. Renames are a
+// two-step (add the new name, repoint the referrers, remove the old) — this is
+// the guard that names exactly what still points at a removed mood.
+export function assertNoOrphanMoods(next: any): void {
+  const names = new Set<string>((next.moods || []).map((m: any) => m.name));
+  const refs: string[] = [];
+  for (const [period, mood] of Object.entries(next.moodSchedule || {})) {
+    if (mood && !names.has(mood as string)) refs.push(`the ${period} time-of-day slot`);
+  }
+  for (const [cond, mood] of Object.entries(next.weatherMoods || {})) {
+    if (mood && !names.has(mood as string)) refs.push(`the ${cond} weather slot`);
+  }
+  for (const f of next.festivals || []) {
+    if (f.mood && !names.has(f.mood)) refs.push(`festival "${f.name}"`);
+  }
+  for (const s of next.shows || []) {
+    for (const m of s.moods || []) {
+      if (!names.has(m)) refs.push(`show "${s.name}"`);
+    }
+  }
+  if (refs.length) {
+    const uniq = [...new Set(refs)];
+    throw new Error(`can't remove that mood — still used by ${uniq.join(', ')}. Reassign those first.`);
+  }
+}
+
 const FESTIVALS_LIMIT = 50;
 
-function validateFestivalsStrict(raw) {
+function validateFestivalsStrict(raw, moodNames: string[] = SHOW_MOODS) {
   if (!Array.isArray(raw)) throw new Error('festivals must be an array');
   if (raw.length > FESTIVALS_LIMIT) {
     throw new Error(`festivals must be at most ${FESTIVALS_LIMIT} entries`);
@@ -3105,8 +3456,8 @@ function validateFestivalsStrict(raw) {
       throw new Error(`festivals[${i}].day must be an integer 1-${daysInMonth} for month ${month}`);
     }
     const mood = String(item.mood ?? '').trim();
-    if (!SHOW_MOODS.includes(mood)) {
-      throw new Error(`festivals[${i}].mood must be one of: ${SHOW_MOODS.join(', ')}`);
+    if (!moodNames.includes(mood)) {
+      throw new Error(`festivals[${i}].mood must be one of: ${moodNames.join(', ')}`);
     }
     const description = typeof item.description === 'string' ? item.description.trim().slice(0, 200) : '';
     const windowDays = Number(item.windowDays ?? 0);
@@ -3269,6 +3620,29 @@ export async function update(patch) {
         restart = true;
       }
     }
+    // Listener-side buffer depth (Icecast <burst-size>, in seconds). Deep =
+    // survives a dead zone but sits further behind the live edge; shallow =
+    // tighter sync, likelier to stall. 0 disables burst-on-connect entirely.
+    // Capped at 60s: past that a listener is a full minute behind and
+    // <queue-size> (which must comfortably exceed the burst) gets unreasonable.
+    //
+    // restart=true is load-bearing here and NOT just a mixer concern: burst
+    // lives in icecast.xml, which is rendered once by the broadcast entrypoint
+    // at container boot. It applies anyway because liquidsoap and icecast
+    // share a container and the entrypoint `wait -n`s on both — the telnet
+    // restart shuts liquidsoap down, the container bounces, and the entrypoint
+    // re-renders the template on the way back up.
+    if (st.bufferSeconds !== undefined) {
+      const v = Number(st.bufferSeconds);
+      if (!Number.isFinite(v) || v < 0 || v > 60) {
+        throw new Error('stream.bufferSeconds must be a number between 0 and 60');
+      }
+      const rounded = Math.round(v);
+      if (rounded !== cur.stream.bufferSeconds) {
+        next.stream.bufferSeconds = rounded;
+        restart = true;
+      }
+    }
     // Idle pause is enforced controller-side over telnet (broadcast/
     // stream-idle.ts) — no Liquidsoap boot file, no mixer restart. Turning it
     // off mid-idle is handled by the monitor's next tick, which resumes the
@@ -3378,14 +3752,34 @@ export async function update(patch) {
     if (t.active !== undefined) {
       const v = String(t.active ?? '').trim();
       if (!v) throw new Error('theme.active must be a theme id');
-      if (!(await isValidThemeId(v))) {
-        throw new Error(`theme.active "${v}" is not a known theme id`);
+      // A stale active theme (a retired built-in renamed in 58c3782b, or a
+      // custom theme that isn't on disk) falls back to the built-in default
+      // rather than failing the save — same tolerance as shows[].themeId above
+      // and the serve-time getTheme() fallback, and the same precedent as the
+      // activeDjPromptId reset. Throwing here aborted the whole restore for any
+      // install whose active theme id had since been retired (issue #917).
+      next.theme.active = (await isValidThemeId(v)) ? v : DEFAULT_THEME_ID;
+      if (next.theme.active !== v) {
+        console.warn(`[theme] active theme "${v}" is not a known theme id — falling back to "${DEFAULT_THEME_ID}"`);
       }
-      next.theme.active = v;
     }
   }
+  // Mood system (context-only — no Liquidsoap restart). Validate the vocabulary
+  // first so the maps + festivals in the same patch can reference a newly-added
+  // mood. The in-use removal guard (assertNoOrphanMoods) runs after shows are
+  // validated below, so a same-patch show edit is seen.
+  if ('moods' in patch) {
+    next.moods = validateMoodsStrict(patch.moods);
+  }
+  const moodNames = (next.moods || []).map((m: any) => m.name);
+  if ('moodSchedule' in patch) {
+    next.moodSchedule = validateMoodScheduleStrict(patch.moodSchedule, moodNames);
+  }
+  if ('weatherMoods' in patch) {
+    next.weatherMoods = validateWeatherMoodsStrict(patch.weatherMoods, moodNames);
+  }
   if ('festivals' in patch) {
-    next.festivals = validateFestivalsStrict(patch.festivals);
+    next.festivals = validateFestivalsStrict(patch.festivals, moodNames);
   }
   // Prompt-template library. `djPrompts` replaces the whole library;
   // `activeDjPromptId` switches which entry renders ('' = built-in default).
@@ -3446,13 +3840,19 @@ export async function update(patch) {
     // listThemes() returns built-ins + cached user themes (30 s TTL) — same
     // source the picker reads.
     const allowedThemeIds = new Set((await listThemes()).map(t => t.id));
-    next.shows = validateShowsStrict(patch.shows, next.personas, allowedThemeIds);
+    next.shows = validateShowsStrict(patch.shows, next.personas, allowedThemeIds, moodNames);
   }
   if ('schedule' in patch) {
     next.schedule = validateScheduleStrict(patch.schedule, next.shows);
   }
   if ('scheduleOverride' in patch) {
     next.scheduleOverride = validateScheduleOverrideStrict(patch.scheduleOverride, next.shows);
+  }
+  // In-use removal guard: run once the vocabulary AND any same-patch shows are
+  // validated, so a mood dropped from the vocab is rejected only if something
+  // still references it.
+  if ('moods' in patch) {
+    assertNoOrphanMoods(next);
   }
   if ('activePersonaId' in patch) {
     if (!next.personas.some(p => p.id === patch.activePersonaId)) {
@@ -3892,11 +4292,61 @@ export async function update(patch) {
     if (au.vocalActivity !== undefined) {
       next.audio.vocalActivity = !!au.vocalActivity;
     }
+    if (au.stemCache !== undefined) {
+      next.audio.stemCache = !!au.stemCache;
+    }
+    if (au.stemCacheGb !== undefined) {
+      const gb = Number(au.stemCacheGb);
+      if (Number.isFinite(gb) && gb >= 1 && gb <= 500) next.audio.stemCacheGb = gb;
+    }
+    if (au.analyzeQuietOnly !== undefined) {
+      next.audio.analyzeQuietOnly = !!au.analyzeQuietOnly;
+    }
+    if (au.analyzeQuietMinutes !== undefined) {
+      const v = Math.floor(Number(au.analyzeQuietMinutes));
+      if (!Number.isFinite(v) || v < 1 || v > 120) {
+        throw new Error('audio.analyzeQuietMinutes must be between 1 and 120');
+      }
+      next.audio.analyzeQuietMinutes = v;
+    }
+  }
+  if ('transitions' in patch) {
+    const tr = patch.transitions || {};
+    if (tr.pairDrain !== undefined) {
+      next.transitions.pairDrain = !!tr.pairDrain;
+    }
+    if (tr.stemBlends !== undefined) {
+      next.transitions.stemBlends = !!tr.stemBlends;
+    }
   }
   if ('sfx' in patch) {
     const sx = patch.sfx || {};
     if (sx.enabled !== undefined) {
       next.sfx.enabled = !!sx.enabled;
+    }
+  }
+  if ('beds' in patch) {
+    const bd = patch.beds || {};
+    if (bd.enabled !== undefined) {
+      next.beds.enabled = !!bd.enabled;
+    }
+    if (bd.thresholdSec !== undefined) {
+      const v = parseFloat(bd.thresholdSec);
+      if (!Number.isFinite(v) || v < BOUNDS.bedsThresholdSec.min || v > BOUNDS.bedsThresholdSec.max) {
+        throw new Error(
+          `beds.thresholdSec must be number in [${BOUNDS.bedsThresholdSec.min}, ${BOUNDS.bedsThresholdSec.max}]`,
+        );
+      }
+      next.beds.thresholdSec = v;
+    }
+    if (bd.crossSec !== undefined) {
+      const v = parseFloat(bd.crossSec);
+      if (!Number.isFinite(v) || v < BOUNDS.bedsCrossSec.min || v > BOUNDS.bedsCrossSec.max) {
+        throw new Error(
+          `beds.crossSec must be number in [${BOUNDS.bedsCrossSec.min}, ${BOUNDS.bedsCrossSec.max}]`,
+        );
+      }
+      next.beds.crossSec = v;
     }
   }
   if ('ui' in patch) {
@@ -3914,6 +4364,47 @@ export async function update(patch) {
     }
     if (ui.tuneInOverlay !== undefined) {
       next.ui.tuneInOverlay = !!ui.tuneInOverlay;
+    }
+  }
+  if ('privacy' in patch) {
+    const pv = patch.privacy || {};
+    if (pv.privatePlayer !== undefined) {
+      next.privacy.privatePlayer = !!pv.privatePlayer;
+    }
+    // 'set' is the redaction sentinel from getRedacted() — ignore it so a
+    // round-tripped form doesn't overwrite the stored secret.
+    if (pv.password !== undefined && pv.password !== 'set') {
+      const v = String(pv.password ?? '').trim();
+      if (v.length > 128) {
+        throw new Error('privacy.password must be 0-128 chars');
+      }
+      // The password travels in basic-auth userinfo and ?auth= query strings;
+      // whitespace/control chars only cause client-side grief there.
+      if (/[\s]/.test(v)) {
+        throw new Error('privacy.password must not contain whitespace');
+      }
+      next.privacy.password = v;
+    }
+    if (pv.listenerAuth !== undefined) {
+      const v = !!pv.listenerAuth;
+      if (v !== cur.privacy.listenerAuth) {
+        // Flipping the toggle adds/removes the <mount> auth blocks in
+        // icecast.xml, which only re-render on a broadcast restart. Password
+        // changes don't need this — URL auth validates live.
+        next.privacy.listenerAuth = v;
+        restart = true;
+      }
+    }
+    // Whatever combination the patch produced, never persist a lock that is on
+    // with no password behind it. For the stream that would fail every
+    // listener closed at /listener-auth; for the player it would render a
+    // prompt nobody can satisfy, locking the operator out of their own station
+    // with no in-band way back in.
+    if (
+      (next.privacy.privatePlayer || next.privacy.listenerAuth) &&
+      !next.privacy.password
+    ) {
+      throw new Error('set a station password before turning on a privacy lock');
     }
   }
   if ('webhooks' in patch) {
@@ -4336,7 +4827,16 @@ const LIQ_OGG_ICY_METADATA_PATH = `${STATE_DIR}/liquidsoap_ogg_icy_metadata.txt`
 const LIQ_AAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_aac_enabled.txt`;
 const LIQ_AAC_BITRATE_PATH = `${STATE_DIR}/liquidsoap_aac_bitrate.txt`;
 const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.txt`;
+// Read by docker/broadcast-entrypoint.sh (not radio.liq) to size Icecast's
+// <burst-size>. Same liquidsoap_*.txt convention because it shares their
+// lifecycle exactly: written on save, consumed once at broadcast boot.
+const LIQ_STREAM_BUFFER_SECONDS_PATH = `${STATE_DIR}/liquidsoap_stream_buffer_seconds.txt`;
 const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
+// Read by the BROADCAST ENTRYPOINT (docker/broadcast-entrypoint.sh + the AIO
+// supervisor), not liquidsoap: only the literal value 'true' makes the
+// entrypoint render the per-mount <authentication type="url"> blocks into
+// icecast.xml on the next broadcast restart.
+const ICECAST_LISTENER_AUTH_PATH = `${STATE_DIR}/icecast_listener_auth.txt`;
 
 export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_JINGLE_RATIO_PATH, String(s.jingleRatio));
@@ -4350,7 +4850,12 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_AAC_ENABLED_PATH, s.stream.aacEnabled ? 'true' : 'false');
   await writeFile(LIQ_AAC_BITRATE_PATH, String(s.stream.aacBitrate));
   await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));
+  await writeFile(LIQ_STREAM_BUFFER_SECONDS_PATH, String(s.stream.bufferSeconds));
   await writeFile(LIQ_STATION_NAME_PATH, s.station || DEFAULTS.station);
+  await writeFile(
+    ICECAST_LISTENER_AUTH_PATH,
+    s.privacy?.listenerAuth ? 'true' : 'false',
+  );
 }
 
 // Called from server.js startup so the files exist before Liquidsoap reads
@@ -4363,7 +4868,9 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(LIQ_ARCHIVE_ENABLED_PATH) ||
     !existsSync(LIQ_ARCHIVE_BITRATE_PATH) ||
     !existsSync(LIQ_OPUS_ENABLED_PATH) ||
-    !existsSync(LIQ_STREAM_BITRATE_PATH)
+    !existsSync(LIQ_STREAM_BITRATE_PATH) ||
+    !existsSync(LIQ_STREAM_BUFFER_SECONDS_PATH) ||
+    !existsSync(ICECAST_LISTENER_AUTH_PATH)
   ) {
     await writeLiquidsoapSettings(s);
   }

@@ -177,6 +177,22 @@ interface DjQueueSnapshot {
   // chance of a duplicate (queue.push dedupes by track id, so there shouldn't
   // be one).
   ridBySubsonicId: Map<string, string>;
+  // Pre-rendered transition clips (stem-blend transitions): a clip carries
+  // the INCOMING track's subsonic_id AND sits earlier in dj_queue, so
+  // without this split the first-occurrence rule would bind that id to the
+  // CLIP's rid — an operator cancel would then remove the clip and leave the
+  // real track playing untracked. Clips are keyed here instead and excluded
+  // from ids/ridBySubsonicId entirely.
+  clipRidBySubsonicId: Map<string, string>;
+  // Request ids in queue order — needed to find the entry pushed immediately
+  // ahead of a given track (a bed rides that slot; see resolveDjQueueRidWithBed).
+  // Relies on `dj_queue.queue` listing pending rids in FIFO push order, which
+  // is what request.queue's telnet command does (Liquidsoap 2.x: the queue
+  // command prints the ready/pending list oldest-first).
+  orderedRids: string[];
+  // Request ids whose annotate URI carries subwave_kind="bed" — beds have no
+  // subsonic_id, so this is the only way to recognise them in the queue.
+  bedRids: Set<string>;
 }
 interface DjQueueCache extends DjQueueSnapshot {
   timestamp: number;
@@ -192,6 +208,8 @@ async function fetchDjQueue(): Promise<DjQueueSnapshot> {
   const rids = res.trim().split(/\s+/).filter(Boolean);
   const ids = new Set<string>();
   const ridBySubsonicId = new Map<string, string>();
+  const clipRidBySubsonicId = new Map<string, string>();
+  const bedRids = new Set<string>();
 
   for (const rid of rids) {
     try {
@@ -205,15 +223,22 @@ async function fetchDjQueue(): Promise<DjQueueSnapshot> {
       // exactly the one that's still idle. See #? / queue-cancel.
       const match = /subsonic_id=\\?"([^"\\]+)/.exec(meta);
       if (match && match[1]) {
-        ids.add(match[1]);
-        if (!ridBySubsonicId.has(match[1])) ridBySubsonicId.set(match[1], rid);
+        // Transition clips masquerade as their incoming track (same
+        // subsonic_id) — route them to the clip map, never the track maps.
+        if (/subwave_clip=\\?"1/.test(meta)) {
+          if (!clipRidBySubsonicId.has(match[1])) clipRidBySubsonicId.set(match[1], rid);
+        } else {
+          ids.add(match[1]);
+          if (!ridBySubsonicId.has(match[1])) ridBySubsonicId.set(match[1], rid);
+        }
       }
+      if (/subwave_kind=\\?"bed/.test(meta)) bedRids.add(rid);
     } catch (ridErr: any) {
       console.warn(`[liquidsoap] request.metadata ${rid} failed: ${ridErr.message}`);
     }
   }
 
-  return { ids, ridBySubsonicId };
+  return { ids, ridBySubsonicId, clipRidBySubsonicId, orderedRids: rids, bedRids };
 }
 
 // Returns a Set of subsonic_ids currently in the queue (cached ~4s).
@@ -242,15 +267,39 @@ export async function getDjQueueIds(): Promise<Set<string>> {
 // cancel decisions can't ride a 4s-stale cache (the track may have gone on
 // air since). Returns null when the track is no longer pending in dj_queue.
 export async function resolveDjQueueRid(subsonicId: string): Promise<string | null> {
+  return (await resolveDjQueueRidWithBed(subsonicId)).rid;
+}
+
+// Same fresh read, plus the bed queued immediately ahead of the track, if any.
+// A bed is a separate dj_queue entry with no subsonic_id (queue.maybePushBed
+// writes it right before the track URI), so an id-keyed cancel can't see it —
+// this is how removeUpcoming finds it to cancel it along with its track.
+export async function resolveDjQueueRidWithBed(
+  subsonicId: string,
+): Promise<{ rid: string | null; bedRid: string | null }> {
   const snap = await fetchDjQueue();
   _djQueueCache = { timestamp: Date.now(), ...snap };
-  return snap.ridBySubsonicId.get(subsonicId) ?? null;
+  const rid = snap.ridBySubsonicId.get(subsonicId) ?? null;
+  if (!rid) return { rid: null, bedRid: null };
+  const prev = snap.orderedRids[snap.orderedRids.indexOf(rid) - 1];
+  return { rid, bedRid: prev && snap.bedRids.has(prev) ? prev : null };
+}
+
+// Resolve the rid of a pending transition CLIP rendered for the given
+// incoming track (stem-blend transitions). Fresh read like resolveDjQueueRid;
+// null when no clip is pending for that id.
+export async function resolveClipRid(subsonicId: string): Promise<string | null> {
+  const snap = await fetchDjQueue();
+  _djQueueCache = { timestamp: Date.now(), ...snap };
+  return snap.clipRidBySubsonicId.get(subsonicId) ?? null;
 }
 
 // Remove a pending request from dj_queue via the custom "dj_queue_remove"
 // command in radio.liq. Returns false when Liquidsoap replies NOT_FOUND —
-// the request already left the queue (playing or played), so there is
-// nothing left to cancel.
+// the request already left the queue (playing, played, or mid-prefetch for
+// the next slot — a request the source has popped for resolution is
+// invisible to dj_queue.queue(), and refusing it is right: it's about to
+// air), so there is nothing left to cancel.
 export async function removeFromDjQueue(rid: string): Promise<boolean> {
   const res = await sendCommand(`dj_queue_remove ${rid}`, 2000);
   _djQueueCache = null; // the queue just changed under the cache

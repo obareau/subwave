@@ -10,6 +10,9 @@ import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
+import { SkeletonRows } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 import { Card, Btn, Pill, Eyebrow, Toggle } from './ui';
 
 interface Webhook {
@@ -298,14 +301,14 @@ export default function WebhooksPanel() {
   if (err) {
     return (
       <div className="grid gap-4">
-        <Card title="Webhooks"><div className="text-[13px] text-[var(--danger)]">controller error: {err}</div></Card>
+        <Card title="Webhooks"><ErrorState error={err} /></Card>
       </div>
     );
   }
   if (!hooks || !events) {
     return (
       <div className="grid gap-4">
-        <Card title="Webhooks"><div className="text-[13px] text-muted italic">loading…</div></Card>
+        <Card title="Webhooks"><SkeletonRows rows={3} /></Card>
       </div>
     );
   }
@@ -353,6 +356,7 @@ export default function WebhooksPanel() {
             on={trackPlayListenerGated}
             onClick={() => saveGate(!trackPlayListenerGated)}
             disabled={busy}
+            ariaLabel="Gate track.play on listener count"
           />
         }
       >
@@ -366,10 +370,11 @@ export default function WebhooksPanel() {
 
       {hooks.length === 0 && (
         <Card title="No webhooks yet">
-          <div className="text-[12px] leading-[1.6] text-muted">
-            Click <strong>Add</strong> above to wire your first one. Common targets: Discord webhooks (chat),
-            n8n / Pipedream (relay + retry), Home Assistant (lights pulse on a track change).
-          </div>
+          <EmptyState
+            title="No webhooks yet"
+            description="Add one to push now-playing and station events out to other services."
+            action={<Btn sm onClick={() => setHooks([...hooks, blank(events)])}>Add webhook</Btn>}
+          />
         </Card>
       )}
 
@@ -393,7 +398,7 @@ export default function WebhooksPanel() {
                 <Pill tone={h.enabled ? 'accent' : 'default'} dot={h.enabled}>
                   {h.enabled ? 'enabled' : 'disabled'}
                 </Pill>
-                <Toggle on={h.enabled} onClick={() => update({ enabled: !h.enabled })} />
+                <Toggle on={h.enabled} onClick={() => update({ enabled: !h.enabled })} ariaLabel="Enable webhook" />
               </>
             }
           >
@@ -404,6 +409,7 @@ export default function WebhooksPanel() {
                   value={h.url}
                   onChange={e => update({ url: e.target.value })}
                   placeholder="https://discord.com/api/webhooks/…"
+                  aria-label="Webhook URL"
                   spellCheck={false}
                 />
               </div>
@@ -413,6 +419,7 @@ export default function WebhooksPanel() {
                   value={h.authHeader === 'set' ? '' : h.authHeader}
                   placeholder={h.authHeader === 'set' ? '(stored, leave blank to keep)' : 'Bearer …'}
                   onChange={e => update({ authHeader: e.target.value })}
+                  aria-label="Authorization header"
                   spellCheck={false}
                 />
                 <div className="mt-1 text-[10px] text-muted">

@@ -6,7 +6,9 @@ import { m } from 'motion/react';
 import { notify, errorMessage } from '../../../lib/notify';
 import { cn } from '../../../lib/cn';
 import type { StationLocale } from '../../../lib/format';
+import { Play } from 'lucide-react';
 import { Btn, Eyebrow, Metric } from '../ui';
+import { Button } from '../../ui/button';
 
 export const KEY_HINTS: Record<string, string> = {
   ANTHROPIC_API_KEY: 'sk-ant-...',
@@ -189,10 +191,24 @@ export interface LoudnessForm {
   source: LoudnessSource;
 }
 
+export interface TransitionsForm {
+  pairDrain: boolean;   // hold picks until the successor is known (#749 fix)
+  stemBlends: boolean;  // pre-rendered stem-blend seams (needs pairDrain + stem cache)
+  stemCache: boolean;   // settings.audio.stemCache — persist Demucs stems during analysis
+}
+
+export interface PrivacyForm {
+  privatePlayer: boolean;
+  listenerAuth: boolean;
+  /** Round-trips the 'set' redaction sentinel when saved and untouched.
+   *  One shared secret behind both locks above. */
+  password: string;
+}
+
 export interface FormState {
-  jingleRatio: string;
   crossfadeDuration: string;
   maxTrackSeconds: string;
+  transitions: TransitionsForm;
   archive: ArchiveForm;
   stream: StreamForm;
   loudness: LoudnessForm;
@@ -207,6 +223,7 @@ export interface FormState {
   search: SearchForm;
   embedding: EmbeddingForm;
   scrobble: ScrobbleForm;
+  privacy: PrivacyForm;
   likes: LikesForm;
 }
 
@@ -219,20 +236,6 @@ export interface JingleEntry {
   source?: string;
 }
 
-export interface SfxEntry {
-  name: string;
-  description?: string;
-  size?: number;
-  durationSec?: number;
-  builtin?: boolean;
-  source?: string;
-}
-
-export interface SfxData {
-  sfx?: SfxEntry[];
-  generatorReady?: boolean;
-}
-
 export interface SettingsData {
   values?: {
     jingleRatio?: number;
@@ -240,6 +243,8 @@ export interface SettingsData {
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
+    transitions?: { pairDrain?: boolean; stemBlends?: boolean };
+    audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
     stream?: {
       opusEnabled?: boolean;
       opusBitrate?: number;
@@ -293,7 +298,9 @@ export interface SettingsData {
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };
     sfx?: { enabled?: boolean };
+    beds?: { enabled?: boolean; thresholdSec?: number; crossSec?: number };
     ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
+    privacy?: { privatePlayer?: boolean; listenerAuth?: boolean; password?: string };
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
       listenbrainz?: Partial<ScrobbleListenbrainzForm>;
@@ -351,18 +358,8 @@ export interface SettingsData {
   serverTimezone?: string;
 }
 
-export interface SfxForm {
-  name: string;
-  description: string;
-  prompt: string;
-  durationSec: string;
-}
-
 export type Patch = Record<string, unknown>;
 export type SaveSettings = (patch: Patch) => Promise<void>;
-
-export type JingleImportFailure = { name: string; reason: string };
-export type JingleImportResult = { ok: number; total: number; failures: JingleImportFailure[]; aborted: boolean };
 
 export type FormUpdater = (updater: (f: FormState) => FormState) => void;
 
@@ -587,11 +584,28 @@ export function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButto
     }
   };
 
-  const text = state === 'playing' ? 'Stop' : state === 'loading' ? '…' : label;
-
+  // Icon-ghost preview (Imaging.dc.html): a filled play triangle that swaps to
+  // animated EQ bars while the clip is on air. `label` is the accessible name.
   return (
-    <Btn sm onClick={onClick} title="Preview audio">
-      {text}
-    </Btn>
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      onClick={onClick}
+      aria-label={state === 'playing' ? 'Stop preview' : label}
+      title={state === 'playing' ? 'Stop preview' : 'Preview audio'}
+    >
+      {state === 'playing' ? (
+        <span className="flex h-3.5 items-center gap-[2px]" aria-hidden>
+          <span className="h-3 w-[2px] origin-bottom animate-[skin-eq_.7s_ease-in-out_infinite] bg-[var(--accent)]" />
+          <span className="h-3 w-[2px] origin-bottom animate-[skin-eq_.7s_ease-in-out_.15s_infinite] bg-[var(--accent)]" />
+          <span className="h-3 w-[2px] origin-bottom animate-[skin-eq_.7s_ease-in-out_.3s_infinite] bg-[var(--accent)]" />
+        </span>
+      ) : state === 'loading' ? (
+        <span className="font-mono text-[13px] leading-none" aria-hidden>…</span>
+      ) : (
+        <Play className="fill-current" aria-hidden />
+      )}
+    </Button>
   );
 }

@@ -12,7 +12,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan } from '../music/show-filter.js';
+import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan } from '../music/show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
@@ -28,6 +28,8 @@ import { optionalSegmentsAllowed } from './dj-budget.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
 import { withTrace, pruneOldEvents } from '../observability/events.js';
 import * as archives from './archives.js';
+import * as stemCacheStore from '../music/stem-cache.js';
+import * as stemBlendStore from './stem-blend.js';
 import * as doctor from '../doctor.js';
 
 const TARGET_POOL = 30;
@@ -118,6 +120,10 @@ async function refreshAutoPlaylistInner() {
   for (const g of showGenres) {
     try {
       const resolved = await subsonic.resolveGenreName(g);
+      // A resolution that silently broadened / dropped the operator's genre is
+      // the show airing something other than what was configured — say so.
+      const warning = genreResolutionWarningOnce(g, resolved);
+      if (warning) queue.log('scheduler', `Show "${show?.name ?? 'auto'}": ${warning}`);
       if (resolved) genreNames.push(resolved);
     } catch {}
   }
@@ -761,6 +767,28 @@ async function cleanup() {
     }
   } catch (err) {
     queue.log('error', `Archive retention failed: ${err.message}`);
+  }
+  // Stem cache LRU — keep the per-track Demucs stem windows inside the
+  // operator's byte budget (feature: stem-blend transitions). The analysis
+  // pass sweeps after itself too; this catches lazily-added dirs.
+  try {
+    const { removed, freedBytes } = await stemCacheStore.sweep();
+    if (removed) {
+      queue.log('scheduler',
+        `Stem cache: evicted ${removed} track dir(s) (${Math.round(freedBytes / 1_000_000)} MB freed)`);
+    }
+  } catch (err) {
+    queue.log('error', `Stem cache sweep failed: ${err.message}`);
+  }
+  // Rendered transition clips are single-use seam artifacts — anything older
+  // than an hour is an orphan (cancelled pair, crashed drain), EXCEPT clips
+  // still queued for a seam that hasn't aired (a clip behind a long outgoing
+  // track legitimately out-ages the window; the queue knows which).
+  try {
+    const removed = await stemBlendStore.cleanupOldClips(queue.pendingClipPaths());
+    if (removed) queue.log('scheduler', `Transitions: removed ${removed} orphaned clip(s)`);
+  } catch (err) {
+    queue.log('error', `Transition clip sweep failed: ${err.message}`);
   }
 }
 

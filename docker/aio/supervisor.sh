@@ -23,6 +23,25 @@ SECRETS=/var/sub-wave/icecast-secrets.env
 TEMPLATE=/etc/icecast2/icecast.xml.template
 RENDERED=/etc/icecast2/icecast.xml
 
+# Multi-station pointer (see docker/broadcast-entrypoint.sh — kept in lockstep).
+# Called at the top of run_broadcast so every mixer relaunch re-resolves.
+STATE_ROOT=/var/sub-wave
+STATE_DIR="$STATE_ROOT"
+resolve_state_dir() {
+	STATE_DIR="$STATE_ROOT"
+	local active="$STATE_ROOT/stations/active.json" id=""
+	if [ -f "$active" ]; then
+		id=$(sed -n 's/.*"activeId"[[:space:]]*:[[:space:]]*"\([a-z0-9][a-z0-9-]\{0,40\}\)".*/\1/p' "$active" | head -n1)
+		if [ -n "$id" ] && [ -d "$STATE_ROOT/stations/$id" ]; then
+			STATE_DIR="$STATE_ROOT/stations/$id"
+			log "active station '$id' → $STATE_DIR"
+		else
+			log "WARNING stations/active.json unresolvable (id='$id') — using root"
+		fi
+	fi
+	export SUBWAVE_STATE_DIR="$STATE_DIR"
+}
+
 log() { echo "[subwave-aio] $*" >&2; }
 
 # ---------------------------------------------------------------------------
@@ -125,7 +144,25 @@ init_secrets() {
 	# Liquidsoap connects to icecast over loopback inside this container;
 	# radio.liq reads ICECAST_HOST (default "icecast").
 	export ICECAST_HOST=localhost
+}
 
+# ---------------------------------------------------------------------------
+# Render icecast.xml from the template + resolved secrets. Called on EVERY
+# broadcast pair (re)launch — not just boot — so a restart-mixer picks up a
+# flipped listener-auth flag (or a changed buffer/bitrate setting) the same
+# way the split stack's container restart re-runs its entrypoint.
+# ---------------------------------------------------------------------------
+read_state_num() {
+	# $1 = filename under $STATE_DIR, $2 = fallback. Non-numeric/missing → fallback.
+	local _v
+	_v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)
+	case "$_v" in
+		''|*[!0-9]*) echo "$2" ;;
+		*) echo "$_v" ;;
+	esac
+}
+
+render_icecast() {
 	# Concurrent-listener ceiling (<limits><clients>). Empty/unset → the stock 100.
 	# A non-numeric value would render invalid XML and fail icecast at boot,
 	# so fall back to the default with a warning instead.
@@ -137,11 +174,81 @@ init_secrets() {
 			;;
 	esac
 
+	# Listener buffer depth — same contract as docker/broadcast-entrypoint.sh
+	# (#1114): burst-size is a byte count, so it's derived from
+	# settings.stream.bufferSeconds x each mount's bitrate. Re-read on every
+	# pair launch so a settings change lands after a restart-mixer.
+	local STREAM_BITRATE BUFFER_SECONDS OPUS_BITRATE AAC_BITRATE FLAC_BITRATE_EST
+	STREAM_BITRATE="${ICECAST_STREAM_BITRATE:-$(read_state_num liquidsoap_stream_bitrate.txt 192)}"
+	BUFFER_SECONDS="${ICECAST_BUFFER_SECONDS:-$(read_state_num liquidsoap_stream_buffer_seconds.txt 22)}"
+	case "$STREAM_BITRATE" in *[!0-9]*|'') STREAM_BITRATE=192 ;; esac
+	case "$BUFFER_SECONDS" in *[!0-9]*|'') BUFFER_SECONDS=22 ;; esac
+	[ "$BUFFER_SECONDS" -gt 60 ] && BUFFER_SECONDS=60
+	OPUS_BITRATE="${ICECAST_OPUS_BITRATE:-$(read_state_num liquidsoap_opus_bitrate.txt 96)}"
+	AAC_BITRATE="${ICECAST_AAC_BITRATE:-$(read_state_num liquidsoap_aac_bitrate.txt 192)}"
+	case "$OPUS_BITRATE" in *[!0-9]*|'') OPUS_BITRATE=96 ;; esac
+	case "$AAC_BITRATE" in *[!0-9]*|'') AAC_BITRATE=192 ;; esac
+	# FLAC is VBR — ~900 kbps is a typical average for 44.1/16 stereo.
+	FLAC_BITRATE_EST=900
+
+	# Global <limits> fallback, sized for the MP3 mount (kbps x 125 = bytes/s).
+	local ICECAST_BURST_SIZE ICECAST_QUEUE_SIZE
+	ICECAST_BURST_SIZE=$(( BUFFER_SECONDS * STREAM_BITRATE * 125 ))
+	ICECAST_QUEUE_SIZE=$(( ICECAST_BURST_SIZE * 4 ))
+	[ "$ICECAST_QUEUE_SIZE" -lt 2097152 ] && ICECAST_QUEUE_SIZE=2097152
+	log "listener buffer ${BUFFER_SECONDS}s @ mp3 ${STREAM_BITRATE}kbps / opus ${OPUS_BITRATE}kbps / aac ${AAC_BITRATE}kbps / flac ~${FLAC_BITRATE_EST}kbps"
+
+	# Listener auth (#478) — same contract as docker/broadcast-entrypoint.sh:
+	# only a literal 'true' in the controller-written flag file enables, and
+	# each stream mount then gets an <authentication type="url"> block. The
+	# controller runs in-process here, so the callback goes over loopback.
+	local FLAG=$STATE_DIR/icecast_listener_auth.txt
+	local AUTH_URL="${LISTENER_AUTH_URL:-http://localhost:7701/listener-auth}"
+	local LISTENER_AUTH=false
+	if [ "$(cat "$FLAG" 2>/dev/null | tr -d '[:space:]')" = "true" ]; then
+		LISTENER_AUTH=true
+		log "listener auth ON — mounts require credentials via $AUTH_URL"
+	fi
+
+	# One <mount> block per stream mount, ALWAYS rendered: each carries its
+	# own burst/queue sized for its own bitrate (the global <limits> value
+	# only fits the MP3 mount), plus the auth block when the toggle is on.
+	local MOUNTS_XML=/etc/icecast2/stream-mounts.xml
+	: > "$MOUNTS_XML"
+	emit_mount() {
+		# $1 = mount path, $2 = kbps used to size this mount's burst
+		local _burst _queue
+		_burst=$(( BUFFER_SECONDS * $2 * 125 ))
+		_queue=$(( _burst * 4 ))
+		[ "$_queue" -lt 2097152 ] && _queue=2097152
+		{
+			echo '    <mount type="normal">'
+			echo "        <mount-name>$1</mount-name>"
+			echo "        <burst-size>$_burst</burst-size>"
+			echo "        <queue-size>$_queue</queue-size>"
+			if [ "$LISTENER_AUTH" = true ]; then
+				echo '        <authentication type="url">'
+				echo "            <option name=\"listener_add\" value=\"$AUTH_URL\"/>"
+				echo '            <option name="auth_header" value="icecast-auth-user: 1"/>'
+				echo '        </authentication>'
+			fi
+			echo '    </mount>'
+		} >> "$MOUNTS_XML"
+	}
+	emit_mount /stream.mp3  "$STREAM_BITRATE"
+	emit_mount /stream.opus "$OPUS_BITRATE"
+	emit_mount /stream.flac "$FLAC_BITRATE_EST"
+	emit_mount /stream.aac  "$AAC_BITRATE"
+
 	sed \
 		-e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
 		-e "s|\${ICECAST_ADMIN_PASSWORD}|$ICECAST_ADMIN_PASSWORD|g" \
 		-e "s|\${ICECAST_RELAY_PASSWORD}|$ICECAST_RELAY_PASSWORD|g" \
 		-e "s|\${ICECAST_MAX_CLIENTS}|$ICECAST_MAX_CLIENTS|g" \
+		-e "s|\${ICECAST_BURST_SIZE}|$ICECAST_BURST_SIZE|g" \
+		-e "s|\${ICECAST_QUEUE_SIZE}|$ICECAST_QUEUE_SIZE|g" \
+		-e "/<!--@STREAM_MOUNTS@-->/r $MOUNTS_XML" \
+		-e "/<!--@STREAM_MOUNTS@-->/d" \
 		"$TEMPLATE" > "$RENDERED"
 	chown icecast2 "$RENDERED" 2>/dev/null || true
 }
@@ -155,6 +262,37 @@ init_secrets() {
 # the pair). icecast runs as the icecast2 user; liquidsoap as the liquidsoap
 # user (uid 10000). `sudo -E` preserves the resolved ICECAST_* env.
 run_broadcast() {
+	# Re-resolve the active station on every pair launch — this is how a
+	# station switch takes effect in the AIO without a container bounce (the
+	# supervise loop re-runs run_broadcast after every mixer restart).
+	resolve_state_dir
+
+	# Bootstrap the resolved station dir's subdirs (mirrors init_state, but
+	# scoped to $STATE_DIR — the root case is already covered by init_state at
+	# boot, and a non-root station dir needs its own subdirs created here).
+	mkdir -p "$STATE_DIR" \
+	         "$STATE_DIR/voice" \
+	         "$STATE_DIR/voices" \
+	         "$STATE_DIR/archive" \
+	         "$STATE_DIR/jingles" \
+	         "$STATE_DIR/logs" \
+	         "$STATE_DIR/sessions" \
+	         "$STATE_DIR/sfx"
+	chmod 777 "$STATE_DIR" \
+	          "$STATE_DIR/voice" \
+	          "$STATE_DIR/voices" \
+	          "$STATE_DIR/archive" \
+	          "$STATE_DIR/jingles" \
+	          "$STATE_DIR/logs" \
+	          "$STATE_DIR/sessions" \
+	          "$STATE_DIR/sfx"
+	touch "$STATE_DIR/auto.m3u" "$STATE_DIR/jingles.m3u"
+	chmod 666 "$STATE_DIR/auto.m3u" "$STATE_DIR/jingles.m3u"
+	touch "$STATE_DIR/archive/.ndignore"
+
+	# Re-render on every pair launch so a flipped listener-auth flag lands
+	# after a restart-mixer (which bounces this pair, not the container).
+	render_icecast
 	log "starting icecast2"
 	sudo -E -u icecast2 icecast2 -n -c "$RENDERED" &
 	local ic=$!

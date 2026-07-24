@@ -572,6 +572,39 @@ export async function getLyrics(songId) {
   }
 }
 
+// Timed lyrics via the same getLyricsBySongId call, but PRESERVING the per-line
+// start offsets getLyrics() throws away (#1125). Returns { synced, lines } — the
+// raw material for lyric-derived vocal ranges (music/lyric-vocal.ts) — or null
+// when no lyrics are indexed. Line `start` is milliseconds from track start; the
+// entry-level `offset` (a global shift) is folded in — per OpenSubsonic
+// "positive means lyrics appear sooner", i.e. effective start = start − offset —
+// and negatives clamped to 0.
+// synced=false marks unsynced/plain-text lyrics whose line timings are absent.
+export async function getStructuredLyrics(
+  songId,
+): Promise<{ synced: boolean; lines: Array<{ startMs: number; text: string }> } | null> {
+  try {
+    const r = await call('getLyricsBySongId', { id: songId });
+    const structured = r.lyricsList?.structuredLyrics;
+    if (!Array.isArray(structured) || structured.length === 0) return null;
+    // A track may carry several versions (languages, synced + unsynced) — prefer
+    // a synced one, since only that has the timings we're after.
+    const chosen = structured.find((s) => s?.synced === true) ?? structured[0];
+    const synced = chosen?.synced === true;
+    const offset = Number.isFinite(chosen?.offset) ? Number(chosen.offset) : 0;
+    const lineArr = Array.isArray(chosen?.line) ? chosen.line : [];
+    const lines = lineArr.map((l) => {
+      const text = typeof l?.value === 'string' ? l.value : '';
+      const rawStart = Number(l?.start);
+      const startMs = Number.isFinite(rawStart) ? Math.max(0, rawStart - offset) : NaN;
+      return { startMs, text };
+    });
+    return { synced, lines };
+  } catch {
+    return null;
+  }
+}
+
 // Async iterator over every song in the library. Walks albums in batches.
 // Each yielded song is annotated with the album-level era signals Navidrome
 // only exposes on the album record (issue #842): `albumIsCompilation`
@@ -728,10 +761,13 @@ export function getPlayableUri(song) {
 
 // Liquidsoap `annotate:` URI — embeds metadata up front so on_track_change
 // reports real artist/title/album rather than waiting on stream-level ID3.
-function escAnnotate(s) {
+// Exported for broadcast/beds.ts, which builds its own annotate: URI for a bed
+// (a bed is a local file, not a Subsonic song, so it can't go through
+// getAnnotatedUri — but it must escape identically).
+export function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } = {}) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
@@ -803,8 +839,40 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } =
   // (autonomous picks in queue.drainToLiquidsoap + the auto.m3u fallback);
   // explicit listener requests pass null and play in full. A cue_out past a
   // shorter track's end is a Liquidsoap no-op, so sub-cap tracks play untouched.
-  if (opts.maxDurationSec != null && opts.maxDurationSec > 0) {
-    fields.push(`liq_cue_out="${escAnnotate(opts.maxDurationSec)}"`);
+  // Stem-blend cue points (feature: stem-blend transitions): an explicit
+  // cueOutSec (the blend start in the OUTGOING track) folds with the length
+  // cap — whichever cuts earlier wins, so a blend can never resurrect audio
+  // past the operator's cap. cueInSec skips the INCOMING track past the head
+  // its rendered clip already played. Liquidsoap 2.4 honours both labels
+  // natively at request resolution; no radio.liq change.
+  const cueOut = [opts.maxDurationSec, opts.cueOutSec]
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+  if (cueOut.length) {
+    fields.push(`liq_cue_out="${escAnnotate(Math.min(...cueOut))}"`);
+  }
+  if (opts.cueInSec != null && opts.cueInSec > 0) {
+    fields.push(`liq_cue_in="${escAnnotate(opts.cueInSec)}"`);
   }
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
+}
+
+// Annotate URI for a pre-rendered transition CLIP (stem-blend transitions).
+// The clip carries the INCOMING track's identity so now-playing flips to it
+// the moment the blend begins — a real DJ mix announces the next record as
+// it comes in — and the controller's lastSeenKey dedup swallows the second,
+// identical metadata fire when the real track takes over at its cue-in.
+// `subwave_clip="1"` marks the dj_queue entry so the telnet rid helpers
+// (liquidsoap-control.ts) never mistake the clip for the track itself.
+export function getClipUri(song, clipPath: string, crossSec: number) {
+  const fields = [
+    `title="${escAnnotate(song.title)}"`,
+    `artist="${escAnnotate(song.artist)}"`,
+    `album="${escAnnotate(song.album)}"`,
+    `subsonic_id="${escAnnotate(song.id)}"`,
+    'subwave_clip="1"',
+    `liq_cross_duration="${escAnnotate(crossSec)}"`,
+  ];
+  // No liq_amplify: the render already gain-matched both sources toward the
+  // station target — an amplify stamp here would double-apply.
+  return `annotate:${fields.join(',')}:${clipPath}`;
 }

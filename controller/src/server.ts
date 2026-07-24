@@ -8,6 +8,7 @@ import * as settings from './settings.js';
 import * as blocklist from './music/blocklist.js';
 import * as jingles from './broadcast/jingles.js';
 import * as sfx from './broadcast/sfx.js';
+import * as beds from './broadcast/beds.js';
 import { queue } from './broadcast/queue.js';
 import * as session from './broadcast/session.js';
 import * as remoteTts from './audio/remoteTts.js';
@@ -28,6 +29,7 @@ import { router as requestRoutes } from './routes/request.js';
 import { router as settingsRoutes } from './routes/settings.js';
 import { router as jingleRoutes } from './routes/jingles.js';
 import { router as sfxRoutes } from './routes/sfx.js';
+import { router as bedsRoutes } from './routes/beds.js';
 import { router as debugRoutes } from './routes/debug.js';
 import { router as statsRoutes } from './routes/stats.js';
 import { router as djRoutes } from './routes/dj.js';
@@ -43,6 +45,7 @@ import { router as personasRoutes } from './routes/personas.js';
 import { router as showsRoutes } from './routes/shows.js';
 import { router as communityRoutes } from './routes/community.js';
 import { router as backupRoutes } from './routes/backup.js';
+import { router as stationsRoutes } from './routes/stations.js';
 import { router as audienceRoutes } from './routes/audience.js';
 import { router as systemRoutes } from './routes/system.js';
 import { router as generateRoutes } from './routes/generate.js';
@@ -108,6 +111,7 @@ app.use(requestRoutes);
 app.use(settingsRoutes);
 app.use(jingleRoutes);
 app.use(sfxRoutes);
+app.use(bedsRoutes);
 app.use(debugRoutes);
 app.use(statsRoutes);
 app.use(djRoutes);
@@ -123,6 +127,7 @@ app.use(personasRoutes);
 app.use(showsRoutes);
 app.use(communityRoutes);
 app.use(backupRoutes);
+app.use(stationsRoutes);
 app.use(audienceRoutes);
 app.use(systemRoutes);
 app.use(generateRoutes);
@@ -287,6 +292,7 @@ app.listen(config.server.port, async () => {
     .ensureDefaultIdent()
     .catch(err => console.error('[jingles] ident generation failed:', err.message));
   sfx.ensureDefaults().catch(err => console.error('[sfx] default generation failed:', err.message));
+  beds.ensureDefaults().catch(err => console.error('[beds] default install failed:', err.message));
 
   // Kick the Observatory sound-map projection when it's stale (library grew
   // since the last one, or never ran). Spawns a child — never blocks this loop.

@@ -26,9 +26,17 @@ export interface StationFeed {
   llmTokens: number | null;
   state: StationState;
   session: SessionPayload;
-  /** Epoch ms when the current track was first seen, null before the first
-   *  poll. Consumers derive elapsed/progress from it locally (useElapsed) so
-   *  the per-second tick doesn't re-render the whole player tree. */
+  /** Epoch ms when the current track became AUDIBLE to this listener, null
+   *  before the first poll. Consumers derive elapsed/progress from it locally
+   *  (useElapsed) so the per-second tick doesn't re-render the whole player
+   *  tree.
+   *
+   *  Listener-time, not broadcast-time: the server stamps startedAt at the live
+   *  edge, but Icecast bursts `stream.bufferSeconds` of audio on connect so
+   *  everyone hears that far behind it. This carries the offset already added,
+   *  which is why it can briefly sit in the future — useElapsed clamps at 0, so
+   *  the clock holds 0:00 until the track actually starts instead of banking
+   *  the buffer as elapsed time (issue #1114). */
   trackStartedAt: number | null;
   /** Station IANA timezone (e.g. "Europe/London"), or null before first poll.
    *  Render on-air timestamps in this zone so they match what the DJ speaks
@@ -52,7 +60,15 @@ function setIfChanged<T>(setter: Dispatch<SetStateAction<T>>, next: T): void {
 // 5s polling of /now-playing + /state + /session, paused while the tab is
 // hidden (with an immediate refetch on return). Single source of truth for
 // "what's on air right now".
-export function useStationFeed(): StationFeed {
+//
+// getListenerLagMs (optional, stable identity): the player's measured
+// seconds-behind-live of THIS tab's audio (usePlayer.getListenerLagMs). When
+// it returns a number, it wins over the advertised stream.bufferSeconds —
+// the flat figure is only correct for a full burst on the MP3 mount, while
+// the measurement is exact for whatever mount/connection is actually playing
+// (issue #1114 follow-up: Opus/FLAC listeners saw the title flip tens of
+// seconds off because the byte-sized burst means a different depth per mount).
+export function useStationFeed(getListenerLagMs?: () => number | null): StationFeed {
   const client = useStationClient();
   const [nowPlaying, setNowPlaying] = useState<NowPlayingTrack | null>(null);
   const [context, setContext] = useState<StationContext | null>(null);
@@ -68,6 +84,14 @@ export function useStationFeed(): StationFeed {
   const [locale, setLocale] = useState<StationLocale>('en-GB');
   const lastTrackKeyRef = useRef<string | null>(null);
   const offlinePollsRef = useRef(0);
+  // Listener buffer depth, in ms. Lives in a ref (not state) so the polling
+  // effect never re-subscribes when it arrives — it only needs the latest value
+  // at tick time. 0 until the first payload lands, which degrades to the old
+  // live-edge behaviour rather than guessing an offset.
+  const leadMsRef = useRef(0);
+  // Pending track switch: a track whose metadata has arrived but whose audio
+  // hasn't reached this listener yet. Held here until it's audible.
+  const promoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const tick = async () => {
@@ -78,6 +102,13 @@ export function useStationFeed(): StationFeed {
           client.session(),
         ]);
         const np = npRes.nowPlaying;
+        // Refresh the buffer depth before it's used below. Clamped to a sane
+        // window: a bad value here would either park the clock in the far
+        // future or wind it back past the track start.
+        const bufSec = npRes.stream?.bufferSeconds;
+        if (typeof bufSec === 'number' && Number.isFinite(bufSec)) {
+          leadMsRef.current = Math.min(Math.max(bufSec, 0), 60) * 1000;
+        }
         const trackKey = np ? `${np.title}\u0000${np.artist}` : null;
         // Prefer the queue's authoritative start time over "first seen by this
         // client": a tab that was hidden at the transition (or a poll that hit
@@ -91,17 +122,52 @@ export function useStationFeed(): StationFeed {
           const t = Date.parse(cur.startedAt);
           if (Number.isFinite(t) && t <= Date.now()) serverStart = t;
         }
+        // Shift into listener-time. serverStart is the live edge; the audio
+        // reaches this listener leadMs later, so that's when the track is
+        // genuinely "now playing" for them (issue #1114). Prefer the audio
+        // element's own measurement when this tab is playing — it reflects the
+        // actual mount and the burst this connection really got; the flat
+        // advertised depth is the fallback for viewers not listening here.
+        const measuredLagMs = getListenerLagMs?.() ?? null;
+        const leadMs = measuredLagMs ?? leadMsRef.current;
+        const audibleAt = Number.isFinite(serverStart) ? serverStart + leadMs : Date.now();
+
         if (trackKey !== lastTrackKeyRef.current) {
-          lastTrackKeyRef.current = trackKey;
-          setTrackStartedAt(trackKey != null ? (Number.isFinite(serverStart) ? serverStart : Date.now()) : null);
-        } else if (Number.isFinite(serverStart)) {
-          // Same track, better information — converge on the server stamp (and
-          // repair any mid-track reset) without re-render noise inside ±2.5s.
-          setTrackStartedAt(prev =>
-            prev != null && Math.abs(serverStart - prev) <= 2500 ? prev : serverStart,
-          );
+          const commit = () => {
+            promoteTimerRef.current = null;
+            lastTrackKeyRef.current = trackKey;
+            setTrackStartedAt(trackKey != null ? audibleAt : null);
+            setIfChanged(setNowPlaying, np);
+          };
+          const wait = audibleAt - Date.now();
+          // Promote immediately when the audio is already out (wait <= 0), when
+          // the stream drops (nothing to stay in sync with), or on the very
+          // first payload — a cold load has no earlier track to keep showing,
+          // so showing the incoming one is the best available answer. The clock
+          // is still right in that case because trackStartedAt carries the
+          // offset and useElapsed clamps at 0.
+          if (wait <= 0 || trackKey == null || lastTrackKeyRef.current == null) {
+            if (promoteTimerRef.current) clearTimeout(promoteTimerRef.current);
+            commit();
+          } else {
+            // Re-armed on every poll while the switch is pending, so the wait
+            // is always recomputed against the freshest server stamp rather
+            // than drifting on a stale one.
+            if (promoteTimerRef.current) clearTimeout(promoteTimerRef.current);
+            promoteTimerRef.current = setTimeout(commit, wait);
+          }
+        } else {
+          if (Number.isFinite(serverStart)) {
+            // Same track, better information — converge on the server stamp (and
+            // repair any mid-track reset) without re-render noise inside ±2.5s.
+            setTrackStartedAt(prev =>
+              prev != null && Math.abs(audibleAt - prev) <= 2500 ? prev : audibleAt,
+            );
+          }
+          // Metadata enrichment (genres, bpm, cover) lands on later polls for a
+          // track already on air — keep taking it.
+          setIfChanged(setNowPlaying, np);
         }
-        setIfChanged(setNowPlaying, np);
         setIfChanged(setContext, npRes.context);
         if (npRes.dj) setIfChanged<DjState | null>(setDj, npRes.dj);
         setIfChanged(setActiveShow, npRes.activeShow ?? npRes.context?.activeShow ?? null);
@@ -122,8 +188,16 @@ export function useStationFeed(): StationFeed {
         if (seRes && Array.isArray(seRes.messages)) setIfChanged(setSession, seRes);
       } catch {}
     };
-    return pollWhileVisible(() => { void tick(); }, 5000);
-  }, [client]);
+    const stopPolling = pollWhileVisible(() => { void tick(); }, 5000);
+    return () => {
+      stopPolling();
+      // A held track switch must not land after teardown.
+      if (promoteTimerRef.current) {
+        clearTimeout(promoteTimerRef.current);
+        promoteTimerRef.current = null;
+      }
+    };
+  }, [client, getListenerLagMs]);
 
   return { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone, locale };
 }
