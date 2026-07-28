@@ -14,7 +14,7 @@ import { logEvent } from '../observability/events.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { shuffle } from '../util/shuffle.js';
-import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
+import { artistKey, filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 import * as likes from '../broadcast/likes.js';
@@ -91,6 +91,14 @@ async function memo(key, ttl, fn) {
   const val = await fn();
   cache.set(key, { val, at: Date.now() });
   return val;
+}
+
+// Drop every memoised Subsonic result. Called when the admin points the
+// station at different Navidrome creds — the cached playlists/albums carry
+// song ids from the OLD server, which would feed the picker junk for up to
+// CACHE_TTL_MS otherwise.
+export function clearPoolCache() {
+  cache.clear();
 }
 
 // --- Tempo / harmonic compatibility (Stage B, soft re-rank only) -----------
@@ -177,7 +185,7 @@ async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max:
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set()) {
   await library.load();
   const pool: Candidate[] = [];
   const sources: Record<string, number> = {};
@@ -532,6 +540,12 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     artistCounts: perArtist,
     maxPerArtist: MAX_PER_ARTIST,
     cap: CANDIDATE_CAP,
+    // Empty except on the agent path's artist-guard rescue (#1187), where it
+    // holds the one artist the pool is being asked to steer around. Enforced
+    // inside the filter rather than stripped from the result afterwards, so a
+    // pool whose only fresh-artist candidates ARE that artist keeps walking the
+    // relaxation cascade and finds a different one instead of coming back empty.
+    blockedArtists,
   });
 
   // Strict-genre diagnostics for the caller's never-starve log: how much of the
@@ -597,7 +611,14 @@ function slimAlbum(album: string | null | undefined, title: string | null | unde
 // { song, reason, source } or null. Used by broadcast/dj-agent.js.
 // ---------------------------------------------------------------------------
 
-export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null) {
+// `opts.avoidArtist` (#1187): a single artist this pick must NOT be by, held as
+// a hard block through the whole starvation cascade — set only by the agent
+// path's back-to-back artist guard, which calls the pool precisely because it
+// wants an artist the agent run never surfaced. Returning null when the pool
+// genuinely holds no other artist is the RIGHT answer there: the caller then
+// keeps its own pick and logs the relaxation. Unset on every other call, which
+// leaves the ordinary pool byte-identical.
+export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null } = {}) {
   await library.load();
   const stats = library.stats();
   const windows = recencyWindowsForLibrary(stats.distinctArtists);
@@ -636,7 +657,12 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   if (activeShow?.playlistIds?.length && !playlistPool) {
     queue.log('picker', `show "${activeShow.name}" pins ${activeShow.playlistIds.length} playlist(s) but none resolved to tracks — anchor ignored${playlistStrict ? ' (STRICT toggle has no effect)' : ''}. Stale playlist id (deleted/recreated in Navidrome?) or a Navidrome error; re-select the playlists in the show editor.`);
   }
-  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict);
+  const blockedArtists = new Set<string>();
+  if (opts.avoidArtist) {
+    const key = artistKey({ artist: opts.avoidArtist });
+    if (key) blockedArtists.add(key);
+  }
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists);
 
   // Excluded playlists (blocklist): drop any track whose id appears in the
   // show's excluded playlist union. Applied after buildCandidates so the full
@@ -646,7 +672,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     : rawCandidates;
 
   if (candidates.length === 0) {
-    queue.log('picker', 'no candidates available, skipping LLM pick');
+    queue.log('picker', opts.avoidArtist
+      ? `no candidates available excluding "${opts.avoidArtist}", skipping LLM pick`
+      : 'no candidates available, skipping LLM pick');
     return null;
   }
 

@@ -1,3 +1,4 @@
+import CatalogBrief from '@/components/ui/catalog-brief';
 import type { CommunitySkill } from '@/lib/communitySkills';
 
 // One card in the /skills showcase grid. Browse-only: it presents a community
@@ -17,7 +18,7 @@ export default function CommunitySkillCard({ skill }: { skill: CommunitySkill })
         {skill.cooldown && <span className="bs-skill-cadence">{skill.cooldown} cooldown</span>}
       </div>
 
-      <p className="bs-skill-brief">{skill.brief}</p>
+      <CatalogBrief text={skill.brief} />
 
       {contexts.length > 0 && (
         <ul className="bs-skill-tags" aria-label="Uses live context">

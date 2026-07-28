@@ -30,6 +30,8 @@ Watch the "acoustic analysis · bpm/key" meter on the Library tab in admin fill 
 
 Then turn it on. Open admin, go to Personas, and pick a persona. Switch on its DJ mode toggle, the one that reads "Work the desk like a real DJ." It's set per persona, so one host can mix and back-announce while another stays a quiet between-track narrator. Save when you're done.
 
+![A persona open for editing: name, tagline and soul at the top, and below them the behaviour controls — a talk-frequency slider, a script-length slider, and the DJ mode switch labelled "Work the desk like a real DJ"](/screenshots/admin-personas.webp)
+
 For the riser flourishes, open Settings, go to the Sound FX tab, and leave "Enable sound effects" on. They fire sparingly, only on the transitions that earn them.
 
 ## Why it helps

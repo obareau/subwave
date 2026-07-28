@@ -19,6 +19,7 @@ import * as settings from '../settings.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
+import { voiceStatus } from '../broadcast/voice-policy.js';
 import * as requestLog from '../broadcast/request-log.js';
 import { getStationTimezone } from '../time.js';
 import { publicOrigin } from './public.js';
@@ -186,8 +187,17 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
   // state dir's logs/ subfolder (see radio.liq + the liquidsoap volume
   // mount), which the controller sees via the shared state mount.
   // Reading it here means no extra controller-side log mount is needed.
+  // Read from the state ROOT, not the active station dir: the compose bind
+  // mount pins /var/log/liquidsoap to the root logs/ (compose can't follow
+  // the active-station pointer), so radio.log is install-level — like
+  // icecast-secrets.env. In single-station mode stateRoot === stateDir.
+  // Station-dir fallback: right after a multi-station conversion the bind
+  // mount still follows the moved logs/ inode into stations/<id>/, so the
+  // live log sits there until the broadcast CONTAINER is recreated (a
+  // telnet mixer restart doesn't remount).
   try {
-    const log = await readFile(`${config.stateDir}/logs/radio.log`, 'utf8');
+    const log = await readFile(`${config.stateRoot}/logs/radio.log`, 'utf8')
+      .catch(() => readFile(`${config.stateDir}/logs/radio.log`, 'utf8'));
     out.liquidsoapLog = log.split('\n').slice(-100).join('\n');
   } catch (err) {
     out.liquidsoapLog = `error: ${err.message}`;
@@ -224,6 +234,10 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     // Daily token budget — today's usage vs the cap and the resulting tier
     // (normal / soft / hard). `enabled:false` when no cap is set.
     budget: (() => { try { return budgetStatus(); } catch (err: any) { return { error: err.message }; } })(),
+    // Station-wide voice switch (settings.tts.enabled). `enabled:false` means
+    // every autonomous talk moment is standing down — worth seeing here before
+    // anyone debugs "why is the DJ quiet".
+    voice: (() => { try { return voiceStatus(); } catch (err: any) { return { error: err.message }; } })(),
     recentCalls: dj.recentCalls,
     // Raw-request capture status — the admin UI shows the toggle + the file path
     // so operators know where to look. `viaEnv` means LLM_DEBUG_RAW forces it on

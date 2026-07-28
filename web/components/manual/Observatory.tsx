@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import ManualPage from './ManualPage';
+import ManualFigure from './ManualFigure';
 
 export default function Observatory() {
   return (
@@ -42,6 +43,13 @@ export default function Observatory() {
           the energy split, the mood field, tempo and loudness histograms, a Camelot key wheel, and the
           major/minor and vocal/instrumental balance.
         </p>
+        <ManualFigure
+          src="/screenshots/observatory.webp"
+          alt="The Library Observatory: thousands of glowing points clustered into a single mass with genre names labelling each region, a rail of colour and filter controls on the left, and panels for energy, mood, tempo and loudness on the right"
+          caption="The whole library in one picture — points clustered by genre, lit by energy, with the filter rail on the left and the running read-out of whatever is in view on the right."
+          width={2732}
+          height={2048}
+        />
       </section>
 
       <section className="bs-section">
@@ -65,6 +73,14 @@ export default function Observatory() {
           track rides the URL, so you can bookmark or share a link that opens the Observatory on that exact
           star.
         </p>
+        <ManualFigure
+          src="/screenshots/observatory-track.webp"
+          alt="A track dossier: title, artist and album, then BPM, key, energy and length, the mood tags with energy and acoustic meters, the text and audio embedding heatmaps, and a Mix Next list of nearest tracks"
+          caption="The top of a track dossier — BPM, key, energy and length, then the mood tags and meters. Scrolling on gets you the embedding heatmaps and the Mix Next list."
+          width={907}
+          height={3272}
+          shot="tall"
+        />
       </section>
 
       <section className="bs-section">

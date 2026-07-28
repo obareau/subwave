@@ -198,7 +198,7 @@ function ThemeEditorModal({
           extra={{ mode }}
           onApply={applyDraft}
         />
-        <div className="grid grid-cols-[1fr_auto] items-end gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
           <div className="field">
             <Label>theme name</Label>
             <Input value={name} maxLength={60} onChange={(e: ChangeEvent<HTMLInputElement>) => setName(e.target.value)} placeholder="e.g. Sepia Press" />
@@ -403,13 +403,17 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
               {themes.map(t => {
                 const isActive = t.id === activeId;
                 return (
-                  <div key={t.id} className="flex items-stretch gap-2">
+                  // basis-full: on a phone the swatch strip + name leaves no
+                  // room beside Edit/Remove, so the picker takes the whole row
+                  // and the actions wrap under it. `sm:basis-0` + `grow` is
+                  // byte-for-byte the old `flex-1`.
+                  <div key={t.id} className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                     <button
                       type="button"
                       onClick={() => choose(t)}
                       disabled={busy}
                       className={cn(
-                        'flex min-w-0 flex-1 items-center gap-3 border p-3 text-left disabled:cursor-not-allowed disabled:opacity-60',
+                        'flex min-w-0 grow basis-full items-center gap-3 border p-3 text-left disabled:cursor-not-allowed disabled:opacity-60 sm:basis-0',
                         isActive
                           ? 'border-vermilion bg-[var(--ink-softer)]'
                           : 'border-ink bg-bg hover:bg-[var(--overlay)]',

@@ -77,11 +77,17 @@ export function AiFill<T = unknown>({
           if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') generate();
         }}
       />
-      <div className="flex items-center gap-3">
+      {/* Wraps so a long generator error drops under the button on a phone
+          rather than squeezing it or running past the panel edge. */}
+      <div className="flex flex-wrap items-center gap-3">
         <Btn tone="accent" sm onClick={generate} disabled={busy || disabled || !desc.trim()}>
           {busy ? 'Generating…' : 'Generate'}
         </Btn>
-        {err && <span role="alert" className="text-[12px] text-destructive">{err}</span>}
+        {err && (
+          <span role="alert" className="min-w-0 text-[12px] break-words text-destructive">
+            {err}
+          </span>
+        )}
       </div>
     </div>
   );

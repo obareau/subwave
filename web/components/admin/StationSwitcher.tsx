@@ -89,7 +89,7 @@ export default function StationSwitcher({ onNavigate }: { onNavigate?: () => voi
                 <span className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-sm border border-ink">
                   <RadioTower className="size-4" />
                 </span>
-                <span className="grid flex-1 text-left leading-tight">
+                <span className="grid min-w-0 flex-1 text-left leading-tight">
                   <span className="truncate text-[13px] font-extrabold tracking-[0.08em] uppercase">
                     {active.name}
                   </span>
@@ -100,7 +100,9 @@ export default function StationSwitcher({ onNavigate }: { onNavigate?: () => voi
                 <ChevronsUpDown className="ml-auto size-4 opacity-60" />
               </SidebarMenuButton>
             </DropdownMenuTrigger>
-            <DropdownMenuContent side="bottom" align="start" className="min-w-[13rem]">
+            {/* A long station name would otherwise size the menu past a phone
+                viewport — cap it and let the item labels truncate. */}
+            <DropdownMenuContent side="bottom" align="start" className="max-w-[calc(100vw-2rem)] min-w-[13rem]">
               <DropdownMenuLabel>Stations</DropdownMenuLabel>
               <DropdownMenuItem disabled className="justify-between gap-2">
                 <span className="truncate">{active.name}</span>

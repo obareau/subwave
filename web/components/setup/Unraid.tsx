@@ -343,6 +343,54 @@ export default function Unraid() {
           </p>
         </div>
         <div className="bs-callout">
+          <div className="bs-eyebrow">GOT AN NVIDIA CARD? THE CUDA TAG</div>
+          <p>
+            There&apos;s a GPU build of the one-click image too,{' '}
+            <code className="bs-code-inline">subwave-aio-cuda</code>, the same
+            heavy features with CLAP and Demucs running on the card instead of
+            your CPU. Same Edit flow, two extra fields:
+          </p>
+          <ul className="bs-list">
+            <li>
+              Install the Unraid <strong>Nvidia Driver</strong> plugin (
+              <strong>Apps</strong> &rarr; search <em>Nvidia Driver</em>) and
+              note your GPU&apos;s UUID from{' '}
+              <strong>Settings &rarr; Nvidia Driver</strong>.
+            </li>
+            <li>
+              <strong>Repository</strong> &rarr;{' '}
+              <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-aio-cuda:latest</code>
+              .
+            </li>
+            <li>
+              <strong>Extra Parameters</strong> &rarr; append{' '}
+              <code className="bs-code-inline">--runtime=nvidia</code> (keep the
+              existing <code className="bs-code-inline">--add-host</code> value).
+            </li>
+            <li>
+              Set <code className="bs-code-inline">NVIDIA_VISIBLE_DEVICES</code>{' '}
+              to your GPU UUID (or <code className="bs-code-inline">all</code>)
+              and{' '}
+              <code className="bs-code-inline">NVIDIA_DRIVER_CAPABILITIES</code>{' '}
+              to <code className="bs-code-inline">compute,utility</code>. Both
+              ship blank on the template.
+            </li>
+            <li>
+              <strong>Apply</strong>.
+            </li>
+          </ul>
+          <p>
+            No second container, no compose overlay, that&apos;s the split
+            stack&apos;s route. If the card ends up invisible the analyzer logs a
+            warning and carries on using the CPU, so a half-finished setup
+            degrades rather than taking the station down. Fair warning on size:
+            the CUDA image is <strong>~4 GB compressed</strong> against{' '}
+            <code className="bs-code-inline">-heavy</code>&apos;s ~1.3 GB, because
+            the CUDA runtime ships inside it. You still don&apos;t need a CUDA
+            toolkit on the host, just the driver plugin.
+          </p>
+        </div>
+        <div className="bs-callout">
           <div className="bs-eyebrow">FULL COMPOSE STACK: ANALYZER_HEAVY=1</div>
           <p>
             On Option 2 the <code className="bs-code-inline">analyzer</code> is

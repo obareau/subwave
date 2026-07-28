@@ -420,13 +420,17 @@ export default function SkillsPanel() {
             Read this in the manual ↗
           </a>
         </div>
-        <div className="flex items-center gap-4 bg-[var(--ink-softer)] p-3.5">
+        {/* The action cluster is a full-width row of its own on phones — an
+            `ml-auto` cluster beside the counts is what pushed COMMUNITY / NEW
+            SKILL off the right edge at 390px. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-3 bg-[var(--ink-softer)] p-3.5">
           <span className="caption">
             {filtered ? `${visible.length} of ${skills.length}` : skills.length} skill{skills.length === 1 ? '' : 's'}
           </span>
           <span className="caption text-vermilion">{enabledCount} enabled</span>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:flex-nowrap">
             <Btn
+              className="min-h-9 sm:min-h-0"
               onClick={() => setCommunityOpen(true)}
               disabled={!community}
               title="Browse and install skills shared by other stations"
@@ -436,10 +440,11 @@ export default function SkillsPanel() {
                 <span className="ml-1 text-vermilion">{community.length}</span>
               )}
             </Btn>
-            <Btn tone="accent" onClick={() => setModal({ mode: 'create' })}>
+            <Btn className="min-h-9 sm:min-h-0" tone="accent" onClick={() => setModal({ mode: 'create' })}>
               <Plus size={14} /> New skill
             </Btn>
             <Btn
+              className="min-h-9 min-w-9 sm:min-h-0 sm:min-w-0"
               onClick={rescan}
               disabled={rescanning}
               title={rescanning ? 'Rescanning state/skills…' : 'Rescan state/skills'}
@@ -453,7 +458,9 @@ export default function SkillsPanel() {
       {/* ── ORGANISE — search / filter / sort ─────────────────────────────── */}
       <section className="card p-3.5">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[200px] flex-1">
+          {/* Phones get the search on its own row and the selects full-width /
+              paired; `sm:` restores the single desktop row of fixed widths. */}
+          <div className="relative w-full flex-none sm:min-w-[200px] sm:flex-1">
             <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted" />
             <Input
               value={query}
@@ -465,7 +472,7 @@ export default function SkillsPanel() {
           </div>
           {personas.length > 0 && (
             <Select value={who} onValueChange={setWho}>
-              <SelectTrigger className="w-[190px]" aria-label="Filter by DJ or show">
+              <SelectTrigger className="w-full sm:w-[190px]" aria-label="Filter by DJ or show">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -487,31 +494,36 @@ export default function SkillsPanel() {
               </SelectContent>
             </Select>
           )}
-          <Select value={status} onValueChange={v => setStatus(v as StatusFilter)}>
-            <SelectTrigger className="w-[130px]" aria-label="Filter by status">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Any status</SelectItem>
-              <SelectItem value="enabled">Enabled</SelectItem>
-              <SelectItem value="disabled">Disabled</SelectItem>
-              <SelectItem value="needs-key">Needs key</SelectItem>
-              <SelectItem value="custom">Custom</SelectItem>
-              <SelectItem value="builtin">Built-in</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={sort} onValueChange={v => setSort(v as SortMode)}>
-            <SelectTrigger className="w-[140px]" aria-label="Sort skills">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="az">A–Z</SelectItem>
-              <SelectItem value="enabled">Enabled first</SelectItem>
-              <SelectItem value="cooldown">Cooldown</SelectItem>
-            </SelectContent>
-          </Select>
+          {/* Status + sort own one phone row between them. The wrapper is
+              `display:contents` from sm: up, so on desktop both selects are
+              direct children of the bar again and the row is unchanged. */}
+          <div className="flex w-full gap-2 sm:contents">
+            <Select value={status} onValueChange={v => setStatus(v as StatusFilter)}>
+              <SelectTrigger className="min-w-0 flex-1 sm:w-[130px] sm:flex-none" aria-label="Filter by status">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Any status</SelectItem>
+                <SelectItem value="enabled">Enabled</SelectItem>
+                <SelectItem value="disabled">Disabled</SelectItem>
+                <SelectItem value="needs-key">Needs key</SelectItem>
+                <SelectItem value="custom">Custom</SelectItem>
+                <SelectItem value="builtin">Built-in</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={sort} onValueChange={v => setSort(v as SortMode)}>
+              <SelectTrigger className="min-w-0 flex-1 sm:w-[140px] sm:flex-none" aria-label="Sort skills">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="az">A–Z</SelectItem>
+                <SelectItem value="enabled">Enabled first</SelectItem>
+                <SelectItem value="cooldown">Cooldown</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           {filtered && (
-            <Btn onClick={clearFilters} title="Clear all filters">
+            <Btn className="min-h-9 sm:min-h-0" onClick={clearFilters} title="Clear all filters">
               <X size={14} /> Clear
             </Btn>
           )}
@@ -533,7 +545,7 @@ export default function SkillsPanel() {
                   aria-pressed={on}
                   onClick={() => setTagSel(cur => (on ? cur.filter(x => x !== t) : [...cur, t]))}
                   className={cn(
-                    'border border-ink px-2 py-0.5 text-[12px]',
+                    'min-h-9 border border-ink px-2 py-0.5 text-[12px] sm:min-h-0',
                     on ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
                   )}
                 >
@@ -674,7 +686,7 @@ export default function SkillsPanel() {
                       type="button"
                       onClick={(e) => { e.stopPropagation(); runNow(s.name); }}
                       disabled={busy === s.name}
-                      className={cn('seg-pad seg-pad--slim', busy === s.name && 'is-firing')}
+                      className={cn('seg-pad seg-pad--slim min-h-9 sm:min-h-0', busy === s.name && 'is-firing')}
                     >
                       <span className="seg-led" aria-hidden />
                       <span className="seg-label">{busy === s.name ? 'Working…' : 'Run now'}</span>
@@ -711,8 +723,8 @@ export default function SkillsPanel() {
         sub="skills shared by other stations"
         width={640}
         footer={
-          <div className="flex w-full items-center justify-between gap-3">
-            <span className="text-[11px] leading-[1.5] text-muted">
+          <div className="flex w-full flex-wrap items-center justify-between gap-3">
+            <span className="min-w-0 flex-1 text-[11px] leading-[1.5] text-muted">
               Got a skill someone shared as a <code>.zip</code>? Import it here — it may include a
               data tool that runs code, so it arrives disabled for review.
             </span>
@@ -729,6 +741,7 @@ export default function SkillsPanel() {
               }}
             />
             <Btn
+              className="min-h-9 sm:min-h-0"
               onClick={() => fileInputRef.current?.click()}
               disabled={importing}
               title="Install a skill from a .zip bundle"
@@ -748,7 +761,7 @@ export default function SkillsPanel() {
         <div className="mt-4 grid gap-3">
           {community && community.length > 0 ? (
             community.map(c => (
-              <div key={c.slug} className="grid grid-cols-[1fr_auto] items-center gap-4 border border-ink p-3">
+              <div key={c.slug} className="grid grid-cols-1 gap-3 border border-ink p-3 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="text-[13px] font-extrabold">{c.label}</span>
@@ -785,6 +798,7 @@ export default function SkillsPanel() {
                     <Pill>reserved name</Pill>
                   ) : (
                     <Btn
+                      className="min-h-9 sm:min-h-0"
                       tone="accent"
                       onClick={() => install(c.slug)}
                       disabled={installing === c.slug}

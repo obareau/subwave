@@ -284,10 +284,15 @@ function MetricStrip({ children }: MetricStripProps) {
   const count = Array.isArray(children) ? children.length : 1;
   const ref = useRef<HTMLDivElement>(null);
   useDynamicStyle(ref, { gridTemplateColumns: `repeat(${count}, 1fr)` });
+  // `.strip-mobile` reflows to 2 columns under 640px, but StatCell divides with
+  // a RIGHT rule while that helper only clears LEFT ones — so the cell ending
+  // each mobile row left a divider dangling against the card edge. Drop it on
+  // the even (right-hand) cells and restore it from sm: up, skipping the last
+  // cell, which never carries a rule to begin with. Desktop is unchanged.
   return (
     <div
       ref={ref}
-      className="strip-mobile grid border-b border-separator-strong"
+      className="strip-mobile grid border-b border-separator-strong [&>*:nth-child(even)]:border-r-0 sm:[&>*:nth-child(even):not(:last-child)]:border-r"
     >
       {children}
     </div>
@@ -302,7 +307,7 @@ function Bar({ frac }: BarProps) {
   const ref = useRef<HTMLSpanElement>(null);
   useDynamicStyle(ref, { width: `${Math.max(2, Math.round((frac || 0) * 100))}%` });
   return (
-    <span className="inline-block h-1.5 w-14 overflow-hidden rounded-[2px] bg-separator-soft align-middle">
+    <span className="inline-block h-1.5 w-14 shrink-0 overflow-hidden rounded-[2px] bg-separator-soft align-middle">
       <span ref={ref} className="block h-full bg-vermilion" />
     </span>
   );
@@ -325,46 +330,53 @@ function Table<R>({ cols, rows, empty }: TableProps<R>) {
   if (!rows?.length) {
     return <span className="field-hint italic">{empty}</span>;
   }
+  // The wrapper only becomes a scroll container below sm:. A wide breakdown
+  // (five nowrap columns, long model ids) then scrolls sideways inside the card
+  // instead of clipping. From sm: up overflow-x is `visible` again, which keeps
+  // the card free of a scrollport — that matters because <thead> is sticky and
+  // would otherwise resolve against this div instead of the ScrollBox viewport.
   return (
-    <table className="w-full border-collapse">
-      <thead>
-        <tr>
-          {cols.map(c => (
-            <th
-              key={c.key}
-              className={cn(
-                'caption border-b border-separator-strong px-2 py-1 whitespace-nowrap',
-                // Sticky so the header stays put when the table is wrapped in a
-                // ScrollBox; the card-bg masks rows scrolling underneath.
-                'sticky top-0 z-[1] bg-[var(--card-bg)]',
-                c.align === 'right' && 'text-right',
-                c.align === 'center' && 'text-center',
-              )}
-            >
-              {c.label}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r, i) => (
-          <tr key={i}>
+    <div className="w-full overflow-x-auto sm:overflow-x-visible">
+      <table className="w-full border-collapse">
+        <thead>
+          <tr>
             {cols.map(c => (
-              <td
+              <th
                 key={c.key}
                 className={cn(
-                  'border-b border-separator-soft px-2 py-1 text-[12px]',
+                  'caption border-b border-separator-strong px-2 py-1 whitespace-nowrap',
+                  // Sticky so the header stays put when the table is wrapped in
+                  // a ScrollBox; the card-bg masks rows scrolling underneath.
+                  'sticky top-0 z-[1] bg-[var(--card-bg)]',
                   c.align === 'right' && 'text-right',
                   c.align === 'center' && 'text-center',
                 )}
               >
-                {c.render ? c.render(r) : ((r as Record<string, unknown>)[c.key] as ReactNode)}
-              </td>
+                {c.label}
+              </th>
             ))}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              {cols.map(c => (
+                <td
+                  key={c.key}
+                  className={cn(
+                    'border-b border-separator-soft px-2 py-1 text-[12px]',
+                    c.align === 'right' && 'text-right',
+                    c.align === 'center' && 'text-center',
+                  )}
+                >
+                  {c.render ? c.render(r) : ((r as Record<string, unknown>)[c.key] as ReactNode)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -381,10 +393,15 @@ function BarList({ rows, max }: { rows: BarRow[]; max: number }) {
   return (
     <div className="grid gap-1.5">
       {rows.map(r => (
+        // The label column gives up 22px on a phone so the bar and its
+        // trailing figure (which can read "3 · 5m · up to 41m") still fit on
+        // one line inside a 390px card.
         <div key={r.label} className="flex items-center gap-2.5 text-[12px]">
-          <span className="w-[110px] truncate text-muted" title={r.label}>{r.label}</span>
+          <span className="w-[88px] shrink-0 truncate text-muted sm:w-[110px]" title={r.label}>
+            {r.label}
+          </span>
           <Bar frac={r.count / (max || 1)} />
-          <span className="mono-num font-bold">{r.trailing ?? r.count}</span>
+          <span className="mono-num min-w-0 font-bold">{r.trailing ?? r.count}</span>
         </div>
       ))}
     </div>
@@ -776,7 +793,7 @@ export default function StatsPanel() {
               No IPs here (unlike the Dash) — device class + counts + durations
               only. */}
           <div className="border-b border-separator-strong p-3.5">
-            <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
               <span className="caption">connected now · by device</span>
               <span className="caption text-muted">
                 {connErr
@@ -830,7 +847,7 @@ export default function StatsPanel() {
               </MetricStrip>
 
               <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
-                <div className="border-r border-separator-soft p-3.5">
+                <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">
                   <div className="caption mb-2">top referrers</div>
                   {audReferrers.length ? (
                     <ScrollBox>
@@ -887,7 +904,7 @@ export default function StatsPanel() {
                 event log), shown regardless of the since-boot call count above,
                 and only when a cap is set. */}
             {llm.budget?.enabled && (
-              <div className="flex items-center justify-between gap-3 border-b border-separator-strong p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-separator-strong p-3.5">
                 <span className="caption">
                   Daily token budget<span className="text-muted"> · resets 00:00 UTC</span>
                 </span>
@@ -929,7 +946,7 @@ export default function StatsPanel() {
                 </MetricStrip>
 
                 <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
-                  <div className="border-r border-separator-soft p-3.5">
+                  <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">
                     <div className="caption mb-2">by call kind</div>
                     <Table<ByKindRow>
                       empty="No calls"
@@ -988,7 +1005,7 @@ export default function StatsPanel() {
                 </MetricStrip>
 
                 <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
-                  <div className="border-r border-separator-soft p-3.5">
+                  <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">
                     <div className="caption mb-2">by engine</div>
                     <Table<ByEngineRow>
                       empty="No segments"
@@ -1047,7 +1064,7 @@ export default function StatsPanel() {
                 </MetricStrip>
 
                 <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
-                  <div className="border-r border-separator-soft p-3.5">
+                  <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">
                     <div className="caption mb-2">by resolution path</div>
                     {requests.byPath.length ? (
                       <BarList

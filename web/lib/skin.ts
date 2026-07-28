@@ -18,6 +18,8 @@ export const DEFAULT_SKIN_ID = 'classic';
  *  saved setting keeps working across upgrades. */
 export const LEGACY_SKIN_ALIASES: Record<string, string> = {
   terminal: 'tty',
+  // Spool (the walkman deck) was retired in favour of the Unit SW-9 receiver.
+  spool: 'unit',
 };
 
 export function canonicalSkinId(id: string | null | undefined): string | null {

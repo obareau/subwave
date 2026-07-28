@@ -19,6 +19,7 @@ import { CONVERT_SENTINEL, useStationSwitchPoll } from '../../hooks/useStationSw
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
 import { cn } from '../../lib/cn';
+import { Plus } from 'lucide-react';
 import { Btn } from './ui';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
@@ -296,7 +297,7 @@ export default function StationsPanel() {
           <h1 className="m-0 font-display text-[42px] leading-none font-semibold text-ink">
             Stations<span className="text-vermilion">.</span>
           </h1>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             <div className="font-mono text-[11px] tracking-[0.14em] text-muted uppercase">
               {data ? `${live ? 1 : 0} of ${stations.length} on air` : '—'}
             </div>
@@ -307,6 +308,7 @@ export default function StationsPanel() {
             ) : null}
             <Btn
               tone="solid"
+              lg
               disabled={busy || loading || atCap}
               onClick={() => {
                 setCreateName('');
@@ -314,6 +316,7 @@ export default function StationsPanel() {
                 setCreateOpen(true);
               }}
             >
+              <Plus />
               New station
             </Btn>
           </div>
@@ -360,14 +363,14 @@ export default function StationsPanel() {
           {[0, 1, 2].map(k => (
             <div
               key={k}
-              className="grid grid-cols-[96px_1fr_auto] items-center gap-6 border-t border-separator-strong p-5 first:border-t-0"
+              className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-4 border-t border-separator-strong p-5 first:border-t-0 sm:grid-cols-[96px_1fr_auto] sm:gap-6"
             >
               <div className={cn(styles.shimmer, 'h-12 bg-separator-strong')} />
               <div className="grid gap-2">
                 <div className={cn(styles.shimmer, 'h-4 w-[38%] bg-separator-strong')} />
                 <div className={cn(styles.shimmer, 'h-2.5 w-[22%] bg-separator-soft')} />
               </div>
-              <div className={cn(styles.shimmer, 'h-6 w-[120px] bg-separator-soft')} />
+              <div className={cn(styles.shimmer, 'hidden h-6 w-[120px] bg-separator-soft sm:block')} />
             </div>
           ))}
           <div className="border-t border-separator-strong px-5 py-3 font-mono text-[10px] tracking-[0.22em] text-muted uppercase">
@@ -403,7 +406,12 @@ export default function StationsPanel() {
           {stations.map((s, i) => (
             <div
               key={s.id ?? '__install'}
-              className="grid grid-cols-[96px_1fr_auto] items-center gap-6 border-t border-separator-strong first:border-t-0"
+              /* Phone: two columns (preset tile + identity) with the action
+                 cluster dropped onto its own full-width row underneath — a
+                 96px tile, two 24px gaps and three buttons leave the name
+                 column barely 100px wide at 390. Restored to the single
+                 three-column rack row from sm: up. */
+              className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-4 border-t border-separator-strong first:border-t-0 sm:grid-cols-[96px_1fr_auto] sm:gap-6"
             >
               <div
                 className={cn(
@@ -434,9 +442,9 @@ export default function StationsPanel() {
                 </div>
               </div>
 
-              <div className="grid gap-1.5 py-4">
+              <div className="grid gap-1.5 py-4 pr-4 sm:pr-0">
                 <div className="flex flex-wrap items-center gap-3">
-                  <div className="font-display text-[26px] leading-[1.1] font-semibold text-ink">
+                  <div className="font-display text-[26px] leading-[1.1] font-semibold break-words text-ink">
                     {s.name}
                   </div>
                   {s.active ? <OnAirChip /> : null}
@@ -468,7 +476,7 @@ export default function StationsPanel() {
                 ) : null}
               </div>
 
-              <div className="flex items-center justify-end gap-2 pr-5">
+              <div className="col-span-2 flex flex-wrap items-center justify-start gap-2 pr-5 pb-4 pl-5 sm:col-span-1 sm:justify-end sm:pb-0 sm:pl-0">
                 {singleMode ? (
                   <div className="font-mono text-[10px] tracking-[0.16em] text-muted uppercase">
                     single-station install

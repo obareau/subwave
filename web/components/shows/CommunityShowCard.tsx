@@ -1,3 +1,4 @@
+import CatalogBrief from '@/components/ui/catalog-brief';
 import type { CommunityShow, EraWindow } from '@/lib/communityShows';
 
 // Render an era window as a compact label: "1988–1996", a single year when the
@@ -38,7 +39,7 @@ export default function CommunityShowCard({ show }: { show: CommunityShow }) {
         {show.filtersStrict && <span className="bs-skill-cadence">strict filters</span>}
       </div>
 
-      <p className="bs-skill-brief">{show.topic}</p>
+      <CatalogBrief text={show.topic} />
 
       {filters.length > 0 && (
         <ul className="bs-skill-tags" aria-label="Music filters">

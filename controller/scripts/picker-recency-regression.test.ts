@@ -119,6 +119,61 @@ assert(
 );
 assert(stacked.length > 0, 'pool must still yield the non-hard-blocked tracks');
 
+// ── hard artist block (issue #1187) ────────────────────────────────────────
+
+// The agent path's back-to-back artist guard calls the pool asking for a pick
+// that ISN'T the on-air artist. `blockedArtists` is how that ask is enforced:
+// unlike recentArtists it is checked outside the mode loop, so the starvation
+// cascade can never hand back the very artist the caller is steering around.
+const blockedOnly = filterPickerCandidates(songs, {
+  blockedArtists: new Set(['a']),
+});
+assert.deepEqual(
+  blockedOnly.map((s) => s.id),
+  ['song-2', 'song-3'],
+  'blockedArtists must drop exactly that artist and keep the rest',
+);
+
+// The load-bearing case: every OTHER artist is recently played, so the cascade
+// would ordinarily relax recentArtists and re-serve artist A. The hard block
+// keeps A out and lets the cascade relax into B/C instead — this is what turns
+// "the agent only saw the on-air artist" into a genuinely different pick rather
+// than a repeat with extra steps.
+const relaxAroundBlock = filterPickerCandidates(songs, {
+  recentArtists: new Set(['a', 'b', 'c']),
+  blockedArtists: new Set(['a']),
+});
+assert(relaxAroundBlock.length > 0, 'cascade must still relax recentArtists around a hard artist block');
+assert(
+  !relaxAroundBlock.some((s) => s.artist === 'A'),
+  'a blocked artist must not come back through the recentArtists relaxation',
+);
+
+// And when the blocked artist is ALL there is, the filter returns nothing
+// instead of relaxing. Empty is the honest answer — the caller (dj-agent's
+// artist guard) reads it as "the pool has no alternative either" and only then
+// allows the repeat.
+const everythingBlocked = filterPickerCandidates(
+  [{ id: 'a-1', title: 'One', artist: 'A' }, { id: 'a-2', title: 'Two', artist: 'A' }],
+  { blockedArtists: new Set(['a']) },
+);
+assert.equal(everythingBlocked.length, 0, 'a hard artist block must never relax, even into an empty pool');
+
+// Case/whitespace are normalised the same way artistKey() normalises a
+// candidate, so a block built from a track's raw `artist` string still bites.
+const casedBlock = filterPickerCandidates(
+  [{ id: 'x', title: 'T', artist: '  Faith No More ' }],
+  { blockedArtists: new Set(['faith no more']) },
+);
+assert.equal(casedBlock.length, 0, 'blockedArtists must match on the normalised artist key');
+
+// Default (no blockedArtists) leaves every other caller untouched.
+assert.equal(
+  filterPickerCandidates(songs, {}).length,
+  songs.length,
+  'an absent blockedArtists set must be a no-op',
+);
+
 // effectiveNoRepeatWindow clamp table (config N, library total) → effective N.
 assert.equal(effectiveNoRepeatWindow(100, 1000), 100, '(100,1000) → 100');
 assert.equal(effectiveNoRepeatWindow(100, 40), 15, '(100,40) → 15 (3/8 of library)');

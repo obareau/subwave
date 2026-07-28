@@ -10,6 +10,8 @@ Your DJ can only play a track once it knows that track's mood and energy. Workin
 
 ## What's new
 
+![The rebuilt Library page: a headline reading how much of the library the DJ knows, a mood-and-energy progress bar with the tagged count under it, a line of acoustic-analysis coverage, a Start tagging button, and a list of recently added tracks showing their mood tags](/screenshots/admin-library.webp)
+
 The old page had two control strips that both talked about tagging, and neither said why it mattered. Now there's one panel. It opens with a plain line, "Your DJ knows 92% of your library", and under that sits the count of tagged tracks, how many still need it, and one button to close the gap. Every row shows its moods and energy as small tags, so you can see what tagging actually produces. Browse filters by mood, energy, genre, and year.
 
 ## How to use it

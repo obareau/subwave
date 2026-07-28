@@ -329,7 +329,7 @@ export default function WebhooksPanel() {
             <code> controller/src/routes/webhooks.ts </code> for the payload shapes.
           </div>
         </div>
-        <div className="flex items-center gap-3 bg-[var(--ink-softer)] p-3.5">
+        <div className="flex flex-wrap items-center gap-3 bg-[var(--ink-softer)] p-3.5">
           <span className="caption">{hooks.length} hook{hooks.length === 1 ? '' : 's'}</span>
           <span className="caption text-vermilion">
             {hooks.filter(h => h.enabled).length} enabled
@@ -392,7 +392,14 @@ export default function WebhooksPanel() {
         return (
           <Card
             key={h.id}
-            title={h.url || <span className="text-muted italic">(new webhook)</span>}
+            /* A webhook URL is one long unbreakable token; `.card-head` is a
+               flex row with no wrapping of its own, so let the title break
+               inside instead of pushing the head past the card. */
+            title={
+              h.url
+                ? <span className="break-all">{h.url}</span>
+                : <span className="text-muted italic">(new webhook)</span>
+            }
             right={
               <>
                 <Pill tone={h.enabled ? 'accent' : 'default'} dot={h.enabled}>
@@ -437,7 +444,9 @@ export default function WebhooksPanel() {
                         tone={on ? 'accent' : 'default'}
                         dot={on}
                         onClick={() => toggleEvent(ev)}
-                        className="cursor-pointer"
+                        // These pills are the event picker, not decoration —
+                        // give them a thumb-sized target on a phone.
+                        className="min-h-9 cursor-pointer sm:min-h-0"
                       >
                         {ev}
                       </Pill>

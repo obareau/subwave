@@ -116,7 +116,7 @@ export function SkillsTable({
           type="button"
           onClick={(e) => { e.stopPropagation(); onRunNow(s.name); }}
           disabled={busy === s.name}
-          className={cn('seg-pad seg-pad--slim', busy === s.name && 'is-firing')}
+          className={cn('seg-pad seg-pad--slim min-h-9 sm:min-h-0', busy === s.name && 'is-firing')}
         >
           <span className="seg-led" aria-hidden />
           <span className="seg-label">{busy === s.name ? 'Working…' : 'Run now'}</span>

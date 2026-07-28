@@ -13,6 +13,7 @@ import * as djAgent from '../broadcast/dj-agent.js';
 import * as session from '../broadcast/session.js';
 import * as requestLog from '../broadcast/request-log.js';
 import * as listeners from '../broadcast/listeners.js';
+import { autoVoiceAllowed } from '../broadcast/voice-policy.js';
 import * as webhooks from '../broadcast/webhooks.js';
 import {
   checkRateLimit, clientIp,
@@ -264,15 +265,20 @@ async function resolveRequest(entry) {
     // actual pick, not the seed.
     const sameArtist = !!pick.artist && pick.artist === refArtist;
     const ackLine = sameArtist ? `More from ${refArtist}, coming up.` : `More like that, coming up.`;
-    const introScript = await dj.generateIntro({
-      track: pick,
-      context: ctx,
-      requestedBy: requester,
-      requestText: text,
-      recap: queue.getDjRecap(),
-      recentTracks: queue.getRecentTracks(),
-      recentOpeners: queue.getRecentOpeners(),
-    });
+    // Station voice off (settings.tts.enabled) → the request is still honoured
+    // and the listener still gets their text ack; there's just no spoken intro,
+    // and no model call to write one.
+    const introScript = autoVoiceAllowed()
+      ? await dj.generateIntro({
+        track: pick,
+        context: ctx,
+        requestedBy: requester,
+        requestText: text,
+        recap: queue.getDjRecap(),
+        recentTracks: queue.getRecentTracks(),
+        recentOpeners: queue.getRecentOpeners(),
+      })
+      : null;
     const pos = await queue.push({
       track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
@@ -545,16 +551,20 @@ async function resolveRequest(entry) {
   // 3. Generate DJ intro that mentions the request. On a miss, pass the
   // requested-but-absent artist so the spoken intro owns the substitution
   // instead of pretending the track is by them.
-  const introScript = await dj.generateIntro({
-    track: pick,
-    context: ctx,
-    requestedBy: requester,
-    requestText: text,
-    artistMiss: entry.artistMiss || null,
-    recap: queue.getDjRecap(),
-    recentTracks: queue.getRecentTracks(),
-    recentOpeners: queue.getRecentOpeners(),
-  });
+  // Station voice off → no spoken intro and no model call to write one (see the
+  // more_like_this path above). The `ack` below still reaches the listener.
+  const introScript = autoVoiceAllowed()
+    ? await dj.generateIntro({
+      track: pick,
+      context: ctx,
+      requestedBy: requester,
+      requestText: text,
+      artistMiss: entry.artistMiss || null,
+      recap: queue.getDjRecap(),
+      recentTracks: queue.getRecentTracks(),
+      recentOpeners: queue.getRecentOpeners(),
+    })
+    : null;
 
   // 4. Add to queue (will trigger Liquidsoap via the queue manager). A
   // concurrent request that already queued this exact track makes push() dedup

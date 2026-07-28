@@ -49,7 +49,8 @@ start getting tempo/key/loudness.
 - **AIO.** The all-in-one image bundles the analyzer *in-process* (a local
   `librosa` venv the controller drives directly), so the one-click container has
   analysis with no second service. (`subwave-aio` is lean; `subwave-aio-heavy`
-  bakes CLAP + Demucs.)
+  bakes CLAP + Demucs, and `subwave-aio-cuda` runs that same pair on an NVIDIA
+  GPU.)
 - **Fallbacks.** If the `analyzer` service isn't reachable, the controller falls
   back to a [local venv](#running-analysis-without-a-sidecar-dev--offline).
   (`tts-heavy` is TTS-only now — it no longer carries the analyzer.)
@@ -77,7 +78,8 @@ Then `docker compose up -d` (Compose re-pulls the `analyzer` service as
   **Save**, then **Pull & Up**.
 - **Unraid one-click (AIO).** There's no second container to swap — instead point
   the container's **Repository** at `ghcr.io/perminder-klair/subwave-aio-heavy`
-  and re-pull.
+  and re-pull. (Got an NVIDIA card? Use `subwave-aio-cuda` and pass the GPU
+  through instead — [full steps](unraid.md#acoustic-analysis-default-on--expressive-voices-opt-in).)
 
 The heavy image is **amd64-only** (the CPU-torch stack). On an arm64 host also
 set `DOCKER_DEFAULT_PLATFORM=linux/amd64` — it runs under emulation (slow, but
@@ -102,8 +104,14 @@ cu124 torch wheels) and hands it the GPU. Requirements: the NVIDIA driver +
 device itself (`ANALYZE_DEVICE=auto`): if the GPU isn't actually visible it logs
 a warning and falls back to CPU rather than failing the pass. `ANALYZER_HEAVY`
 is irrelevant while the overlay is applied — the image is overridden outright.
-(The AIO one-click container stays CPU-only; GPU analysis needs the split
-stack.)
+
+Running the **all-in-one** container instead? It has no `analyzer` service to
+swap, so there's no overlay: pull the `subwave-aio-cuda` tag (the heavy AIO built
+on the same cu124 wheels) and hand the container the GPU directly. Steps for
+Unraid, including the driver plugin and the extra parameters, are in
+[unraid.md](unraid.md#acoustic-analysis-default-on--expressive-voices-opt-in);
+anywhere else it's `--gpus all` on your `docker run`. Everything below about
+device selection and VRAM applies there unchanged.
 
 Sharing the card with a local TTS or LLM? The worker plays nice: after ~5
 minutes with no analysis requests it drops its models out of VRAM and reloads

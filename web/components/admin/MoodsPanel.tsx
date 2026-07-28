@@ -234,7 +234,14 @@ export default function MoodsPanel() {
             <ScrollArea className="max-h-[420px]">
               <div className="flex flex-col gap-2 pr-2">
                 {moods.map((m, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
+                  /* Mobile: id + bin on row one, the long sound description on
+                     row two (a 160px id beside a bin left ~110px for the
+                     description at 390px). From `sm:` the three sit on one
+                     line exactly as before. */
+                  <div
+                    key={idx}
+                    className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[160px_minmax(0,1fr)_auto]"
+                  >
                     <Input
                       aria-label="Mood id"
                       value={m.name}
@@ -242,7 +249,7 @@ export default function MoodsPanel() {
                         (list ?? []).map((row, i) => i === idx ? { ...row, name: e.target.value } : row))}
                       placeholder="id (e.g. mellow)"
                       maxLength={40}
-                      className="max-w-[160px] min-w-0 shrink-0"
+                      className="col-start-1 row-start-1 min-w-0"
                     />
                     <Input
                       aria-label="Mood sound description"
@@ -251,12 +258,12 @@ export default function MoodsPanel() {
                         (list ?? []).map((row, i) => i === idx ? { ...row, clapPrompt: e.target.value } : row))}
                       placeholder="sound description for audio tagging (optional)"
                       maxLength={200}
-                      className="min-w-0 flex-1"
+                      className="col-span-2 col-start-1 row-start-2 min-w-0 sm:col-span-1 sm:col-start-2 sm:row-start-1"
                     />
                     <Btn
                       sm
                       title="Remove mood"
-                      className="shrink-0"
+                      className="col-start-2 row-start-1 size-9 shrink-0 sm:col-start-3 sm:size-auto"
                       onClick={() => setMoods(list => (list ?? []).filter((_, i) => i !== idx))}
                     >
                       <Trash2 size={12} />
@@ -265,8 +272,9 @@ export default function MoodsPanel() {
                 ))}
               </div>
             </ScrollArea>
-            <div className="mt-3 flex items-center gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <Btn
+                className="min-h-9 sm:min-h-0"
                 disabled={moods.length >= MOODS_LIMIT}
                 onClick={() => setMoods(list => [...(list ?? []), { name: '', clapPrompt: '' }])}
               >
@@ -274,6 +282,7 @@ export default function MoodsPanel() {
               </Btn>
               <Btn
                 tone="accent"
+                className="min-h-9 sm:min-h-0"
                 disabled={!moodsDirty || busy === 'moods'}
                 onClick={saveMoods}
               >
@@ -290,7 +299,9 @@ export default function MoodsPanel() {
           <Card title="Time of day → mood" sub="the mood your station leans into through the day">
             <div className="grid gap-2">
               {PERIODS.map(p => (
-                <div key={p.id} className="flex items-center justify-between gap-3">
+                /* `flex-wrap` lets the select drop under the label at 390px
+                   rather than being squeezed to a few clipped characters. */
+                <div key={p.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
                   <div className="min-w-0">
                     <span className="text-[13px] font-bold">{p.label}</span>
                     <span className="mono-num ml-2 text-[11px] text-muted">{p.hours}</span>
@@ -299,7 +310,7 @@ export default function MoodsPanel() {
                     value={schedule[p.id] || (savedMoodNames[0] ?? '')}
                     onValueChange={v => setSchedule(s => ({ ...s, [p.id]: v }))}
                   >
-                    <SelectTrigger className="max-w-[200px]" aria-label={`Mood for ${p.label}`}>
+                    <SelectTrigger className="max-w-[200px] min-w-[160px]" aria-label={`Mood for ${p.label}`}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -311,7 +322,7 @@ export default function MoodsPanel() {
                 </div>
               ))}
               <div className="mt-1">
-                <Btn tone="accent" disabled={!scheduleDirty || busy === 'schedule'} onClick={saveSchedule}>
+                <Btn tone="accent" className="min-h-9 sm:min-h-0" disabled={!scheduleDirty || busy === 'schedule'} onClick={saveSchedule}>
                   {busy === 'schedule' ? 'Saving…' : 'Save time-of-day moods'}
                 </Btn>
               </div>
@@ -321,13 +332,13 @@ export default function MoodsPanel() {
           <Card title="Weather → mood" sub="how live weather colours the mood — this wins over time of day">
             <div className="grid gap-2">
               {CONDITIONS.map(c => (
-                <div key={c.id} className="flex items-center justify-between gap-3">
+                <div key={c.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
                   <span className="text-[13px] font-bold">{c.label}</span>
                   <Select
                     value={weather[c.id] ? weather[c.id] : NONE}
                     onValueChange={v => setWeather(w => ({ ...w, [c.id]: v === NONE ? '' : v }))}
                   >
-                    <SelectTrigger className="max-w-[200px]" aria-label={`Mood for ${c.label}`}>
+                    <SelectTrigger className="max-w-[200px] min-w-[160px]" aria-label={`Mood for ${c.label}`}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -340,7 +351,7 @@ export default function MoodsPanel() {
                 </div>
               ))}
               <div className="mt-1">
-                <Btn tone="accent" disabled={!weatherDirty || busy === 'weather'} onClick={saveWeather}>
+                <Btn tone="accent" className="min-h-9 sm:min-h-0" disabled={!weatherDirty || busy === 'weather'} onClick={saveWeather}>
                   {busy === 'weather' ? 'Saving…' : 'Save weather moods'}
                 </Btn>
               </div>
@@ -366,7 +377,16 @@ export default function MoodsPanel() {
             <ScrollArea className="max-h-[360px]">
               <div className="flex flex-col gap-2 pr-2">
                 {corrections.map((c, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
+                  /* Mobile: "on air" + bin on row one, "reads as" + the spoken
+                     form on row two — two 220/260px inputs plus a label never
+                     fit the 320px a card body leaves at 390px. `sm:` puts the
+                     four back on one left-aligned line (`justify-start` is what
+                     keeps the auto tracks at content width, as the flex row
+                     was). */
+                  <div
+                    key={idx}
+                    className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[220px_auto_260px_auto] sm:justify-start"
+                  >
                     <Input
                       aria-label="Text on air"
                       value={c.from}
@@ -374,9 +394,9 @@ export default function MoodsPanel() {
                         list.map((row, i) => i === idx ? { ...row, from: e.target.value } : row))}
                       placeholder="text on air (e.g. GHz)"
                       maxLength={80}
-                      className="max-w-[220px] min-w-0 flex-1"
+                      className="col-span-2 col-start-1 row-start-1 min-w-0 sm:col-span-1"
                     />
-                    <span className="shrink-0 text-[11px] text-muted">reads as</span>
+                    <span className="col-start-1 row-start-2 shrink-0 text-[11px] text-muted sm:col-start-2 sm:row-start-1">reads as</span>
                     <Input
                       aria-label="Spoken form"
                       value={c.to}
@@ -384,12 +404,12 @@ export default function MoodsPanel() {
                         list.map((row, i) => i === idx ? { ...row, to: e.target.value } : row))}
                       placeholder="spoken form (e.g. gigahertz)"
                       maxLength={160}
-                      className="max-w-[260px] min-w-0 flex-1"
+                      className="col-start-2 row-start-2 min-w-0 sm:col-start-3 sm:row-start-1"
                     />
                     <Btn
                       sm
                       title="Remove correction"
-                      className="shrink-0"
+                      className="col-start-3 row-start-1 size-9 shrink-0 sm:col-start-4 sm:size-auto"
                       onClick={() => setCorrections(list => list.filter((_, i) => i !== idx))}
                     >
                       <Trash2 size={12} />
@@ -398,8 +418,9 @@ export default function MoodsPanel() {
                 ))}
               </div>
             </ScrollArea>
-            <div className="mt-3 flex items-center gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <Btn
+                className="min-h-9 sm:min-h-0"
                 disabled={corrections.length >= 100}
                 onClick={() => setCorrections(list => [...list, { from: '', to: '' }])}
               >
@@ -407,6 +428,7 @@ export default function MoodsPanel() {
               </Btn>
               <Btn
                 tone="accent"
+                className="min-h-9 sm:min-h-0"
                 disabled={!correctionsDirty || busy === 'corrections'}
                 onClick={saveCorrections}
               >

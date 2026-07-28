@@ -48,21 +48,30 @@ export async function hasWindow(trackId: string, window: StemWindow): Promise<bo
   }
 }
 
-// Byte-budget LRU sweep: newest track-dirs (by max file mtime — a re-analysis
-// refreshes a dir's slot) are kept, oldest evicted until the cache fits the
-// operator's budget (settings.audio.stemCacheGb). No existing LRU utility in
-// the repo — byte accounting follows archives.pruneOlderThan, the sweep shape
-// follows piper.cleanupOldVoices. ENOENT-tolerant throughout: the analyzer
-// may be writing a dir while we scan.
-export async function sweep(budgetBytes?: number): Promise<{ removed: number; freedBytes: number }> {
-  const budget = budgetBytes ?? Math.max(1, Number(settings.get()?.audio?.stemCacheGb) || 15) * 1024 ** 3;
+// The operator's byte budget (settings.audio.stemCacheGb), floored at 1 GB so
+// a corrupt/zero setting can't collapse the cache to nothing.
+export function budgetBytes(): number {
+  return Math.max(1, Number(settings.get()?.audio?.stemCacheGb) || 15) * 1024 ** 3;
+}
+
+// Rough on-disk cost of one track's cached stem set (head 40s + tail 20s, four
+// FLACs each) — the ~25 MB the admin UI quotes. Only used to SIZE a backfill,
+// never to account for real usage (that walks the dirs), so an approximation
+// is fine: being a few MB out changes how many tracks a night targets, nothing
+// that can corrupt the cache.
+export const APPROX_TRACK_BYTES = 25 * 1024 ** 2;
+
+// One walk of the cache root -> per-dir bytes + newest mtime. Shared by the
+// sweep and the usage report so the two can never disagree about what's on
+// disk. ENOENT-tolerant throughout: the analyzer may be writing a dir while we
+// scan.
+async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: number }>> {
   let entries: string[];
   try {
     entries = await readdir(stemsRoot());
   } catch {
-    return { removed: 0, freedBytes: 0 }; // no cache dir yet
+    return []; // no cache dir yet
   }
-
   const dirs: Array<{ dir: string; bytes: number; mtimeMs: number }> = [];
   for (const name of entries) {
     const dir = path.join(stemsRoot(), name);
@@ -81,7 +90,42 @@ export async function sweep(budgetBytes?: number): Promise<{ removed: number; fr
       dirs.push({ dir, bytes, mtimeMs });
     } catch { /* dir vanished mid-scan */ }
   }
+  return dirs;
+}
 
+export async function usageBytes(): Promise<number> {
+  return (await scanDirs()).reduce((n, d) => n + d.bytes, 0);
+}
+
+// How many track dirs are on disk RIGHT NOW — the doctor's coverage number.
+// Deliberately distinct from library-db's stemsCachedCount(): stems_at stamps
+// ATTEMPTS (and must, for the backfill scope to converge), so once the sweep
+// has evicted anything — or a separation failed — the stamp count overstates
+// what a blend can actually hit. This counts hittable dirs instead.
+export async function cachedTrackCount(): Promise<number> {
+  return (await scanDirs()).length;
+}
+
+// How many more tracks the budget can hold, approximately. The stem backfill
+// caps its scope at this: separating thousands of tracks the sweep will evict
+// minutes later is hours of Demucs time for nothing, which is what made the
+// feature look broken on a library bigger than the budget ("it will only ever
+// cache the last 600 songs"). 0 = cache full, so the backfill stands down and
+// says so rather than churning.
+// `budget` defaults to the operator's setting; an explicit value mirrors
+// sweep(budget) so the two can be reasoned about (and tested) together.
+export async function headroomTracks(budget = budgetBytes()): Promise<number> {
+  const free = budget - (await usageBytes());
+  return free <= 0 ? 0 : Math.floor(free / APPROX_TRACK_BYTES);
+}
+
+// Byte-budget LRU sweep: newest track-dirs (by max file mtime — a re-analysis
+// refreshes a dir's slot) are kept, oldest evicted until the cache fits the
+// operator's budget (settings.audio.stemCacheGb). No existing LRU utility in
+// the repo — byte accounting follows archives.pruneOlderThan, the sweep shape
+// follows piper.cleanupOldVoices.
+export async function sweep(budget = budgetBytes()): Promise<{ removed: number; freedBytes: number }> {
+  const dirs = await scanDirs();
   let total = dirs.reduce((n, d) => n + d.bytes, 0);
   if (total <= budget) return { removed: 0, freedBytes: 0 };
 

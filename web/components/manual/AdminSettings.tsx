@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import ManualPage from './ManualPage';
+import ManualFigure from './ManualFigure';
 
 export default function AdminSettings() {
   return (
@@ -42,6 +43,13 @@ export default function AdminSettings() {
             live diagnostic view.
           </li>
         </ul>
+        <ManualFigure
+          src="/screenshots/admin-dash.webp"
+          alt="The admin Dash: the track on air with a skip button, gauges for listeners, DJ latency and TTS fallback, the queue and booth log on the left, and manual voice, segment fire pads and broadcast switches on the right"
+          caption="The Dash. The track on air and its gauges across the top, the queue and the booth log down the left, and on the right the controls that let you speak through the DJ or fire a segment on demand."
+          width={2732}
+          height={2048}
+        />
       </section>
 
       <section className="bs-section">
@@ -98,6 +106,22 @@ export default function AdminSettings() {
             and auto-DJ pick draws from it.
           </li>
         </ul>
+        <div className="bs-manual-figrow">
+          <ManualFigure
+            src="/screenshots/admin-library.webp"
+            alt="The admin Library page: a headline reading how much of the library the DJ knows, a mood-and-energy tagging progress bar, an acoustic-analysis coverage line, and a list of recently added tracks with their mood tags"
+            caption="Library — how much of the collection is tagged, what the analyzer has measured, and the recently-added tracks still waiting."
+            width={2732}
+            height={2048}
+          />
+          <ManualFigure
+            src="/screenshots/admin-schedule.webp"
+            alt="The admin Schedule page: on air, up next and after that across the top, a sentence-style form for booking a show, a shelf of saved shows, and a seven-column grid of coloured show blocks by hour"
+            caption="Schedule — the week as a grid you paint. On air, up next and after that ride along the top; empty hours run autonomously."
+            width={2732}
+            height={2048}
+          />
+        </div>
       </section>
 
       <section className="bs-section">
@@ -204,6 +228,22 @@ export default function AdminSettings() {
           calls, the mixer's status, and the most recent log lines. It's the first place
           to look if the stream stalls or the DJ goes quiet.
         </p>
+        <div className="bs-manual-figrow">
+          <ManualFigure
+            src="/screenshots/admin-stats.webp"
+            alt="The admin Stats page: listeners over the last 24 hours as a line chart with now, peak, average and low, a breakdown of top referrers and countries, and an LLM usage panel below"
+            caption="Stats — listeners over the last day, where they arrived from, and, below the fold, the model calls behind every word the DJ said."
+            width={2732}
+            height={2048}
+          />
+          <ManualFigure
+            src="/screenshots/admin-debug.webp"
+            alt="The admin Debug page: a live health strip for Icecast, Liquidsoap, the LLM, the picker and the tagger, then panels for now-playing, Icecast, the DJ's context, the redacted config with its stream mounts, TTS routing, and recent LLM calls"
+            caption="Debug — a live health strip, the exact state the DJ is reading, which mounts are up, who voices the next line, and the last hundred model calls."
+            width={2732}
+            height={2048}
+          />
+        </div>
         <p>
           Installing or updating the station rather than tuning it? That's covered in{' '}
           <Link href="/setup" className="bs-link">the setup guide</Link>.

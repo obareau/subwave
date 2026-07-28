@@ -65,6 +65,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
       // 'set' is the redaction sentinel — the controller ignores it, so an
       // untouched field never clobbers the stored password.
       password: form.privacy.password,
+      publishPersonaSouls: form.privacy.publishPersonaSouls,
     },
   });
 
@@ -114,7 +115,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
             onChange={(e: ChangeEvent<HTMLInputElement>) =>
               setForm(f => ({ ...f, station: e.target.value }))
             }
-            className="w-[260px]"
+            className="w-[260px] max-w-full"
             maxLength={80}
           />
           <div className="field-hint">
@@ -194,7 +195,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
             onChange={(e: ChangeEvent<HTMLInputElement>) =>
               setForm(f => ({ ...f, weather: { ...f.weather, onAirLocation: e.target.value } }))
             }
-            className="w-[260px]"
+            className="w-[260px] max-w-full"
             maxLength={80}
           />
           <div className="field-hint">
@@ -221,7 +222,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
               }))
             }
           >
-            <SelectTrigger className="w-[240px]" aria-label="Weather units"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-[240px] max-w-full" aria-label="Weather units"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="metric">Metric (°C)</SelectItem>
@@ -245,7 +246,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
               setForm(f => ({ ...f, timezone: val === 'auto' ? '' : val }))
             }
           >
-            <SelectTrigger className="w-[300px]" aria-label="Station timezone"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-[300px] max-w-full" aria-label="Station timezone"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="auto">Auto, server timezone ({serverTz})</SelectItem>
@@ -289,7 +290,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
               setForm(f => ({ ...f, locale: normalizeStationLocale(val) }))
             }
           >
-            <SelectTrigger className="w-[260px]" aria-label="Station locale"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-[260px] max-w-full" aria-label="Station locale"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="en-GB">English (UK), 24-hour</SelectItem>
@@ -356,9 +357,11 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
               onChange={(e: ChangeEvent<HTMLInputElement>) =>
                 setForm(f => ({ ...f, privacy: { ...f.privacy, password: e.target.value } }))
               }
-              className="w-[320px]"
+              className="w-[320px] max-w-full"
             />
-            <div className="field-hint">
+            {/* break-words: the tune-in URL below is one 48-char token, wider
+                than a phone card. */}
+            <div className="field-hint break-words">
               One password for everyone, used by both locks above (Icecast is
               basic-auth only, so there are no per-user accounts). The web player asks
               for it once and remembers it. Radio apps, VLC, Sonos and the native app
@@ -371,8 +374,31 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
         </div>
       </Card>
 
+      <Card title="Public API" sub="What the unauthenticated reads hand out">
+        <div className="field">
+          <Label>Publish persona souls</Label>
+          <Seg
+            options={[...ON_OFF]}
+            value={form.privacy.publishPersonaSouls ? 'on' : 'off'}
+            onChange={id =>
+              setForm(f => ({ ...f, privacy: { ...f.privacy, publishPersonaSouls: id === 'on' } }))
+            }
+          />
+          <div className="field-hint">
+            On: <code>/schedule</code> and <code>/personas</code> include every
+            persona&apos;s soul, so an external site can render the whole roster with
+            bios in one request. Off (the default) publishes names, taglines and
+            avatars only. A soul is the persona&apos;s system prompt rather than a
+            written bio, so leave this off if yours carry private direction — the
+            tagline is the field meant for public display. Either way{' '}
+            <code>/dj</code> keeps publishing the on-air persona&apos;s soul, as it
+            always has. Applies live.
+          </div>
+        </div>
+      </Card>
+
       <SaveBar
-        note="Station name, location, timezone, locale, and the private player apply live. Turning the stream password on or off needs a mixer restart."
+        note="Station name, location, timezone, locale, the private player, and the public-API toggle apply live. Turning the stream password on or off needs a mixer restart."
         busy={busy}
         onSave={save}
         saveLabel="Save station settings"

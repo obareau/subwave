@@ -60,17 +60,29 @@ def main():
     log("ready")
     emit({"id": None, "ready": True})
 
+    # Voice-code prefix -> phonemizer language. Every value must EXACTLY match a
+    # row in espeak-ng's voice table (`espeak-ng --voices`, Language column):
+    # phonemizer's EspeakBackend validates against that list verbatim and raises
+    # "language X is not supported by the espeak backend" for anything else. The
+    # espeak-ng CLI *does* resolve bare aliases (`-v fr` works), which is exactly
+    # why a wrong entry here looks fine until it reaches the backend. French is
+    # the one language with no bare code — espeak-ng ships fr-fr/fr-be/fr-ch only
+    # (#1213). Synced with KOKORO_LANGS in controller/src/settings/vocab.ts.
     lang_mapping = {
         "a": "en-us",
         "b": "en-gb",
         "e": "es",
         "i": "it",
-        "f": "fr",
+        "f": "fr-fr",
         "h": "hi",
         "p": "pt-br",
         "j": "ja",
         "z": "cmn",
     }
+    # Pre-#1213 settings.json / KOKORO_LANG values that espeak-ng would reject.
+    # Rewritten rather than dropped, so an operator who picked French before the
+    # fix keeps French instead of silently falling back to the voice's own lang.
+    lang_aliases = {"fr": "fr-fr"}
     # EspeakG2P construction isn't free, and there are only a handful of
     # languages, so build each phonemizer once and reuse it across requests.
     g2p_cache = {}
@@ -79,6 +91,7 @@ def main():
         """Return a cached language-aware phonemizer. When `lang` is explicitly
         provided use it directly (voice timbre, accent preserved); otherwise
         auto-detect from the voice code prefix character."""
+        lang = lang_aliases.get(lang, lang)
         if not lang or lang not in lang_mapping.values():
             lang = lang_mapping.get(voice_code[0], "en-gb")  # british english fallback
         g2p = g2p_cache.get(lang)

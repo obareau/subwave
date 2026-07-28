@@ -1,0 +1,184 @@
+// Mood- and tag-keyed reads — the drop-in replacements for the old in-memory
+// loops in library.ts — plus the per-genre embedding centroids.
+
+import { SQL_HAS_MOODS, SQL_NO_MOODS, requireDb } from './handle.js';
+import type { EnergyValue, TrackRecord, TrackRow } from './types.js';
+import { rowToTrack } from './rows.js';
+
+// ---------------------------------------------------------------------------
+// Mood-keyed reads (drop-in replacements for the old library.ts in-memory loops)
+// ---------------------------------------------------------------------------
+
+export function songsByMood(mood: string): TrackRecord[] {
+  // Match the LLM's editorial moods OR the zero-shot audio moods (scored from
+  // the track's actual sound — music/audio-moods.ts). The blend widens thin
+  // mood buckets and covers tracks the metadata-only tagger couldn't read
+  // (instrumentals, non-English titles); a track matching both appears once.
+  const rows = requireDb()
+    .prepare(
+      `SELECT * FROM tracks
+       WHERE (moods IS NOT NULL
+              AND EXISTS (SELECT 1 FROM json_each(tracks.moods) WHERE value = ?))
+          OR (audio_moods IS NOT NULL
+              AND EXISTS (SELECT 1 FROM json_each(tracks.audio_moods) WHERE value = ?))`,
+    )
+    .all(mood, mood) as TrackRow[];
+  return rows.map(rowToTrack);
+}
+
+export function songsByEnergy(energy: EnergyValue): TrackRecord[] {
+  if (!energy) return [];
+  const rows = requireDb()
+    .prepare(`SELECT * FROM tracks WHERE energy = ?`)
+    .all(energy) as TrackRow[];
+  return rows.map(rowToTrack);
+}
+
+export function allTaggedIds(): string[] {
+  return (
+    requireDb()
+      .prepare('SELECT id FROM tracks WHERE moods IS NOT NULL')
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
+// Directly-decided tags with a vector — the trusted sample for the propagation
+// self-check (music/propagation-eval.ts). Excludes 'propagated' rows (they ARE
+// the propagation output — scoring against them would be circular) and
+// vectorless rows (KNN can't run). Null source = legacy import, decided by an
+// LLM at the time, so it counts.
+export function trustedTaggedIds(): string[] {
+  return (
+    requireDb()
+      .prepare(
+        `SELECT id FROM tracks
+          WHERE ${SQL_HAS_MOODS}
+            AND (source IS NULL OR source != 'propagated')
+            AND id IN (SELECT id FROM track_vectors)
+          ORDER BY id`,
+      )
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
+// Tagged rows whose LLM provenance has gone stale — their prompt_hash or model
+// differs from the current ones (or is NULL, e.g. a legacy-v1 import). Drives
+// the re-scan "Re-decide moods" pass: re-LLM-tag only what a prompt/model change
+// invalidated. NEVER source='manual' — operator-set tags are ground truth and
+// don't go stale. With no prompt/model change this returns [], so re-decide is a
+// clean no-op. `IS NOT ?` is SQLite's null-safe inequality (NULL counts stale).
+export function staleTaggedIds(promptHash: string, model: string, limit?: number): string[] {
+  const sql =
+    `SELECT id FROM tracks
+       WHERE ${SQL_HAS_MOODS}
+         AND (source IS NULL OR source != 'manual')
+         AND (prompt_hash IS NOT ? OR model IS NOT ?)
+       ORDER BY id` + (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
+  const rows = requireDb().prepare(sql).all(promptHash, model) as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+// Tracks that already carry enrichment (Last.fm tags / lyrics fetched at least
+// once). The re-scan "Re-enrich" scope — redo metadata only for what was done,
+// never the untouched remainder. Distinct from the raw --re-enrich widening,
+// which spans the full live catalogue (issue #531).
+export function enrichedIds(): string[] {
+  return (
+    requireDb()
+      .prepare('SELECT id FROM tracks WHERE enriched_at IS NOT NULL')
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
+export function untaggedIds(limit?: number): string[] {
+  const q = limit
+    ? `SELECT id FROM tracks WHERE ${SQL_NO_MOODS} LIMIT ?`
+    : `SELECT id FROM tracks WHERE ${SQL_NO_MOODS}`;
+  const stmt = requireDb().prepare(q);
+  const rows = (limit ? stmt.all(limit) : stmt.all()) as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+export function unembeddedIds(limit?: number): string[] {
+  const q = limit
+    ? `SELECT t.id FROM tracks t LEFT JOIN track_vectors v ON v.id = t.id WHERE v.id IS NULL LIMIT ?`
+    : `SELECT t.id FROM tracks t LEFT JOIN track_vectors v ON v.id = t.id WHERE v.id IS NULL`;
+  const stmt = requireDb().prepare(q);
+  const rows = (limit ? stmt.all(limit) : stmt.all()) as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+// Tracks that currently have a vector. The re-scan "Re-embed" scope — capture
+// this BEFORE dropVectors() (after the drop every track looks unembedded), then
+// rebuild exactly these, never the untouched untagged remainder.
+export function embeddedIds(): string[] {
+  return (
+    requireDb()
+      .prepare('SELECT id FROM track_vectors')
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
+// Bucket every untagged track by (genre, decade). Used by seed-selector to
+// stratify so rare-mood corners of the library each get a seed pick.
+export function trackIdsByGenreDecade(): Map<string, string[]> {
+  const rows = requireDb()
+    .prepare(
+      `SELECT id, COALESCE(genre, '') AS g, (COALESCE(original_year, year, 0) / 10) * 10 AS decade
+       FROM tracks WHERE moods IS NULL`,
+    )
+    .all() as Array<{ id: string; g: string; decade: number }>;
+  const out = new Map<string, string[]>();
+  for (const r of rows) {
+    const key = `${r.g}|${r.decade}`;
+    const list = out.get(key) ?? [];
+    list.push(r.id);
+    out.set(key, list);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Per-genre embedding centroids — the mean text-embedding vector across every
+// tagged+embedded track in each genre. Powers the genre-cloud 2D projection
+// (music/genre-cloud.ts): semantically similar genres land near each other.
+// One streaming SQL join so a multi-thousand-track library stays light on
+// memory — vectors are accumulated into per-genre running sums, never all held
+// at once.
+// ---------------------------------------------------------------------------
+export function genreCentroids(): Array<{ genre: string; count: number; centroid: Float32Array }> {
+  // json_each over the multi-genre array: a Hip-Hop + Rap track contributes
+  // its vector to BOTH centroids — each genre's centroid should reflect every
+  // track that carries the tag, not just those where it happens to be primary.
+  const stmt = requireDb().prepare(
+    `SELECT je.value AS genre, v.embedding AS embedding
+       FROM tracks t
+       JOIN track_vectors v ON v.id = t.id, json_each(t.genres) je
+      WHERE je.value IS NOT NULL AND TRIM(je.value) != ''`,
+  );
+  const sums = new Map<string, { sum: Float64Array; count: number }>();
+  let dim = 0;
+  for (const row of stmt.iterate() as Iterable<{ genre: string; embedding: Buffer }>) {
+    const b = row.embedding;
+    const vec = new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4));
+    if (!dim) dim = vec.length;
+    if (vec.length !== dim) continue; // defensive: skip any stray off-dim rows
+    let acc = sums.get(row.genre);
+    if (!acc) {
+      acc = { sum: new Float64Array(dim), count: 0 };
+      sums.set(row.genre, acc);
+    }
+    for (let i = 0; i < dim; i++) acc.sum[i] += vec[i];
+    acc.count++;
+  }
+  const out: Array<{ genre: string; count: number; centroid: Float32Array }> = [];
+  for (const [genre, { sum, count }] of sums) {
+    if (!count) continue;
+    const centroid = new Float32Array(dim);
+    for (let i = 0; i < dim; i++) centroid[i] = sum[i] / count;
+    out.push({ genre, count, centroid });
+  }
+  return out;
+}
+
+

@@ -9,7 +9,14 @@
 
   <!-- Lets the in-container controller reach an Ollama (or Navidrome) running
        on the Unraid host itself via http://host.docker.internal:PORT on the
-       default bridge network. Harmless when those services live elsewhere. -->
+       default bridge network. Harmless when those services live elsewhere.
+
+       GPU acoustic analysis (optional): the nvidia runtime flag is deliberately
+       NOT in here. It's a hard failure on a box without the Nvidia Driver
+       plugin, and most Unraid boxes don't have a card, so it stays an opt-in the
+       operator adds by hand alongside repointing Repository at the CUDA image.
+       The full swap is stepped through in docs/unraid.md; see also the NVIDIA_*
+       variables below, which are inert until that runtime is enabled. -->
   <ExtraParams>--add-host host.docker.internal:host-gateway</ExtraParams>
 
   <Icon>https://raw.githubusercontent.com/perminder-klair/subwave/main/app/assets/icon.png</Icon>
@@ -44,8 +51,13 @@
   <ExtraSearchTerms>subwave sub-wave sub/wave subwave-aio radio internet radio icecast liquidsoap ai dj navidrome subsonic stream ollama station broadcast</ExtraSearchTerms>
   <Requires>A reachable Navidrome / Subsonic music server and an LLM provider (Ollama local/cloud or a cloud API key), both configured in the browser at /onboarding after first boot.</Requires>
 
-  <Date>2026-06-22</Date>
+  <Date>2026-07-26</Date>
   <Changes>
+### 2026-07-26
+- Optional GPU acoustic analysis: point Repository at subwave-aio-cuda and add
+  --runtime=nvidia to run the "sounds-like" + vocal-range models on an NVIDIA
+  card. CPU installs are unaffected.
+
 ### 2026-06-22
 - Initial release: SUB/WAVE all-in-one image on Community Applications.
   </Changes>
@@ -91,4 +103,24 @@
   <Config Name="TZ" Target="TZ" Default="Europe/London"
           Description="Timezone — keeps scheduled shows and hourly-archive timestamps on local time."
           Type="Variable" Display="advanced" Required="false" Mask="false">Europe/London</Config>
+
+  <!-- GPU acoustic analysis (optional, NVIDIA only). These three are inert on a
+       normal CPU install: left empty they change nothing, and the analyzer keeps
+       running on CPU. They only bite once you ALSO switch Repository to
+       ghcr.io/perminder-klair/subwave-aio-cuda:latest and add the nvidia runtime
+       flag to Extra Parameters (Advanced View). Needs the Unraid Nvidia Driver
+       plugin; docs/unraid.md walks the whole swap. If the card ends up not
+       visible the analyze worker logs a warning and falls back to CPU rather
+       than failing. -->
+  <Config Name="NVIDIA_VISIBLE_DEVICES" Target="NVIDIA_VISIBLE_DEVICES" Default=""
+          Description="GPU analysis only: the GPU UUID from Unraid's Nvidia Driver plugin (or 'all'). Leave EMPTY unless you are running the subwave-aio-cuda image with --runtime=nvidia in Extra Parameters."
+          Type="Variable" Display="advanced" Required="false" Mask="false"/>
+
+  <Config Name="NVIDIA_DRIVER_CAPABILITIES" Target="NVIDIA_DRIVER_CAPABILITIES" Default=""
+          Description="GPU analysis only: set to 'compute,utility' when using the subwave-aio-cuda image. Leave EMPTY otherwise."
+          Type="Variable" Display="advanced" Required="false" Mask="false"/>
+
+  <Config Name="ANALYZE_DEVICE" Target="ANALYZE_DEVICE" Default=""
+          Description="Where the heavy acoustic models run: auto (default — GPU when one is visible, else CPU), cuda, or cpu. Leave EMPTY unless you want to pin it; only the -cuda image can use a GPU at all."
+          Type="Variable" Display="advanced" Required="false" Mask="false"/>
 </Container>

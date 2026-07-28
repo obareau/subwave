@@ -84,6 +84,8 @@ export const PROMPT_MAX = 4000;
 // DJ_PROMPT_LIMIT / DJ_PROMPT_NAME_MAX (settings.ts).
 export const PROMPT_PRESET_MAX = 20;
 export const PROMPT_NAME_MAX = 60;
+// Station house rules cap — lockstep with DJ_HOUSE_RULES_MAX (settings/vocab.ts).
+export const HOUSE_RULES_MAX = 2000;
 export const PERSONA_MAX = 48;
 
 // 512×512 output target. The controller hard-caps the decoded image at 300 KB

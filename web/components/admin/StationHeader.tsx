@@ -313,17 +313,26 @@ export default function StationHeader({
         </div>
       </div>
 
-      {/* unified status strip */}
-      <div className="hs-strip">
+      {/* Unified status strip. Four instruments at 140–196px can't sit in one
+          390px row, so on a phone the flex rail becomes a 2-up grid and folds
+          to two rows; from sm: up it is byte-for-byte the original single row.
+          The `!` utilities are required because the `.hs-*` rules in
+          globals.css are unlayered and would otherwise outrank Tailwind's
+          utility layer regardless of specificity. Cell dividers are re-flowed
+          the same way `.strip-mobile` does it: no left rule on the cell that
+          starts row 2, a top rule on both cells of that row. */}
+      <div className="hs-strip !grid !grid-cols-2 sm:!flex">
         {/* 01 — listeners needle */}
-        <div className="hs-cell">
+        <div className="hs-cell !min-w-0 sm:!min-w-[140px]">
           <div className="hs-head">
             <div className="hs-lbl">
               <span className="idx">01</span>Listeners
             </div>
           </div>
           <svg ref={listenersSvg} className="hs-gauge" />
-          <div className="hs-read">
+          {/* Readouts wrap on a phone so the trailing peak/redline figure drops
+              to its own line instead of being clipped by the cell. */}
+          <div className="hs-read flex-wrap sm:flex-nowrap">
             <span className="hs-v" ref={listenersV}>
               0
             </span>
@@ -335,17 +344,19 @@ export default function StationHeader({
         </div>
 
         {/* 02 — DJ latency needle */}
-        <div className="hs-cell">
+        <div className="hs-cell !min-w-0 sm:!min-w-[140px]">
           <div className="hs-head">
             <div className="hs-lbl">
               <span className="idx">02</span>DJ&nbsp;Latency
             </div>
-            <div className="hs-sub" ref={zone}>
+            {/* The head's sub-label is nowrap and would squeeze the instrument
+                name to an ellipsis in a half-width cell — hidden on mobile. */}
+            <div className="hs-sub hidden sm:block" ref={zone}>
               nominal
             </div>
           </div>
           <svg ref={latencySvg} className="hs-gauge" />
-          <div className="hs-read" ref={latencyRead}>
+          <div className="hs-read flex-wrap sm:flex-nowrap" ref={latencyRead}>
             <span className="hs-v" ref={latencyV}>
               0
             </span>
@@ -357,12 +368,12 @@ export default function StationHeader({
         </div>
 
         {/* 03 — TTS fallback inverted bar */}
-        <div className="hs-cell">
+        <div className="hs-cell !min-w-0 !border-t !border-l-0 !border-t-separator-strong sm:!min-w-[140px] sm:!border-t-0 sm:!border-l">
           <div className="hs-head">
             <div className="hs-lbl">
               <span className="idx">03</span>TTS&nbsp;Fallback
             </div>
-            <div className="hs-sub">lower&nbsp;=&nbsp;better</div>
+            <div className="hs-sub hidden sm:block">lower&nbsp;=&nbsp;better</div>
           </div>
           <div className="hs-barwrap">
             <div className="hs-track">
@@ -375,7 +386,7 @@ export default function StationHeader({
               <span>100%</span>
             </div>
           </div>
-          <div className="hs-read" ref={ttsRead}>
+          <div className="hs-read flex-wrap sm:flex-nowrap" ref={ttsRead}>
             <span className="hs-v" ref={ttsV}>
               0
             </span>
@@ -384,12 +395,12 @@ export default function StationHeader({
         </div>
 
         {/* 04 — On Air pilot lamp + station context (weather · picker) */}
-        <div className="hs-cell hs-lamp">
+        <div className="hs-cell hs-lamp !min-w-0 !border-t !border-t-separator-strong sm:!min-w-[196px] sm:!border-t-0">
           <div className="hs-head">
             <div className="hs-lbl">
               <span className="idx">04</span>On&nbsp;Air
             </div>
-            <div className="hs-sub">stream</div>
+            <div className="hs-sub hidden sm:block">stream</div>
           </div>
           <div className="hs-lampbody">
             <div className={online ? 'hs-bulb hs-on' : 'hs-bulb'}>

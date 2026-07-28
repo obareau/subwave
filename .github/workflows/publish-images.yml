@@ -79,6 +79,20 @@ jobs:
             build_args: |
               WITH_CLAP=1
               WITH_DEMUCS=1
+          # CUDA AIO — the heavy one-click container with CLAP + Demucs on cu124
+          # torch wheels, for a box with an NVIDIA card (#1186). The AIO analog of
+          # subwave-analyzer-cuda; the operator points the container at this tag
+          # and adds GPU passthrough to its extra parameters (docs/unraid.md).
+          # ~4GB compressed vs -heavy's ~1.3GB, hence its own tag rather than a
+          # default. Needs the disk reclaim below (see `big_build`).
+          - image: subwave-aio-cuda
+            dockerfile: docker/Dockerfile.aio
+            platforms: linux/amd64
+            big_build: true
+            build_args: |
+              WITH_CLAP=1
+              WITH_DEMUCS=1
+              WITH_CUDA=1
           - image: subwave-tts-heavy
             dockerfile: docker/Dockerfile.tts-heavy
             platforms: linux/amd64
@@ -126,6 +140,23 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Reclaim runner disk before the biggest builds. A GitHub-hosted
+      # ubuntu-latest has ~14GB free on the root filesystem, which is where
+      # /var/lib/docker lives — and subwave-aio-cuda is ~4GB compressed / ~11GB
+      # unpacked (the cu124 nvidia-*-cu12 wheels), enough to hit ENOSPC mid-build
+      # once the buildx layer cache is added on top. These toolchains ship
+      # preinstalled on the runner image and nothing in this workflow uses them;
+      # dropping them frees ~20GB. Gated on the matrix flag so the small builds
+      # don't pay the ~30s for nothing.
+      - name: Free runner disk space
+        if: matrix.big_build
+        run: |
+          set -eux
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /usr/share/swift
+          df -h /
+
       # The version stamped into the images (admin footer + controller). On a tag
       # push `git describe` returns the tag (e.g. v0.31.0); a branch dispatch
       # yields <tag>-<n>-g<sha>. Empty → builds fall back to package.json.
@@ -166,4 +197,11 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+          # mode=max caches every intermediate layer, which is right for the
+          # small images. The cuda build exports NO cache at all: even mode=min
+          # exports the final image's layers, and its multi-GB torch venv layer
+          # sits in the final stage — one entry would evict most other scopes
+          # from the 10GB repo-wide GHA cache budget. Tag builds are rare, so a
+          # cold rebuild is the cheaper trade. (cache-from above stays — it's a
+          # harmless miss while nothing is ever exported to that scope.)
+          cache-to: ${{ !matrix.big_build && format('type=gha,scope={0},mode=max', matrix.image) || '' }}

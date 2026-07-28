@@ -11,6 +11,8 @@ You spent three evenings getting a skill's brief just right, and now the DJ land
 
 ## Take one from the catalog
 
+![The admin Skills page, with a Community button carrying a count of available skills sitting next to New skill above the list. Two rows in the list are tagged CUSTOM](/screenshots/admin-skills.webp)
+
 The admin Skills page has a Community button, next to New skill. It opens a catalog of skills other operators have contributed, shipped inside the controller image, with a credit line under each one (who wrote it, when it landed). Hit Install and it copies into `state/skills/` like any skill of your own. It arrives switched off, so you can read the brief before it goes on air. The catalog only carries prompts, never code, so installing one runs nothing.
 
 ## Put yours in

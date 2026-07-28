@@ -52,8 +52,18 @@ export interface CandidateFilterState {
   // catalogues), which is why it defaults true and is inert on that path.
   // Back-to-back artist variety on the AGENT path is instead enforced at the
   // point of choice: dj-agent.pickViaAgent re-picks from other-artist
-  // candidates when a pick would repeat the on-air artist (#1124).
+  // candidates when a pick would repeat the on-air artist (#1124), escalating
+  // to a blockedArtists pool call when its own run surfaced none (#1187).
   allowArtistRelaxation?: boolean;
+  // Artists that may NEVER be returned, whatever the starvation cascade does —
+  // checked outside the mode loop like hardRecentIds. Distinct from
+  // recentArtists, which is a preference the cascade drops rather than return
+  // nothing. #1187: the agent path's artist guard asks the pool for a pick that
+  // ISN'T the on-air artist; a pool that never-starves back to that same artist
+  // would answer the question it was called to avoid. Empty on every pick that
+  // doesn't go through that rescue, so the ordinary pool is untouched. Keys are
+  // artistKey()-normalised (lowercased, trimmed).
+  blockedArtists?: Set<string>;
 }
 
 // Track length in seconds from whichever field the source carries, or null when
@@ -127,6 +137,7 @@ export function filterPickerCandidates<T extends CandidateLike>(
     maxPerArtist = Infinity,
     cap = Infinity,
     allowArtistRelaxation = true,
+    blockedArtists = new Set<string>(),
   }: CandidateFilterState = {},
 ): T[] {
   // Track length is NOT a selection criterion: max-track-length (issue #447) is
@@ -168,6 +179,10 @@ export function filterPickerCandidates<T extends CandidateLike>(
       if (mode.recentTracks && recentKeys.has(trackKey(song))) continue;
 
       const key = artistKey(song);
+      // Hard artist block — no mode gate, so it survives every relaxation stage
+      // (#1187). An empty set (every caller but the artist-guard rescue) makes
+      // this a no-op.
+      if (key && blockedArtists.has(key)) continue;
       if (mode.recentArtists && key && recentArtists.has(key)) continue;
       if (key) {
         const count = nextArtistCounts.get(key) || 0;

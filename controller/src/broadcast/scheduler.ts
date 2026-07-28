@@ -24,6 +24,7 @@ import * as programme from './programme.js';
 import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
 import { djCallsAllowed } from './listeners.js';
+import { autoVoiceAllowed } from './voice-policy.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
 import { withTrace, pruneOldEvents } from '../observability/events.js';
@@ -622,6 +623,7 @@ async function banterTick() {
 // ---------------------------------------------------------------------------
 
 async function skillsTick() {
+  if (!autoVoiceAllowed()) return;  // station voice is off — music only (manual /dj/skill still runs)
   if (programme.onAir()) return;  // a programme episode owns its talk moments — the director stands down
   if (!djCallsAllowed()) return;  // nobody listening — skip the segment director
   if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments

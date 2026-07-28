@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import ManualPage from './ManualPage';
+import ManualFigure from './ManualFigure';
 
 export default function GettingStarted() {
   return (
@@ -30,7 +31,8 @@ export default function GettingStarted() {
         <h2>What you're looking at.</h2>
         <p>
           The player shows the track that's playing right now (title, artist, and cover
-          art) with a waveform for the transport. Three panels slide out for the rest:
+          art) with a waveform for the transport. Panels slide out from the rail for the
+          rest:
         </p>
         <ul className="bs-list">
           <li>
@@ -44,10 +46,25 @@ export default function GettingStarted() {
             <strong>The booth</strong> — a running feed of what the DJ has been saying:
             intros, station IDs, the time, weather.
           </li>
+          <li>
+            <strong>Schedule</strong> — which show is on air and what's coming up after it.
+          </li>
         </ul>
         <p className="text-muted">
           Now-playing info refreshes every few seconds, so the player stays in step with
           the broadcast without you doing anything.
+        </p>
+        <ManualFigure
+          src="/screenshots/listen.webp"
+          alt="The Classic player face: show and weather along the top, cover art beside the track title and artist, a line from the DJ underneath, the panel rail on the right, and a waveform above the transport bar"
+          caption="The Classic face — the show, mood and weather along the top, the track on air, a line from the booth beneath it, and the panel rail down the right."
+          width={2732}
+          height={2048}
+        />
+        <p className="text-muted">
+          That's one of six faces the player can wear, and the palette icon in the corner
+          switches between them. See{' '}
+          <Link href="/manual/themes" className="bs-link">Skins &amp; Themes</Link>.
         </p>
       </section>
 

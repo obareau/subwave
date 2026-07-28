@@ -102,7 +102,10 @@ export function SteppedFader({ ariaLabel, stops, value, onChange }: SteppedFader
           aria-orientation="horizontal"
           onPointerDown={startDrag}
           onKeyDown={onKeyDown}
-          className="relative h-8 cursor-ew-resize touch-none rounded outline-none select-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]"
+          // Taller grab area on phones — the groove, ticks and cap are all
+          // centred on the rail, so the extra height is transparent padding and
+          // the control looks identical; `sm:` restores the desktop 32px.
+          className="relative h-11 cursor-ew-resize touch-none rounded outline-none select-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)] sm:h-8"
         >
           {/* groove */}
           <div className="absolute top-1/2 right-0 left-0 h-[6px] -translate-y-1/2 rounded-full border border-[#0e0c0a] bg-[linear-gradient(180deg,#161412,#2a2420)] shadow-[inset_0_2px_4px_rgba(0,0,0,0.6)]" />
@@ -141,7 +144,9 @@ export function SteppedFader({ ariaLabel, stops, value, onChange }: SteppedFader
               type="button"
               onClick={() => select(i)}
               className={cn(
-                'absolute top-0 text-[9px] leading-tight font-bold whitespace-nowrap uppercase',
+                // -my-2/py-2 grows the thumb target to ~28px without moving the
+                // label or the row below it. Desktop keeps the bare text box.
+                'absolute top-0 -my-2 py-2 text-[9px] leading-tight font-bold whitespace-nowrap uppercase sm:my-0 sm:py-0',
                 i === 0 ? 'left-0' : i === n - 1 ? 'right-0' : cn(lefts[i], '-translate-x-1/2'),
                 i === idx ? 'text-[var(--accent)]' : 'text-muted hover:text-[var(--ink)]',
               )}

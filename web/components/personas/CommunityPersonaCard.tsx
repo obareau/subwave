@@ -1,3 +1,4 @@
+import CatalogBrief from '@/components/ui/catalog-brief';
 import type { CommunityPersona } from '@/lib/communityPersonas';
 
 // One card in the /personas showcase grid. Browse-only: it presents a
@@ -21,7 +22,7 @@ export default function CommunityPersonaCard({ persona }: { persona: CommunityPe
 
       {persona.tagline && <p className="bs-skill-cadence">{persona.tagline}</p>}
 
-      <p className="bs-skill-brief">{persona.soul}</p>
+      <CatalogBrief text={persona.soul} />
 
       {tags.length > 0 && (
         <ul className="bs-skill-tags" aria-label="Behaviour">

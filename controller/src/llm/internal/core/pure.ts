@@ -508,6 +508,144 @@ export function flattenToolCalls(result: { steps?: StepLike[] } | null | undefin
   });
 }
 
+// ---------------------------------------------------------------------------
+// Terminal single-turn collapse (issue #1157)
+// ---------------------------------------------------------------------------
+//
+// Flatten an agent's chat window + discovery trail into ONE user message, so a
+// tool loop that stalled can be finished by the single-turn forced-tool path
+// (objectViaToolCall's `emit`) instead of yet another multi-turn continuation.
+//
+// Why the shape and not the forcing: llama.cpp / LM Studio running Hermes-class
+// models answer the terminal `done` step in prose no matter what `tool_choice`
+// says — the operator's server trace on #1157 shows `tools:[done]` +
+// `tool_choice:'required'` going out and `tool_calls: []`, `finish_reason:
+// 'stop'` coming back, on BOTH LM Studio and a bare `llama-server --jinja`. The
+// same backend and model call a forced tool reliably when the request is a
+// single user prompt carrying one tool — which is exactly why the stateless
+// pool picker keeps working for those operators while the agent path does not.
+// The variable that moves is the conversation SHAPE (a continuation after
+// tool-result turns vs. a fresh one-shot), so the last resort changes the shape.
+// This also subsumes what the clean-context retry was reaching for: GLM's
+// "keeps declining once it has declined in this conversation" is a fresh
+// single-turn call by another name.
+//
+// The findings block is what keeps the answer honest. The discovery tools ran
+// during the earlier attempts and their results are the only place real
+// candidate ids exist; drop them and a cornered model can only fabricate one
+// (the 100%-unknown-id failure the trail-carrying recovery was added to fix).
+// Truncation is per-result and then whole-block, both announced in the text —
+// a clipped candidate list costs at worst a pick from a shorter menu, and the
+// caller's nearestId/repickFromSeen salvage still covers an id that came back
+// mangled, exactly as it does for every other branch of the cascade.
+
+export interface TerminalMessageLike {
+  role?: string;
+  content?: unknown;
+}
+
+// Deliberately generous: this is a last resort before falling back to the pool
+// picker, so the risk of a slightly long prompt beats the risk of starving the
+// model of the candidate it should have picked. One discovery step (the
+// COMMIT_AFTER_STEPS=1 gate) yields ~8 candidates, comfortably inside the block
+// cap; the caps only bite on a model that fanned out before stalling.
+const TERMINAL_HISTORY_TURNS = 6;
+const TERMINAL_TURN_CHARS = 600;
+const TERMINAL_ARGS_CHARS = 300;
+const TERMINAL_FINDING_CHARS = 4000;
+const TERMINAL_FINDINGS_TOTAL = 24000;
+
+// Text of one ModelMessage. Providers hand us either a plain string or the
+// parts array, where only `text` parts carry anything renderable — tool-call /
+// tool-result parts are covered by the findings block, and replaying them here
+// too would reintroduce the very turns this collapse exists to drop.
+export function messageText(m: TerminalMessageLike | null | undefined): string {
+  const c = m?.content;
+  if (typeof c === 'string') return c.trim();
+  if (!Array.isArray(c)) return '';
+  return c
+    .map((p) => {
+      const part = p as { type?: string; text?: unknown } | null;
+      return part && part.type === 'text' && typeof part.text === 'string' ? part.text : '';
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function jsonish(v: unknown): string {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+function renderFindings(toolCalls: ToolCallSummary[] | null | undefined): string {
+  // `done` is the schema-emit signal, never a discovery result — flattenToolCalls
+  // already drops it, but this is also fed hand-built trails in tests.
+  const calls = (toolCalls || []).filter((c) => c && c.name !== 'done');
+  if (!calls.length) return '';
+  const lines = ['What your tools already found:'];
+  let spent = 0;
+  let dropped = 0;
+  for (const c of calls) {
+    const body = String(clipText(jsonish(c.result), TERMINAL_FINDING_CHARS));
+    if (!body) continue;
+    if (spent && spent + body.length > TERMINAL_FINDINGS_TOTAL) {
+      dropped++;
+      continue;
+    }
+    spent += body.length;
+    const args = String(clipText(jsonish(c.args), TERMINAL_ARGS_CHARS));
+    lines.push(`${c.name ?? 'tool'}(${args}) returned:`);
+    lines.push(body);
+  }
+  if (dropped) lines.push(`(${dropped} further tool result${dropped === 1 ? '' : 's'} omitted for length.)`);
+  return lines.length > 1 ? lines.join('\n') : '';
+}
+
+export function renderTerminalPrompt(
+  messages: TerminalMessageLike[] | null | undefined,
+  toolCalls: ToolCallSummary[] | null | undefined,
+): string {
+  const turns = (messages || [])
+    .map((m) => ({ role: m?.role === 'assistant' ? 'assistant' : 'user', text: messageText(m) }))
+    .filter((t) => t.text);
+  // The last user turn IS the task ("Pick the track to play next…"), so it is
+  // restated on its own at the end — nearest the answer, and out of a history
+  // block the model might read as already-handled. Every other turn is history,
+  // including any assistant turns AFTER the task turn (djAgent's windows end on
+  // the user event turn today, but a trailing turn is context, not droppable).
+  const lastUserIdx = turns.map((t) => t.role).lastIndexOf('user');
+  const task = lastUserIdx >= 0 ? turns[lastUserIdx].text : '';
+  const history = (lastUserIdx >= 0 ? [...turns.slice(0, lastUserIdx), ...turns.slice(lastUserIdx + 1)] : turns)
+    .slice(-TERMINAL_HISTORY_TURNS);
+
+  const out: string[] = [];
+  if (history.length) {
+    out.push('Earlier in this session:');
+    for (const t of history) out.push(`${t.role}: ${String(clipText(t.text, TERMINAL_TURN_CHARS))}`);
+    out.push('');
+  }
+  const findings = renderFindings(toolCalls);
+  if (findings) {
+    out.push(findings);
+    out.push('');
+  }
+  if (task) {
+    out.push('Your task:');
+    out.push(task);
+    out.push('');
+  }
+  out.push(findings
+    ? 'Answer now, in one step, using only what is above — do not invent ids, titles or results that do not appear in it.'
+    : 'Answer now, in one step.');
+  return out.join('\n');
+}
+
 // Pull diagnostic info off an AI SDK structured-output error. When the model
 // emits something but the SDK can't parse it into the schema, the raw text
 // lives on err.text (and the original cause on err.cause). Without this, the

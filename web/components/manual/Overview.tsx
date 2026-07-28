@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import ManualPage from './ManualPage';
+import ManualFigure from './ManualFigure';
 
 const GUIDE = [
   {
@@ -96,6 +97,23 @@ export default function Overview() {
             </li>
           ))}
         </ul>
+
+        <div className="bs-manual-figrow">
+          <ManualFigure
+            src="/screenshots/listen.webp"
+            alt="The SUB/WAVE player: cover art, track title and artist, a line from the DJ, a waveform transport, and a rail of panel buttons"
+            caption="The listener's side — the player at /listen."
+            width={2732}
+            height={2048}
+          />
+          <ManualFigure
+            src="/screenshots/admin-dash.webp"
+            alt="The SUB/WAVE admin Dash: what's on air, listener and latency gauges, the queue, the booth log, and manual voice controls"
+            caption="The operator's side — the admin console at /admin."
+            width={2732}
+            height={2048}
+          />
+        </div>
       </section>
 
       <section className="bs-section">

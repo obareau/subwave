@@ -18,6 +18,8 @@ A skin is a full-screen layout drawn on the same live data. The stream underneat
 - Subamp is a compact modular player, with the deck, booth and log stacked like it's 1998.
 - TTY is the station as a live process, all panes and a status line where everything tails.
 
+![The Classic skin: a masthead across the top carrying the show, mood and weather, cover art beside the track title and artist, a line from the booth underneath, the panel rail down the right, and a waveform above the transport bar](/screenshots/listen.webp)
+
 ## How to use it
 
 You set the station default in admin. Open Settings, then Skin & Themes, and pick one under Player skin. It applies live on the next poll, no restart.

@@ -25,13 +25,21 @@
 // synthetic `done` tool whose inputSchema IS the schema is added alongside the
 // discovery tools, `toolChoice:'required'` forces a tool call every step, and
 // prepareStep corners the model into discovery-then-done.
+//
+// When the model declines `done` anyway, the cascade is:
+//   main run → done-only recovery (carrying the trail) → single-turn terminal
+//   collapse (issue #1157: the trail flattened into ONE user prompt + a forced
+//   `emit` tool, leaving the multi-turn shape behind — see renderTerminalPrompt
+//   in core/pure.ts) → text salvage → throw, and the caller falls back to its
+//   stateless path. Every leg draws on ONE shared deadline, so the leg count
+//   here is a budget decision as much as a correctness one.
 
 import { Output, isStepCount, hasToolCall, ToolLoopAgent, tool } from 'ai';
 import type { ModelMessage, ToolSet } from 'ai';
 import { z } from 'zod';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
-import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics } from '../core/pure.js';
+import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt } from '../core/pure.js';
 import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage } from '../core/pure.js';
 import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice } from '../provider/capabilities.js';
 import type { Leg } from '../provider/legs.js';
@@ -131,9 +139,9 @@ function gatedDiscoveryPrepareStep(discoveryToolNames: string[], toolChoice: 're
   };
 }
 
-// Shared shape for the done-only recovery agent — same harness for both the
-// first (trail-carrying) and second (clean-context) recovery attempts below;
-// only the messages they're run against differ.
+// The done-only recovery agent: one re-run of the loop with `done` as the only
+// legal move, fed the failed run's discovery trail. The attempt after this one
+// leaves the loop behind entirely (renderTerminalPrompt + objectViaToolCall).
 function buildRecoveryAgent(leg: Leg, system: string, allTools: ToolSet | undefined, temperature: number, maxOutputTokens: number, forcedChoice: 'required' | 'auto') {
   return new ToolLoopAgent({
     // Recovery forces done-only every step → no-think model (see above).
@@ -176,9 +184,9 @@ function buildRecoveryAgent(leg: Leg, system: string, allTools: ToolSet | undefi
 // stateless path (Copilot review, PR #923) — a slow main run now correctly
 // leaves less time for recovery instead of resetting the clock. undefined
 // means no deadline at all (unlimited).
-function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: AgentLike, messages: ModelMessage[]): Promise<AgentGenerateResult> {
+function runDeadlinedCall<T>(deadlineAt: number | undefined, kind: string, label: string, fn: (signal?: AbortSignal) => Promise<T>): Promise<T> {
   if (deadlineAt == null) {
-    return withTransientRetry(kind, () => agent.generate({ messages }));
+    return withTransientRetry(kind, () => fn());
   }
   const remaining = deadlineAt - Date.now();
   if (remaining <= 0) {
@@ -187,10 +195,14 @@ function runDeadlined(deadlineAt: number | undefined, kind: string, label: strin
     return Promise.reject(err);
   }
   return withDeadline(remaining, `${kind} ${label}`, (signal) =>
-    withTransientRetry(kind, () => agent.generate({
-      messages,
-      ...(signal ? { abortSignal: signal } : {}),
-    }), signal));
+    withTransientRetry(kind, () => fn(signal), signal));
+}
+
+function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: AgentLike, messages: ModelMessage[]): Promise<AgentGenerateResult> {
+  return runDeadlinedCall(deadlineAt, kind, label, (signal) => agent.generate({
+    messages,
+    ...(signal ? { abortSignal: signal } : {}),
+  }));
 }
 
 export async function djAgent({
@@ -247,6 +259,22 @@ export async function djAgent({
           };
         }
 
+        // Tokens spent across every leg below (a native leg that fell through,
+        // the main run, the recovery, the terminal collapse). Each leg is a
+        // separate billable call and `result` is reassigned between them, so a
+        // single usageOf(result) at the end only ever counted the LAST leg —
+        // the same reassignment loss captureTrail guards the discovery trail
+        // against. This sum is what telemetry/log.ts records and what the
+        // daily token cap (llm/internal/telemetry/budget.ts) counts against.
+        let spentUsage = { input: 0, output: 0, total: 0 };
+        const addUsage = (u: { input: number; output: number; total: number }) => {
+          spentUsage = {
+            input: spentUsage.input + u.input,
+            output: spentUsage.output + u.output,
+            total: spentUsage.total + u.total,
+          };
+        };
+
         // ----- Native-first structured output (non-Ollama tool-using agents) -----
         // Prefer native Output.object where it now emits reliably (see header).
         // No forced tool_choice → no thinking conflict, and simpler than the
@@ -300,6 +328,7 @@ export async function djAgent({
               };
             }
             console.log(`[${kind}] native output produced no usable pick (explored=${explored}, accepted=${accepted}) — falling back to done-tool`);
+            addUsage(usageOf(nr));
           } catch (e) {
             console.log(`[${kind}] native output failed (${e?.message}) — falling back to done-tool`);
           }
@@ -346,6 +375,24 @@ export async function djAgent({
         // stateless path rather than blocking on a pathological model call.
         let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, messages);
         let steps = result.steps?.length ?? 0;
+        addUsage(usageOf(result));
+
+        // The discovery trail belongs to the MAIN run: `result` is reassigned by
+        // the recovery below, and the recovery agent is pinned done-only, so
+        // reading the trail off the FINAL result loses it entirely (which is why
+        // the /debug record for a recovered pick showed zero tool calls). Capture
+        // it here and top it up if a later attempt manages a discovery call of its
+        // own. The terminal collapse renders this into its prompt, so the trail is
+        // also what stops a cornered model from inventing an id.
+        let discoveryTrail = flattenToolCalls(result);
+        const captureTrail = (r: AgentGenerateResult) => {
+          const more = flattenToolCalls(r);
+          if (more.length) discoveryTrail = [...discoveryTrail, ...more];
+        };
+
+        // Set only by the single-turn terminal collapse below.
+        let terminalObject: unknown;
+        let terminalPrompt: string | undefined;
 
         // What the model said INSTEAD of calling `done`, one entry per attempt
         // that declined — surfaced on the eventual throw below (via err.text)
@@ -382,28 +429,55 @@ export async function djAgent({
           result = await runDeadlined(deadlineAt, kind, 'agent recovery',
             buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice), recoveryMessages);
           steps = result.steps?.length ?? 0;
+          addUsage(usageOf(result));
+          captureTrail(result);
           noteIfDeclined('recovery', result);
 
-          // Second-chance recovery: GLM (Zhipu/Z.ai, incl. the GLM Coding Plan)
-          // observed declining the forced `done` call ~1/3 of the time even under
-          // toolChoice:'required', AND tends to keep declining once it already has
-          // in the SAME conversation — direct API testing showed a fresh single-turn
-          // done-only call succeeds far more reliably than a continuation of a trail
-          // where the model already answered in prose. Retry ONCE more from a CLEAN
-          // conversation (just the original `messages`, none of the "I already
-          // declined" turns) so the model isn't anchored to its own prior refusal.
-          // Safe for the picker: `seen` (the discovered-candidate map) is a side
-          // effect of TOOL EXECUTION during the main run, not of conversation
-          // replay, so it's already populated regardless of what this attempt sees
-          // — an id this step fabricates still gets caught by the caller's
-          // nearestId/repickFromSeen salvage, same as any other unknown-id miss.
+          // Last resort — collapse the whole loop into ONE single-turn forced-tool
+          // call (issue #1157). Two failure modes land here and both are about
+          // conversation SHAPE, not tool forcing:
+          //   - llama.cpp / LM Studio + Hermes-class models answer the terminal
+          //     `done` step in prose whatever `tool_choice` says, while calling a
+          //     forced tool reliably from a single user prompt (the stateless pool
+          //     picker keeps working for the same operator on the same backend).
+          //   - GLM (Zhipu/Z.ai) declines the forced `done` ~1/3 of the time and
+          //     tends to KEEP declining once it has in the same conversation;
+          //     direct API testing showed a fresh single-turn call recovers far
+          //     more reliably than a continuation of the failed trail.
+          // Both want the same move, so this replaced the clean-context re-run that
+          // used to sit here: that one dropped the prose but still replayed the
+          // session window into a ToolLoopAgent, keeping the multi-turn shape it
+          // was trying to escape (and giving up the discovery trail with it).
+          // renderTerminalPrompt flattens the trail into the prompt instead, so the
+          // model still commits to a REAL surfaced id rather than fabricating one.
+          // Attempt count is unchanged (main → recovery → this), which matters:
+          // every attempt draws on the same shared deadline, so an extra leg would
+          // simply never be reached on the slow local rigs that need this most.
           if (!(result.staticToolCalls || []).some((c) => c.toolName === 'done')) {
-            console.log(`[${kind}] recovery also stopped without calling done — retrying once more from a clean context`);
-            lastVia = 'ai-sdk:agent:recovery2';
-            result = await runDeadlined(deadlineAt, kind, 'agent recovery (clean)',
-              buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice), messages);
-            steps = result.steps?.length ?? 0;
-            noteIfDeclined('recovery-clean', result);
+            console.log(`[${kind}] recovery also stopped without calling done — collapsing to a single-turn terminal call`);
+            lastVia = 'ai-sdk:agent:terminal';
+            try {
+              const prompt = renderTerminalPrompt(messages, discoveryTrail);
+              const t = await runDeadlinedCall(deadlineAt, kind, 'agent terminal collapse',
+                (signal) => objectViaToolCall(leg, {
+                  system, prompt, schema, temperature, maxOutputTokens, signal,
+                }));
+              terminalObject = t.object;
+              addUsage(t.usage);
+              terminalPrompt = prompt;
+              // The collapse is a real model call the record should count —
+              // steps otherwise reads as if the recovery's step total answered.
+              steps += 1;
+            } catch (e) {
+              // A miss here is not the end of the road — the text salvage below
+              // still gets a shot, and the caller's pool fallback after that. Log
+              // and carry on rather than throwing past both. Recorded alongside
+              // the declined attempts so /debug shows the whole cascade, not a
+              // silent gap between the recovery and the final throw.
+              const why = (e as Error)?.message || String(e);
+              console.log(`[${kind}] terminal collapse failed (${why}) — falling through to text salvage`);
+              declinedAttempts.push(`[terminal] ${why}`);
+            }
           }
         }
 
@@ -414,6 +488,10 @@ export async function djAgent({
           const doneCall = (result.staticToolCalls || []).find((c) => c.toolName === 'done');
           if (doneCall) {
             object = doneCall.input;
+          } else if (terminalObject !== undefined) {
+            // The single-turn collapse answered. objectViaToolCall has already
+            // Zod-parsed it, so it lands here schema-valid, same as a done call.
+            object = terminalObject;
           } else {
             // Salvage: some models (deepseek-v4-flash) end the forced loop emitting
             // the answer as text/JSON instead of a `done` call — even after the
@@ -430,7 +508,9 @@ export async function djAgent({
               // failover.ts's logFailurePreview into the container log line.
               err.text = declinedAttempts.length ? declinedAttempts.join('\n\n') : (result.text || '');
               err.finishReason = result.finishReason;
-              err.usage = result.usage;
+              // The full spend across every leg, not just the last result's —
+              // in the raw TokenUsage shape failureDiagnostics feeds usageOf.
+              err.usage = { inputTokens: spentUsage.input, outputTokens: spentUsage.output, totalTokens: spentUsage.total };
               err.steps = result.steps;
               throw err;
             }
@@ -441,18 +521,23 @@ export async function djAgent({
           object = stripThinking(result.text);
         }
 
-        // Flatten the discovery-tool trail for /debug (excludes the `done` tool).
-        const toolCalls = flattenToolCalls(result);
+        // The discovery-tool trail for /debug (excludes the `done` tool), carried
+        // from the main run rather than re-read off `result` — see captureTrail.
+        const toolCalls = discoveryTrail;
         return {
           value: { object, steps, toolCalls },
           via: lastVia,
           sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
-          usage: usageOf(result),
+          // Every billable leg summed — see addUsage above.
+          usage: spentUsage,
           perf: perfOf(result),
           warnings: warningsOf(result),
-          // Full, untruncated — the agent's entire input and trail.
+          // Full, untruncated — the agent's entire input and trail. When the
+          // collapse answered, the flattened prompt it actually saw is what makes
+          // that record readable, so it rides along beside the original messages.
           extra: {
             system, messages, toolCalls, steps,
+            ...(terminalPrompt ? { terminalPrompt } : {}),
             response: schema ? JSON.stringify(object, null, 2) : String(object ?? ''),
           },
         };

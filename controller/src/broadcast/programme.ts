@@ -31,6 +31,7 @@ import type { QueueApi } from './queue.js';
 import * as dj from '../llm/dj.js';
 import { runCapability, skillCatalog } from '../skills/_agent.js';
 import { djCallsAllowed } from './listeners.js';
+import { autoVoiceAllowed } from './voice-policy.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { zonedParts } from '../time.js';
@@ -153,6 +154,7 @@ export async function ensurePlan(ctx: SessionContext, now = session.contextDate(
     session.attachProgramme(prog);
   }
   if (prog.status !== 'pending') return;
+  if (!autoVoiceAllowed()) return;  // station voice is off — no beat will air, so don't buy a plan
   if (!optionalSegmentsAllowed()) return;  // over budget — stay pending, retry later
 
   const span = episodeSpan(now);
@@ -212,6 +214,9 @@ export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = 
   // episode twice. Stay pending: the boundary tick re-runs this after
   // runPersonaHandoff, which marks handoffAired on every exit path.
   if (session.pendingHandoff()) return false;
+  // Station voice off → stays pending and unmarked, like the budget case: flip
+  // the switch back mid-show and the intro can still open the remaining hours.
+  if (!autoVoiceAllowed()) return false;
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;  // stays pending — may air later this hour
 
   markIntroAired();
@@ -270,6 +275,7 @@ export async function featureTick(queue: QueueApi, ctx: SessionContext, now = ne
   const span = episodeSpan(now);
   const beat = `feature:${span.index}`;
   if (prog.beats?.[beat]) return;
+  if (!autoVoiceAllowed()) return;  // station voice is off (manual /dj/segment still runs the beat)
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return;
   await ensurePlan(ctx, now);  // late plan (budget freed up mid-show) still helps
   session.markProgrammeBeat(beat);
@@ -325,6 +331,7 @@ export async function outroTick(queue: QueueApi, ctx: SessionContext, now = new 
   if (!prog || prog.beats?.outro) return;
   const span = episodeSpan(now);
   if (span.index !== span.total - 1) return;  // not the final hour yet
+  if (!autoVoiceAllowed()) return;  // station voice is off (manual /dj/segment still runs the beat)
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return;
   session.markProgrammeBeat('outro');
   try {

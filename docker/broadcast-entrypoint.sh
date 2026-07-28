@@ -262,8 +262,67 @@ emit_mount /stream.opus "$OPUS_BITRATE"
 emit_mount /stream.flac "$FLAC_BITRATE_EST"
 emit_mount /stream.aac  "$AAC_BITRATE"
 
+# Trusted reverse proxies — what makes admin → Listeners show real listener
+# IPs instead of the edge's container address. Icecast's only peer is Caddy,
+# so unless an <x-forwarded-for> element names Caddy's address, every row
+# reads 172.x. icecast-KH matches on an EXACT IP (a CIDR is accepted and then
+# silently never matches), so the address has to be resolved, not described.
+#
+# Precedence:
+#   ICECAST_TRUSTED_PROXY_IPS   — explicit addresses (space/comma separated).
+#     The deterministic option: set it when the edge is pinned to a static IP,
+#     lives outside this compose network (byo compose, host-network nginx), or
+#     isn't resolvable by name from here.
+#   ICECAST_TRUSTED_PROXY_HOSTS — names to resolve at render time, default
+#     'caddy' (the bundled edge).
+#
+# The DNS path is deliberately best-effort. On a COLD `compose up` it misses:
+# caddy depends_on this container being healthy, and healthy means icecast is
+# already serving, so the name cannot resolve before this render — measured at
+# ~6s of "unresolved". Every subsequent restart (including the telnet
+# restart-mixer, which bounces this container) lands with caddy up and picks
+# the address up on its own. A miss degrades to today's behaviour — the proxy's
+# IP in the table — never to a wrong listener IP, so nothing downstream has to
+# handle a half-applied state. Operators who want it right from first boot pin
+# the edge and set ICECAST_TRUSTED_PROXY_IPS (see docs/deployment.md).
+TRUSTED_XML=/etc/icecast2/trusted-proxies.xml
+: > "$TRUSTED_XML"
+TRUSTED_LIST=""
+if [ -n "${ICECAST_TRUSTED_PROXY_IPS:-}" ]; then
+    TRUSTED_LIST=$(echo "$ICECAST_TRUSTED_PROXY_IPS" | tr ',' ' ')
+else
+    for _host in $(echo "${ICECAST_TRUSTED_PROXY_HOSTS:-caddy}" | tr ',' ' '); do
+        # ahosts, not hosts: `getent hosts` returns ONE address family, so on
+        # a dual-stack network it can hand back only the IPv6 while Caddy
+        # dials icecast over IPv4 — and an exact-IP match then never fires.
+        _found=$(getent ahosts "$_host" 2>/dev/null | awk '{print $1}' | sort -u || true)
+        [ -n "$_found" ] && TRUSTED_LIST="$TRUSTED_LIST $_found"
+    done
+fi
+
+# Only hex/dot/colon runs are addresses. A malformed entry is dropped rather
+# than interpolated — it would otherwise render XML icecast refuses to parse,
+# turning a cosmetic setting into a station that won't boot.
+TRUSTED_COUNT=0
+for _ip in $TRUSTED_LIST; do
+    case "$_ip" in
+        ''|*[!0-9a-fA-F.:]*)
+            echo "broadcast: WARNING ignoring malformed trusted proxy '$_ip'" >&2
+            continue
+            ;;
+    esac
+    echo "        <x-forwarded-for>$_ip</x-forwarded-for>" >> "$TRUSTED_XML"
+    TRUSTED_COUNT=$(( TRUSTED_COUNT + 1 ))
+done
+if [ "$TRUSTED_COUNT" -gt 0 ]; then
+    echo "broadcast: trusting X-Forwarded-For from$(sed 's/.*<x-forwarded-for>/ /;s|</x-forwarded-for>||' "$TRUSTED_XML" | tr '\n' ' ')" >&2
+else
+    echo "broadcast: no trusted proxy resolved — listener IPs will show the connecting peer" >&2
+fi
+
 # `r` splices the generated mount blocks (empty file = nothing) where the
-# marker sits, then the marker line itself is deleted.
+# marker sits, then the marker line itself is deleted. Same for the trusted
+# proxy elements.
 sed \
     -e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
     -e "s|\${ICECAST_ADMIN_PASSWORD}|$ICECAST_ADMIN_PASSWORD|g" \
@@ -273,6 +332,8 @@ sed \
     -e "s|\${ICECAST_QUEUE_SIZE}|$ICECAST_QUEUE_SIZE|g" \
     -e "/<!--@STREAM_MOUNTS@-->/r $MOUNTS_XML" \
     -e "/<!--@STREAM_MOUNTS@-->/d" \
+    -e "/<!--@TRUSTED_PROXIES@-->/r $TRUSTED_XML" \
+    -e "/<!--@TRUSTED_PROXIES@-->/d" \
     "$TEMPLATE" > "$RENDERED"
 chown icecast2 "$RENDERED" 2>/dev/null || true
 

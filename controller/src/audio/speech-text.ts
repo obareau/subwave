@@ -12,6 +12,19 @@
 // Digit-to-word expansion is NOT done here: every engine already reads plain
 // numbers naturally. The scope is symbols and markup only.
 //
+// TWO passes, and the split is load-bearing (issue #1186):
+//
+//   normalizeForDisplay() — markup + entity cleanup only. Safe for anything a
+//     PERSON reads: the booth log, the session the DJ remembers, the player's
+//     feed. Stripping `**bold**` makes a line more readable, never differently
+//     spelled.
+//   normalizeForSpeech()  — the above PLUS the pronunciation layer: operator
+//     corrections, unit/symbol expansion, the SUB/WAVE → "Subwave" rule.
+//     These are spelled for an ENGINE's benefit, not a reader's — "Ye" reads
+//     as "Yay" only so the voice says it right, and a listener seeing "Yay"
+//     in the written line is a bug, not a feature. Speech-only spellings must
+//     never be persisted anywhere a human sees them.
+//
 // No imports — pure module, unit-pinned by scripts/speech-text.test.ts.
 
 // Operator-defined speech correction: replace `from` with `to` wherever it
@@ -58,11 +71,11 @@ const DOLLAR_MAGNITUDE = '(?:\\s+(?:thousand|million|billion|trillion)\\b)?';
 // The $ amount itself: digits with their own formatting ("1,200", "12.50").
 const DOLLAR_AMOUNT = '\\d[\\d,]*(?:\\.\\d+)?';
 
-export function normalizeForSpeech(
-  text: string,
-  corrections?: readonly SpeechCorrection[],
-): string {
-  if (!text) return text;
+// Markup + entity cleanup — everything in the pipeline that is safe for a
+// READER as well as an engine. Shared by both public passes so display and
+// speech can never disagree about what the words are; only about how they're
+// spelled out loud.
+function stripMarkup(text: string): string {
   let t = text;
 
   // --- markdown / display markup (before unit rules, so `**76°F**` works) ---
@@ -89,6 +102,30 @@ export function normalizeForSpeech(
   t = t.replace(/&(?:#0*39|apos|#0*8217|rsquo);/gi, "'");
   t = t.replace(/&(?:#0*34|quot|#0*8220|ldquo|#0*8221|rdquo);/gi, '"');
   t = t.replace(/&nbsp;/gi, ' ');
+
+  return t;
+}
+
+// Markup removal can leave doubled spaces; neither speech nor a booth-log line
+// has layout to preserve.
+function collapseSpace(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+// The READER's form of a line: markup and entities cleaned up, spelling left
+// exactly as written. This is what gets logged, persisted to the session, and
+// pushed to the player — see the two-pass note at the top of the file.
+export function normalizeForDisplay(text: string): string {
+  if (!text) return text;
+  return collapseSpace(stripMarkup(text));
+}
+
+export function normalizeForSpeech(
+  text: string,
+  corrections?: readonly SpeechCorrection[],
+): string {
+  if (!text) return text;
+  let t = stripMarkup(text);
 
   // --- operator corrections (settings.tts.corrections) ---
   // After markdown/entity cleanup so a rule matches the readable text the
@@ -134,6 +171,34 @@ export function normalizeForSpeech(
   // --- station branding: TTS engines read "SUB/WAVE" as "sub slash wave" ---
   t = t.replace(/\bSUB\s*(?:\/|slash)\s*WAVE\b/gi, 'Subwave');
 
-  // Markup removal can leave doubled spaces; speech has no layout to preserve.
-  return t.replace(/\s+/g, ' ').trim();
+  return collapseSpace(t);
+}
+
+function wordCount(text: string): number {
+  const t = text.trim();
+  return t ? t.split(/\s+/).length : 0;
+}
+
+// Convert a SPOKEN-word ceiling into the equivalent DISPLAY-word ceiling.
+//
+// The talk-within-the-intro budget (llm enforceIntroBudget) is a DURATION
+// budget, so its word ceiling has to be counted on what the engine will
+// actually read — the pronunciation layer changes the count ("$5 million" is
+// two words that become four, a "Twenty88" → "twenty eighty-eight" rule turns
+// one into three). But the trim itself has to land on the DISPLAY text, whose
+// sentence and clause boundaries are the ones a listener will read back. So
+// rather than budget one string and trim another, fold the difference into the
+// pace scale: multiply by display÷spoken words and the ceiling stays a
+// spoken-word ceiling while the cut lands on display words.
+//
+// 1 when either side is empty (nothing to scale) or the two agree — the
+// overwhelmingly common case, which keeps an un-corrected station's budget
+// byte-identical to before the split. Clamped to a sane band so one
+// pathological rule (a correction that eats a whole sentence) can't collapse
+// or balloon every line's budget.
+export function spokenWordScale(display: string, spoken: string): number {
+  const d = wordCount(display);
+  const s = wordCount(spoken);
+  if (!d || !s) return 1;
+  return Math.min(4, Math.max(0.25, d / s));
 }

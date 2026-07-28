@@ -201,8 +201,39 @@ that isn't in the lean image (the `-heavy` images are ~1.9 GB):
   into that cache, so give it a few minutes. To go back, edit the Repository
   field back to `subwave-aio` and **Apply**.
 
+  **Got an NVIDIA card in the box?** There's a GPU flavour of the one-click
+  image too — `subwave-aio-cuda`, the same heavy features with CLAP + Demucs
+  running on the card instead of the CPU. It's the identical Edit flow with two
+  extra fields:
+  1. Install the Unraid **Nvidia Driver** plugin (Apps → search *Nvidia
+     Driver*) and reboot if it asks. Note your GPU's UUID from
+     **Settings → Nvidia Driver**.
+  2. **Docker** tab → **subwave** → **Edit** (*Advanced View* on).
+  3. **Repository** → `ghcr.io/perminder-klair/subwave-aio-cuda:latest`.
+  4. **Extra Parameters** → append `--runtime=nvidia` (keep the existing
+     `--add-host` value; the field takes both).
+  5. Set the two variables the template already ships (both blank by default):
+     `NVIDIA_VISIBLE_DEVICES` to your GPU UUID (or `all`), and
+     `NVIDIA_DRIVER_CAPABILITIES` to `compute,utility`.
+  6. **Apply**.
+
+  Nothing else changes — no separate analyzer container, no compose overlay
+  (that's the split stack's route). The analyze worker picks the device itself:
+  it uses the GPU when it can see one and otherwise logs a warning and carries
+  on with the CPU, so a half-finished setup degrades rather than breaking the
+  station. Pin it explicitly with the `ANALYZE_DEVICE` variable (`auto`, the
+  default, `cuda`, or `cpu`) if you'd rather be sure. Between passes the models
+  drop out of VRAM after ~5 idle minutes, so a co-resident Ollama gets the card
+  back (`ANALYZE_IDLE_UNLOAD_S` tunes that; `0` keeps them resident).
+
+  Fair warning on size: the CUDA image is **~4 GB compressed** (~11 GB on disk)
+  against `-heavy`'s ~1.3 GB, because the CUDA runtime ships inside the torch
+  wheels. That's the whole install — you still don't need a CUDA toolkit on the
+  host, just the driver plugin.
+
 Both heavy images are **amd64-only** (~1.9 GB); on an arm64 box you'd also need
-`DOCKER_DEFAULT_PLATFORM=linux/amd64` (emulated).
+`DOCKER_DEFAULT_PLATFORM=linux/amd64` (emulated). The CUDA flavours are
+amd64-only too, and there's no arm64/Jetson build.
 
 > Verify with `docker ps --filter name=sub-wave-analyzer`. Full details, the
 > `ANALYZE_AUDIO_EMBEDDING`/`ANALYZE_VOCAL_ACTIVITY` runtime flags, and

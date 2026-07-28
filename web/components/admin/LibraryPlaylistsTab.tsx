@@ -208,7 +208,7 @@ export default function LibraryPlaylistsTab({
       title="Playlists"
       sub={playlists ? `${rows.length} playlist${rows.length === 1 ? '' : 's'} in Navidrome` : ''}
       right={
-        <span className="flex items-center gap-1.5">
+        <span className="flex flex-wrap items-center gap-1.5">
           <Btn sm tone="accent" onClick={() => setCreating(c => !c)} disabled={busy}>
             <Plus size={11} /> New playlist
           </Btn>
@@ -224,7 +224,7 @@ export default function LibraryPlaylistsTab({
           <Input
             placeholder="playlist name"
             aria-label="New playlist name"
-            className="w-56"
+            className="w-56 max-w-full"
             value={newName}
             autoFocus
             onChange={(e: ChangeEvent<HTMLInputElement>) => setNewName(e.target.value)}
@@ -256,8 +256,8 @@ export default function LibraryPlaylistsTab({
                 aria-expanded={open}
               >
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                <span className="lib-title">{pl.name}</span>
-                <span className="text-[11px] whitespace-nowrap text-muted">
+                <span className="lib-title min-w-0">{pl.name}</span>
+                <span className="min-w-0 truncate text-[11px] text-muted">
                   {pl.songCount} track{pl.songCount === 1 ? '' : 's'}
                   {pl.durationSec ? ` · ${fmtDuration(pl.durationSec)}` : ''}
                   {pl.owner ? ` · ${pl.owner}` : ''}
@@ -283,7 +283,7 @@ export default function LibraryPlaylistsTab({
             {editId === pl.id && (
               <div className="flex flex-wrap items-center gap-3 border-t border-dashed border-separator-strong bg-[var(--ink-softer)] px-4 py-3">
                 <Input
-                  className="w-56"
+                  className="w-56 max-w-full"
                   aria-label="Playlist name"
                   value={editName}
                   autoFocus

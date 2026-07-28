@@ -96,8 +96,8 @@ export function JinglesSection({
         }
         actions={
           <>
-            <Btn sm onClick={() => setModal('import')} disabled={busy}>Import</Btn>
-            <Btn sm tone="solid" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
+            <Btn sm className="min-h-9 sm:min-h-0" onClick={() => setModal('import')} disabled={busy}>Import</Btn>
+            <Btn sm tone="solid" className="min-h-9 sm:min-h-0" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
           </>
         }
       />
@@ -106,7 +106,7 @@ export function JinglesSection({
       <PanelBox>
         <PanelHead label="how often" right={<Badge variant="accent">restart required</Badge>} />
         <div className="flex flex-wrap items-center gap-5 px-[18px] py-[18px]">
-          <div className="flex flex-none items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5 sm:flex-none">
             <span className="font-mono text-[13px]">1 jingle every</span>
             <Input
               className="mono-num w-[84px]"
@@ -126,6 +126,7 @@ export function JinglesSection({
           <Btn
             sm
             tone="accent"
+            className="min-h-9 sm:min-h-0"
             onClick={() => saveSettings({ jingleRatio: parseInt(jingleRatio, 10) })}
             disabled={busy || !ratioDirty}
           >
@@ -144,7 +145,10 @@ export function JinglesSection({
             {jingles.map(j => (
               <div
                 key={j.filename}
-                className="grid grid-cols-[1fr_auto] items-center gap-[18px] px-[18px] py-[15px]"
+                /* Mobile drops the play/delete cluster under the text: the two
+                   icon buttons plus the gap eat 90px of the ~310px a panel has
+                   at 390px, which squeezes the quote to a two-word column. */
+                className="grid grid-cols-1 items-center gap-3 px-[18px] py-[15px] sm:grid-cols-[1fr_auto] sm:gap-[18px]"
               >
                 <div className="min-w-0">
                   <div className="font-display text-[18px] leading-[1.35] [text-wrap:pretty] italic">
@@ -175,6 +179,7 @@ export function JinglesSection({
                       variant="ghost"
                       size="icon"
                       aria-label="Delete jingle"
+                      className="size-9 sm:size-8"
                       disabled={busy || j.builtin}
                       onClick={() => onDelete(j.filename)}
                     >
@@ -196,8 +201,8 @@ export function JinglesSection({
         sub="we’ll voice it with Piper TTS"
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
-            <Btn sm tone="accent" onClick={doCreate} disabled={busy || !jingleText.trim()}>
+            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={() => setModal(null)}>Cancel</Button>
+            <Btn sm tone="accent" className="min-h-9 sm:min-h-0" onClick={doCreate} disabled={busy || !jingleText.trim()}>
               {busy ? 'Generating…' : 'Create'}
             </Btn>
           </>
@@ -223,8 +228,8 @@ export function JinglesSection({
         sub="bring your own mp3 / wav — select one or many"
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={closeImport} disabled={!!importProgress}>Cancel</Button>
-            <Btn sm tone="accent" onClick={doImport} disabled={busy || !importFiles.length}>
+            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={closeImport} disabled={!!importProgress}>Cancel</Button>
+            <Btn sm tone="accent" className="min-h-9 sm:min-h-0" onClick={doImport} disabled={busy || !importFiles.length}>
               {importProgress
                 ? 'Importing…'
                 : importFiles.length > 1

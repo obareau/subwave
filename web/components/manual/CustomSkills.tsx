@@ -1,4 +1,5 @@
 import ManualPage from './ManualPage';
+import ManualFigure from './ManualFigure';
 import CodeBlock from "@/components/CodeBlock";
 
 export default function CustomSkills() {
@@ -52,6 +53,13 @@ export default function CustomSkills() {
           a <code className="bs-code-inline">tool.mjs</code> data fetcher is still added on
           disk + Rescan.
         </p>
+        <ManualFigure
+          src="/screenshots/admin-skills.webp"
+          alt="The admin Skills page: a table of skills with their briefs, cooldowns and assigned DJs, each with a Run now button and an on/off switch, above buttons for the community catalog, New skill, and Rescan"
+          caption="The admin Skills page. Custom ones carry a CUSTOM tag; each row shows its brief, its cooldown, and how many DJs may run it. Run now fires one on demand, ignoring both."
+          width={2732}
+          height={2048}
+        />
       </section>
 
       <section className="bs-section">

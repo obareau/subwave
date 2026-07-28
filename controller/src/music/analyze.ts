@@ -241,7 +241,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   let reAnalyzeScope: string[] | null = null;
   if (opts.reAnalyze) {
     if (opts.rescan) reAnalyzeScope = db.analysedIds();
-    db.clearAnalysis({ keepVocal: !vocalBackfill });
+    db.clearAnalysis({ keepVocal: !vocalBackfill, clearStems: stemCache });
     console.log(
       `[analyze] --re-analyze: cleared existing analysis${vocalBackfill ? '' : ' (kept vocal ranges)'}` +
         (reAnalyzeScope ? ` — re-scan scope: ${reAnalyzeScope.length} already-analysed tracks` : ''),
@@ -315,6 +315,53 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     // scope, where the per-track vocal flag handles the rebuild and capability is
     // surfaced in the admin UI instead).
     console.log('[analyze] vocal backfill skipped — backend has no Demucs (build tts-heavy WITH_DEMUCS=1 to enable vocal ranges)');
+  }
+
+  // Stem backfill: the fourth widening (after CLAP vectors, vocal ranges and
+  // the tail-vocal re-target), for tracks that have never had a stem
+  // pass. Without it, turning the stem cache on did NOTHING to an
+  // already-analysed library — the scope above only re-targets missing CLAP
+  // vectors and missing vocal ranges, so a fully-scanned library reported
+  // "all tracks current" and the operator's only route was a --re-analyze
+  // that wipes every vector and can't resume across runs.
+  //
+  // `stemCache` already carries the capability gate (Demucs present), the same
+  // guard the vocal widening needs to avoid re-scanning the library forever for
+  // a guaranteed no-op. Suppressed under a fixed re-scan scope for the same
+  // reason as the other two: those tracks re-separate anyway via stems_dir.
+  //
+  // Capped at what the budget can still hold. The stem set for a track is a
+  // full Demucs separation; queuing thousands the LRU sweep will evict on the
+  // way out is hours of GPU time thrown away, and it's why a big library
+  // looked like it "only ever caches the last 600 songs". The cap is announced
+  // — a silent truncation would read as "the backfill finished".
+  if (stemCache && !reAnalyzeScope) {
+    const headroom = await stemCacheStore.headroomTracks();
+    if (headroom <= 0) {
+      console.log(
+        `[analyze] stem backfill skipped — cache is at its ${settings.get()?.audio?.stemCacheGb ?? 15} GB budget ` +
+          '(raise it in Settings → Transitions to cache more tracks)',
+      );
+    } else {
+      const seen = new Set(ids);
+      const needing = db.needsStemsIds().filter(id => !seen.has(id));
+      // Under --limit, only the slots the bpm/CLAP/vocal scopes haven't already
+      // spent are available — sizing off the raw cap would log stem tracks a
+      // final slice then silently drops, the exact "reads as finished"
+      // truncation the announcement exists to avoid.
+      const room = cap ? Math.min(Math.max(0, cap - ids.length), headroom) : headroom;
+      const stemIds = needing.slice(0, room);
+      if (stemIds.length > 0) {
+        ids = [...ids, ...stemIds];
+        const left = needing.length - stemIds.length;
+        console.log(
+          `[analyze] stem backfill: +${stemIds.length} tracks with no cached stems` +
+            (left > 0 ? ` (${left} left for later passes — budget holds ~${headroom} more)` : ''),
+        );
+      }
+    }
+  } else if (settings.get()?.audio?.stemCache === true && !reAnalyzeScope) {
+    console.log('[analyze] stem backfill skipped — backend has no Demucs (use the heavy analyzer image to cache stems)');
   }
 
   if (ids.length === 0) {
@@ -470,6 +517,14 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         keyRanges: a.keyRanges,
         vocalRanges,
         outro,
+        // Stamp the stem attempt whenever the worker actually reached the
+        // stem-writing step — true (written) OR false (the write failed for
+        // this track). Both are settled outcomes, and stamping the miss is
+        // what stops a track that can never produce stems from being
+        // re-targeted on every pass forever. null means the worker never got
+        // that far (no stems_dir requested, or no Demucs), so the track stays
+        // in scope for a later, better-equipped pass.
+        stemsAttempted: a.stemsCached !== null,
       });
       if (vocalRanges != null) vocalAnalyzed += 1;
       // Stuck-case telemetry (vocal-aware transitions): a vocal pass that

@@ -11,7 +11,7 @@
 // boots straight into the right skin; contained showcases follow the remote
 // station strictly (no override, no cache poisoning).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useThemeSwitcher } from '@/components/ThemeProvider';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
@@ -177,7 +177,20 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
         ) : (
           <>
             <audio ref={audioRef} crossOrigin="anonymous" preload="auto" />
-            <Skin contained={contained} portalNode={portalNode} />
+            {/* Skins are next/dynamic chunks with no boundary of their own, so
+                a face this build hasn't fetched yet SUSPENDS on first render.
+                Without this boundary the suspension escapes to the nearest one
+                up the tree — on the landing page that's the whole page, which
+                React then hides and re-reveals: every motion element in the
+                broadsheet gets its `initial` re-applied without its mount
+                animation re-running, and the page stays at opacity 0 for good
+                (tabbing to a station whose ui.skin isn't the loaded one blanked
+                the entire landing page). Keeping it here also means the swap
+                never disturbs the <audio> element above it — playback rides
+                through a skin change. */}
+            <Suspense fallback={null}>
+              <Skin contained={contained} portalNode={portalNode} />
+            </Suspense>
             {/* Same prompt, overlaid, when only the stream is locked —
                 shell-level so every skin gets it without changes. */}
             <StationPasswordGate phase={auth.phase} unlock={auth.unlock} solid={false} />

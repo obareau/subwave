@@ -1,0 +1,47 @@
+'use client';
+
+// The tab strip across the top of the library panel.
+//
+// Part of the library/ split - see ../LibraryPanel.tsx.
+
+import type { ReactNode } from 'react';
+import { Search, Ban, Music, LayoutGrid, History } from 'lucide-react';
+import { cn } from '../../../lib/cn';
+ 
+import type { Tab } from './types';
+
+export function Tabs({ tab, setTab }: {
+  tab: Tab;
+  setTab: (t: Tab) => void;
+}) {
+  const items: { id: Tab; name: string; sub: string; icon: ReactNode }[] = [
+    { id: 'tracks', name: 'Tracks', sub: 'newest & needs tags', icon: <Music size={17} /> },
+    { id: 'browse', name: 'Browse', sub: 'tagged index', icon: <LayoutGrid size={17} /> },
+    { id: 'search', name: 'Search', sub: 'navidrome', icon: <Search size={17} /> },
+    { id: 'history', name: 'History', sub: 'what aired', icon: <History size={17} /> },
+    { id: 'blocked', name: 'Blocked', sub: 'never plays', icon: <Ban size={17} /> },
+  ];
+  return (
+    // The strip is a nowrap `overflow-x:auto` scroller (globals.css). At 390px
+    // five tabs are ~700px, so only two are ever in view and the rest read as
+    // clipped. Below sm: the subtitles drop, the padding tightens and the strip
+    // wraps — three tabs a line, nothing hidden. sm: hands it all back to the
+    // CSS. (`!` because `.admin-root .lib-*` outranks a bare utility.)
+    <div className="lib-tabs !flex-wrap sm:!flex-nowrap">
+      {items.map(it => (
+        <button key={it.id} type="button" className={cn('lib-tab !px-2.5 sm:!px-[18px]', tab === it.id && 'on')} onClick={() => setTab(it.id)}>
+          {it.icon}
+          <span className="min-w-0">
+            <span className="lib-tab-name">{it.name}</span>
+            <span className="lib-tab-sub !hidden sm:!block">{it.sub}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// browse filters
+// ---------------------------------------------------------------------------
+

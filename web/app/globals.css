@@ -2713,6 +2713,69 @@ html.lite .sw-ripple-circle {
     margin-left: auto;
 }
 
+/* ── Manual figures — screenshots set into a page, broadsheet plate style ── */
+.bs-manual-figure {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: clamp(18px, 3vw, 28px) 0 0;
+}
+.bs-manual-figure img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--ink);
+    background: var(--bg);
+}
+/* Anything taller than it is wide is framed to its top: a handset shot at
+   handset width, a long scrolling panel wider so its detail stays legible.
+   The frame is an aspect-ratio (not a pixel height) so the crop holds at every
+   column width — a fixed height would start cutting the sides once `cover`
+   had to scale up to fill it. */
+.bs-manual-figure[data-shot="phone"] img,
+.bs-manual-figure[data-shot="tall"] img {
+    object-fit: cover;
+    object-position: top;
+}
+.bs-manual-figure[data-shot="phone"] img {
+    width: min(100%, 300px);
+    aspect-ratio: 828 / 1240;
+}
+.bs-manual-figure[data-shot="tall"] img {
+    width: min(100%, 420px);
+    aspect-ratio: 17 / 20;
+}
+
+.bs-manual-figcaption {
+    margin: 0;
+    font-size: 10px;
+    line-height: 1.5;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.bs-manual-figcaption b {
+    font-weight: 700;
+    color: var(--accent);
+}
+
+/* Two figures side by side — stacks under the sidebar breakpoint. */
+.bs-manual-figrow {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: clamp(14px, 2.4vw, 24px);
+    margin: clamp(18px, 3vw, 28px) 0 0;
+}
+.bs-manual-figrow .bs-manual-figure {
+    margin-top: 0;
+}
+@media (max-width: 720px) {
+    .bs-manual-figrow {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    NAVIDROME — "works with your library" integration section.
    ───────────────────────────────────────────────────────────────────────── */
@@ -4227,6 +4290,29 @@ html:has(.admin-root.paper) {
     border: 1px solid var(--ink);
     background: var(--bg);
 }
+/* A shot taller than it is wide — a phone screen, a long scrolling panel —
+   would run to a metre of ribbon at full column width. Wrap it in
+   <figure data-shot="phone|tall"> in the markdown and it gets framed to its
+   top instead, the same treatment as the manual's figures. The frame is an
+   aspect-ratio, not a pixel height, so the crop holds at every column width. */
+.bs-prose figure {
+    margin: 1.6em 0;
+}
+.bs-prose figure img {
+    margin: 0;
+}
+.bs-prose figure[data-shot] img {
+    object-fit: cover;
+    object-position: top;
+}
+.bs-prose figure[data-shot="phone"] img {
+    width: min(100%, 300px);
+    aspect-ratio: 828 / 1240;
+}
+.bs-prose figure[data-shot="tall"] img {
+    width: min(100%, 420px);
+    aspect-ratio: 17 / 20;
+}
 /* Drop cap on the opening paragraph — vermilion, three lines tall. */
 .bs-prose > p:first-of-type::first-letter {
     font-size: 3.4em;
@@ -4592,10 +4678,54 @@ html:has(.admin-root.paper) {
     color: var(--muted);
 }
 .bs-skill-brief {
+    display: block;
     margin: 0;
     font-size: 14px;
     line-height: 1.6;
     color: var(--muted);
+}
+/* Long briefs (a persona soul runs to 1000 chars) are wrapped in a native
+   <details> by components/ui/catalog-brief.tsx and clamped to four lines while
+   closed — CSS-only, so the showcase pages stay server-rendered. */
+.bs-skill-brief-block:not([open]) .bs-skill-brief {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+    overflow: hidden;
+}
+.bs-skill-brief-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    cursor: pointer;
+    /* Drop the native disclosure triangle — the Read more / Show less line is
+       the affordance, and the marker would sit against the clamped prose. */
+    list-style: none;
+}
+.bs-skill-brief-summary::-webkit-details-marker {
+    display: none;
+}
+.bs-skill-brief-toggle {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+.bs-skill-brief-summary:hover .bs-skill-brief-toggle {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+/* One label at a time; display:none keeps the hidden one out of the a11y tree,
+   so the summary reads with the right verb. */
+.bs-skill-brief-close,
+.bs-skill-brief-block[open] .bs-skill-brief-open {
+    display: none;
+}
+.bs-skill-brief-block[open] .bs-skill-brief-close {
+    display: inline;
 }
 .bs-skill-tags {
     list-style: none;

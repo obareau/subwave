@@ -11,6 +11,15 @@ import type { RefObject } from 'react';
 
 export type StyleVars = Record<string, string | number | null | undefined>;
 
+/** `removeProperty` takes the hyphenated CSS name, so clearing a camelCase key
+ *  like `marginBottom` silently no-ops and the property sticks forever. Setting
+ *  works either way (camelCase assignment), which is why this only ever bit the
+ *  callers that clear a multi-word property. Custom properties are
+ *  case-sensitive and already hyphenated — leave them exactly as given. */
+function cssName(key: string): string {
+  return key.startsWith('--') ? key : key.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`);
+}
+
 export function useDynamicStyle<E extends HTMLElement | SVGElement>(
   ref: RefObject<E | null>,
   vars: StyleVars,
@@ -25,7 +34,7 @@ export function useDynamicStyle<E extends HTMLElement | SVGElement>(
     if (!el) return;
     for (const [k, v] of Object.entries(vars)) {
       if (v == null || v === '') {
-        el.style.removeProperty(k);
+        el.style.removeProperty(cssName(k));
         continue;
       }
       // CSS variables (prefixed with `--`) use setProperty; everything else

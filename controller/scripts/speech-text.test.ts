@@ -5,9 +5,15 @@
 // Two families of pins: display forms that MUST convert to spoken forms
 // (weather units, %, $, mph, &, markdown emphasis), and real-world text that
 // MUST survive untouched (artist names, Chatterbox [laugh] tags, decimals).
+//
+// Plus the display/speech split (#1186): normalizeForDisplay does the markup
+// cleanup and NONE of the pronunciation layer, so a speech-only spelling can
+// never reach the booth log, the session, or the player's feed.
 
 import assert from 'node:assert/strict';
-import { normalizeForSpeech } from '../src/audio/speech-text.js';
+import {
+  normalizeForDisplay, normalizeForSpeech, spokenWordScale,
+} from '../src/audio/speech-text.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -162,6 +168,56 @@ async function main() {
     const rules = [{ from: 'drum and bass', to: 'drum n bass' }];
     assert.equal(normalizeForSpeech('classic drum and bass hour', rules),
       'classic drum n bass hour');
+  });
+
+  // --- the display pass (#1186) -------------------------------------------
+  console.log('\nnormalizeForDisplay — reader\'s form, no pronunciation layer');
+
+  await test('operator corrections never touch the display form', () => {
+    // The two rules from the report: a name spelled for the engine's benefit
+    // ("Ye" → "Yay") and a number that needs grouping ("Twenty88").
+    assert.equal(normalizeForDisplay('Ye closing us out'), 'Ye closing us out');
+    assert.equal(normalizeForDisplay('that Twenty88 cut'), 'that Twenty88 cut');
+  });
+  await test('unit/symbol expansion is speech-only', () => {
+    assert.equal(normalizeForDisplay('76°F and $5 at the door'), '76°F and $5 at the door');
+    assert.equal(normalizeForSpeech('76°F and $5 at the door'),
+      '76 degrees Fahrenheit and 5 dollars at the door');
+  });
+  await test('station branding keeps its slash on the page', () => {
+    assert.equal(normalizeForDisplay('you are on SUB/WAVE'), 'you are on SUB/WAVE');
+    assert.equal(normalizeForSpeech('you are on SUB/WAVE'), 'you are on Subwave');
+  });
+  await test('markup and entities ARE cleaned up — readable, not respelled', () => {
+    assert.equal(normalizeForDisplay('**Hozier**  up  next'), 'Hozier up next');
+    assert.equal(normalizeForDisplay('Simon &amp; Garfunkel'), 'Simon & Garfunkel');
+    assert.equal(normalizeForDisplay('## Late shift\n_finally_'), 'Late shift finally');
+  });
+  await test('[laugh] tags and empty input behave as in the speech pass', () => {
+    assert.equal(normalizeForDisplay('[laugh] anyway'), '[laugh] anyway');
+    assert.equal(normalizeForDisplay(''), '');
+  });
+
+  // --- the intro-budget bridge --------------------------------------------
+  console.log('\nspokenWordScale — spoken-word ceiling → display-word ceiling');
+
+  await test('1 when the two forms have the same word count', () => {
+    assert.equal(spokenWordScale('one two three', 'one two three'), 1);
+    // A same-length substitution ("Ye" → "Yay") leaves the budget untouched.
+    assert.equal(spokenWordScale('Ye closing us out', 'Yay closing us out'), 1);
+  });
+  await test('a correction that EXPANDS shrinks the display budget', () => {
+    // 3 display words → 5 spoken: the display ceiling has to be 3/5ths.
+    assert.equal(spokenWordScale('that Twenty88 cut', 'that twenty eighty eight cut'), 3 / 5);
+  });
+  await test('a correction that DROPS words widens it', () => {
+    assert.equal(spokenWordScale('it was literally the best', 'it was the best'), 5 / 4);
+  });
+  await test('clamped to [0.25, 4], and 1 on either side empty', () => {
+    assert.equal(spokenWordScale('a b c d e f g h i j', 'x'), 4);
+    assert.equal(spokenWordScale('x', 'a b c d e f g h i j'), 0.25);
+    assert.equal(spokenWordScale('', 'anything'), 1);
+    assert.equal(spokenWordScale('anything', '   '), 1);
   });
 
   console.log(failures ? `\n${failures} failing` : '\nall passing');

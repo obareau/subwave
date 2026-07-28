@@ -154,13 +154,13 @@ export default function ArchivesPanel() {
             so keep an eye on disk if the station runs 24/7.
           </div>
         </div>
-        <div className="flex items-center gap-4 bg-[var(--ink-softer)] p-3.5">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 bg-[var(--ink-softer)] p-3.5">
           <span className="caption">{entries.length} hour{entries.length === 1 ? '' : 's'}</span>
           <span className="caption text-vermilion">{fmtSize(totalBytes)} total</span>
           <Btn
             sm
             tone="danger"
-            className="ml-auto"
+            className="ml-auto min-h-9 sm:min-h-0"
             onClick={() => setConfirmClear(true)}
             disabled={clearing || entries.length === 0}
           >
@@ -198,8 +198,8 @@ export default function ArchivesPanel() {
         >
           <ul className="divide-y divide-[var(--ink-soft)]">
             {group.items.map(e => (
-              <li key={e.path} className="flex items-center justify-between py-2">
-                <div className="flex items-center gap-3">
+              <li key={e.path} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 py-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
                   <span className="mono-num text-[13px] font-bold">{hourLabel(e.hour)}</span>
                   <span className="text-[11px] text-muted">{fmtSize(e.bytes)}</span>
                   <span className="text-[10px] text-muted">{relTime(e.mtime)} ago</span>
@@ -207,6 +207,7 @@ export default function ArchivesPanel() {
                 <Btn
                   sm
                   tone="accent"
+                  className="min-h-9 shrink-0 sm:min-h-0"
                   onClick={() => download(e.path)}
                   disabled={downloading === e.path}
                 >

@@ -62,12 +62,16 @@ export default function EndpointCard({ endpoint, apiBase, adminFetch }: Props) {
       onToggle={e => setOpen((e.target as HTMLDetailsElement).open)}
       className="border border-separator-strong bg-bg"
     >
-      <summary className="flex cursor-pointer items-center gap-2 px-3 py-2">
+      {/* Phone: method + path + auth pills stay on the header line and the
+          one-line summary drops underneath (order-last + w-full), instead of
+          the path breaking mid-word to make room for a 4-word blurb. Restored
+          to the single flex row from sm: up. */}
+      <summary className="flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2 sm:flex-nowrap">
         <span className={`shrink-0 border px-1.5 py-[2px] text-[10px] font-bold tracking-[0.1em] ${METHOD_CLASS[endpoint.method] || ''}`}>
           {endpoint.method}
         </span>
-        <code className="text-[12px] font-semibold">{endpoint.path}</code>
-        <span className="truncate text-[11px] text-muted">{endpoint.summary}</span>
+        <code className="shrink-0 text-[12px] font-semibold">{endpoint.path}</code>
+        <span className="order-last w-full truncate text-[11px] text-muted sm:order-none sm:w-auto">{endpoint.summary}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           {endpoint.auth === 'admin'
             ? <Pill tone="accent">admin</Pill>
@@ -97,7 +101,11 @@ export default function EndpointCard({ endpoint, apiBase, adminFetch }: Props) {
         <div className="mt-3">
           <div className="caption mb-1 flex items-center gap-3">
             <span>Sample response</span>
-            <button type="button" className="text-[11px] text-[var(--accent)] underline" onClick={copyCurl}>
+            <button
+              type="button"
+              className="inline-flex min-h-9 items-center text-[11px] text-[var(--accent)] underline sm:min-h-0"
+              onClick={copyCurl}
+            >
               Copy as curl
             </button>
           </div>

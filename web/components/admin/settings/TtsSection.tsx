@@ -31,7 +31,7 @@ const KOKORO_LANG_LABELS: Record<string, string> = {
   'en-gb': 'English (UK)',
   'en-us': 'English (US)',
   cmn: 'Chinese (Mandarin)',
-  fr: 'French',
+  'fr-fr': 'French',
   hi: 'Hindi',
   it: 'Italian',
   ja: 'Japanese',
@@ -390,6 +390,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   const save = async () => {
     await saveSettings({
       tts: {
+        enabled: form.tts.enabled,
         defaultEngine: form.tts.defaultEngine,
         kokoro: { voice: form.tts.kokoro?.voice, lang: form.kokoroLang },
         chatterbox: { referenceVoice: form.tts.chatterbox?.referenceVoice ?? '' },
@@ -462,6 +463,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     voiceUseSpeakerBoost?: boolean;
   };
   const savedTts: {
+    enabled?: boolean;
     defaultEngine?: string;
     kokoro?: { voice?: string; lang?: string };
     chatterbox?: { referenceVoice?: string };
@@ -494,7 +496,10 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   );
 
   const ttsDirty =
-    form.tts.defaultEngine !== savedEngine
+    // Absent reads as ON, matching the controller's coercion — so an untouched
+    // pre-upgrade settings.json never shows up as dirty.
+    form.tts.enabled !== (savedTts.enabled !== false)
+    || form.tts.defaultEngine !== savedEngine
     || (form.tts.kokoro?.voice || '') !== savedKokoroVoice
     || (form.kokoroLang || '') !== savedKokoroLang
     || (form.tts.chatterbox?.referenceVoice || '') !== savedChatterboxVoice
@@ -554,6 +559,41 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           { n: String(engines.length), l: 'engines', accent: true },
         ]}
       />
+
+      <Card title="Station voice" sub={form.tts.enabled ? 'on air' : 'music only'}>
+        <div className="field">
+          <Label>DJ speech</Label>
+          <Seg
+            accent
+            value={form.tts.enabled ? 'on' : 'off'}
+            options={[
+              { id: 'on', label: 'On', title: 'The DJ speaks as configured' },
+              { id: 'off', label: 'Music only', title: 'The DJ never speaks' },
+            ]}
+            onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, enabled: v === 'on' } }))}
+          />
+          <p className="mt-2 text-[13px] leading-[1.55] text-muted">
+            {form.tts.enabled ? (
+              <>
+                Turning this off makes the station <strong>music only</strong>: no links,
+                idents, hourly checks, segments, banter, mic-passes, programme beats or
+                spoken request intros — and no LLM tokens spent writing them. Music keeps
+                playing, listener requests are still queued, and manual triggers on the DJ
+                page still fire.
+              </>
+            ) : (
+              <>
+                The DJ is <strong>silent</strong>. Tracks are still picked and listener
+                requests still queue — they just play without a spoken intro. Manual
+                triggers on the DJ page still fire.{' '}
+                <strong>Jingles are separate</strong>: pre-rendered stingers keep playing on
+                Liquidsoap’s own rotate. Silence those with Jingle ratio <code>0</code> under
+                Station (needs a mixer restart).
+              </>
+            )}
+          </p>
+        </div>
+      </Card>
 
       <Card title="Voice engine" sub="active default">
         <div className="grid gap-[18px]">
@@ -677,7 +717,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                     setForm(f => ({ ...f, kokoroLang: val === '__auto__' ? '' : val }))
                   }
                 >
-                  <SelectTrigger className="w-[260px]" aria-label="Language override"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-[260px] max-w-full" aria-label="Language override"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       <SelectItem value="__auto__">Natural, voice default</SelectItem>
@@ -829,7 +869,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
             <div className="mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-[18px]">
               <div className="field">
                 <Label>Model</Label>
-                <div className="flex items-stretch gap-2">
+                <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                   {ttsDiscovery.models.length > 0 ? (
                     <ModelCombobox
                       models={ttsDiscovery.models}
@@ -947,7 +987,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <>
                   <div className="field">
                     <Label>{form.tts.cloud.provider === 'elevenlabs' ? 'ElevenLabs' : 'OpenAI'} API key</Label>
-                    <div className="flex items-stretch gap-2">
+                    <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                       <Input
                         type="password"
                         autoComplete="off"

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import ManualPage from './ManualPage';
+import ManualFigure from './ManualFigure';
 
 export default function HowTheDjWorks() {
   return (
@@ -58,6 +59,13 @@ export default function HowTheDjWorks() {
           shared by other stations — browse it, then install any of them from your own
           admin console.
         </p>
+        <ManualFigure
+          src="/screenshots/admin-personas.webp"
+          alt="The persona editor: avatar, on-air name, tagline and language on the left, the soul text on the right, and below them the talk-frequency and script-length sliders, a DJ mode switch, and three tone dials"
+          caption="One persona, opened up. Identity on top — name, tagline, the soul every line is written from — and the behaviour dials below: talk frequency, script length, DJ mode, and the tone knobs."
+          width={2732}
+          height={2048}
+        />
       </section>
 
       <section className="bs-section">

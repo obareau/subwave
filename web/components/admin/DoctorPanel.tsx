@@ -598,7 +598,12 @@ export default function DoctorPanel() {
                       >
                         <StatusPill status={f.status} />
                         <span className="font-bold">{f.label}</span>
-                        {f.detail && <span className="font-mono text-[12px] text-muted">{f.detail}</span>}
+                        {/* Details are machine values — model ids, paths, URLs
+                            with no break opportunity. Let them wrap rather than
+                            run past the card's clipped edge on a phone. */}
+                        {f.detail && (
+                          <span className="min-w-0 font-mono text-[12px] break-words text-muted">{f.detail}</span>
+                        )}
                         {f.fix && (
                           <span className="ml-auto">
                             <Btn sm onClick={() => runFix(f.fix as FixAction)} disabled={busyFix === f.fix.id}>
@@ -606,7 +611,7 @@ export default function DoctorPanel() {
                             </Btn>
                           </span>
                         )}
-                        {f.hint && <p className="w-full text-[12px] leading-[1.5] text-muted">{f.hint}</p>}
+                        {f.hint && <p className="w-full text-[12px] leading-[1.5] break-words text-muted">{f.hint}</p>}
                       </TaskItem>
                     ))}
                   </TaskContent>

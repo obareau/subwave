@@ -12,8 +12,14 @@
 
 import * as settings from '../settings.js';
 import { zonedParts } from '../time.js';
+import { autoVoiceAllowed } from './voice-policy.js';
 
 export function shouldFire(kind, now = new Date()) {
+  // Station-wide voice switch (settings.tts.enabled). Sits above the frequency
+  // ladder because it isn't a cadence — it's off. Manual /dj/segment triggers
+  // never reach here, so they stay exempt exactly as they are from 'silent'.
+  if (!autoVoiceAllowed()) return false;
+
   // effectiveFrequency bumps a DJ-mode persona one rung up the ladder, so it
   // drops more idents / time checks — a working DJ marks the clock more often.
   const f = settings.effectiveFrequency(settings.getEffectivePersona(now));

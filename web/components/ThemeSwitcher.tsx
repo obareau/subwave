@@ -87,7 +87,12 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
           title="Appearance"
           className={cn(
             'v3-focus inline-flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none',
-            variant === 'admin' ? 'caption text-muted' : 'text-muted hover:text-ink',
+            // The admin header packs this next to several other icon-only
+            // controls, so it needs a thumb-sized box on a phone; the dense
+            // desktop icon returns at sm. Player chrome is untouched.
+            variant === 'admin'
+              ? 'caption min-h-9 min-w-9 text-muted sm:min-h-0 sm:min-w-0'
+              : 'text-muted hover:text-ink',
           )}
         >
           <Palette className="h-4 w-4" aria-hidden="true" />

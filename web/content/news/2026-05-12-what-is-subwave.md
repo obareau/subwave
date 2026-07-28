@@ -25,6 +25,8 @@ That's the whole machine.
 
 The DJ pulls from what you actually own, so the station sounds like your taste, not an algorithm's idea of it.
 
+![The player: the show, mood and weather along the top, cover art beside the track title and artist, a line the DJ just read underneath, a panel rail on the right, and a waveform above the transport bar](/screenshots/listen.webp)
+
 ## Tune in
 
 Open the player and hit play. If you're setting up your own, the [setup guide](/setup) gets you on air in about ten minutes. Everything past the first three settings is configured from the admin screen: the DJ's voice, its personality, how chatty it is, the look of the player.

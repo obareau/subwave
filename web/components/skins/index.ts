@@ -22,12 +22,12 @@ export const SKINS: SkinManifest[] = [
     load: () => import('./classic/ClassicSkin'),
   },
   {
-    id: 'spool',
-    name: 'Spool',
+    id: 'unit',
+    name: 'Unit SW-9',
     description:
-      'A walkman deck — the whole station fits on one cassette.',
+      'A tabletop receiver — milled aluminium, weighted knobs, one glowing dot-matrix window.',
     skinApiVersion: SKIN_API_VERSION,
-    load: () => import('./spool/SpoolSkin'),
+    load: () => import('./unit/UnitSkin'),
   },
   {
     id: 'drift',

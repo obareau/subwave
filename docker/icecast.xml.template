@@ -77,6 +77,24 @@
         <adminroot>/usr/share/icecast2/admin</adminroot>
         <pidfile>/var/run/icecast2/icecast.pid</pidfile>
         <alias source="/" destination="/status.xsl"/>
+
+        <!-- Trusted reverse proxies: the entrypoint replaces the marker below
+             with one <x-forwarded-for> element per proxy IP. Without at least
+             one, icecast attributes EVERY listener to the proxy's container IP
+             (the 172.x rows in admin → Listeners), because the only peer it
+             ever sees is Caddy.
+
+             Two icecast-KH quirks drive the shape of this (both verified
+             against 2.4.0-kh22, the build in this image):
+               - the value must be an EXACT IP. A CIDR (172.16.0.0/12) is
+                 accepted without complaint and then silently never matches,
+                 so a subnet can't stand in for the proxy's address.
+               - the LEFT-MOST entry of the X-Forwarded-For chain wins, which
+                 is the original client — correct even though Caddy appends
+                 its own peer to the chain on the way through.
+             Multiple elements are allowed, which is how a multi-hop or
+             multi-proxy front end is covered. -->
+        <!--@TRUSTED_PROXIES@-->
     </paths>
 
     <logging>

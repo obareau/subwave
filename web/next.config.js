@@ -45,6 +45,19 @@ const nextConfig = {
   // server when it loads tailwind.config.js through the ESM loader. Pin the
   // root to this directory.
   outputFileTracingRoot: __dirname,
+  // Dev only. Next blocks requests for /_next/* dev resources whose Origin
+  // isn't localhost, so opening `npm run dev` from a phone or another box on
+  // the LAN/tailnet serves the HTML but never the client bundle — the admin
+  // console then sits on AdminShell's "loading…" branch forever, because
+  // useAdminAuth never hydrates. Testing the admin UI on a real handset is
+  // exactly when you hit this. Comma-separated hosts, no scheme or port:
+  //   SUBWAVE_DEV_ORIGINS=100.120.114.55,192.168.1.227 npm run dev
+  // (or put it in web/.env.local, which is gitignored). Empty in CI and in
+  // production builds, where the setting is ignored anyway.
+  allowedDevOrigins: (process.env.SUBWAVE_DEV_ORIGINS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean),
   // Edge redirect for /admin → /admin/dash. The previous approach of a
   // server-component `redirect()` in app/admin/page.tsx crashed Next 15's
   // Router on the post-sign-in re-render: AdminShell renders its sign-in form

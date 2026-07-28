@@ -69,8 +69,8 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
         metrics={<TabMetric accent n={pad2(list.length)} l="effects" />}
         actions={
           <>
-            <Btn sm onClick={() => setModal('import')} disabled={busy}>Import</Btn>
-            <Btn sm tone="solid" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
+            <Btn sm className="min-h-9 sm:min-h-0" onClick={() => setModal('import')} disabled={busy}>Import</Btn>
+            <Btn sm tone="solid" className="min-h-9 sm:min-h-0" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
           </>
         }
       />
@@ -105,7 +105,9 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
             {list.map(s => (
               <div
                 key={s.name}
-                className="grid grid-cols-[1fr_auto] items-center gap-[18px] px-[18px] py-[15px]"
+                /* Mobile drops the play/delete cluster under the text — see
+                   JinglesSection for the same reflow. */
+                className="grid grid-cols-1 items-center gap-3 px-[18px] py-[15px] sm:grid-cols-[1fr_auto] sm:gap-[18px]"
               >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-baseline gap-3">
@@ -135,6 +137,7 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
                       variant="ghost"
                       size="icon"
                       aria-label="Delete effect"
+                      className="size-9 sm:size-8"
                       disabled={busy || s.builtin}
                       onClick={() => onDelete(s.name)}
                     >
@@ -156,10 +159,11 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
         sub="we’ll generate it with ElevenLabs"
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
+            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={() => setModal(null)}>Cancel</Button>
             <Btn
               sm
               tone="accent"
+              className="min-h-9 sm:min-h-0"
               onClick={doCreate}
               disabled={busy || !ready || !sfxForm.name.trim() || !sfxForm.prompt.trim()}
             >
@@ -230,8 +234,8 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
         sub="bring your own mp3 / wav — no ElevenLabs key needed"
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
-            <Btn sm tone="accent" onClick={doImport} disabled={busy || !importFile || !importName.trim()}>
+            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={() => setModal(null)}>Cancel</Button>
+            <Btn sm tone="accent" className="min-h-9 sm:min-h-0" onClick={doImport} disabled={busy || !importFile || !importName.trim()}>
               {busy ? 'Importing…' : 'Import'}
             </Btn>
           </>

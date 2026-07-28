@@ -72,28 +72,46 @@ function ClassicPreview() {
   );
 }
 
-// ── Spool: a walkman cassette — the whole station on one tape ─────────────────
-function ReelHub() {
+// ── Unit SW-9: a tabletop receiver — keys, knobs, one dot-matrix window ───────
+function UnitPreview() {
   return (
-    <span className="grid aspect-square h-[78%] place-items-center rounded-full border-2 border-ink bg-bg">
-      <span className={cn('relative grid size-1/2 place-items-center rounded-full border border-ink', REEL)}>
-        <span className="absolute h-px w-full bg-ink" />
-        <span className="absolute h-full w-px bg-ink" />
-        <span className="relative size-[3px] rounded-full bg-vermilion" />
-      </span>
-    </span>
-  );
-}
-
-function SpoolPreview() {
-  return (
-    <div className="flex h-full w-full items-center justify-center p-3">
-      <div className="flex aspect-[3/2] h-[82%] flex-col justify-between border-2 border-ink bg-field p-2">
-        <div className="flex flex-1 items-center justify-around">
-          <ReelHub />
-          <ReelHub />
+    <div className="flex h-full w-full flex-col gap-1.5 bg-field p-2.5">
+      <div className="flex items-center justify-between">
+        <span className="h-[3px] w-1/4 bg-ink" />
+        <span className="flex items-center gap-1">
+          <span className="size-[4px] rounded-full bg-vermilion" />
+          <span className="size-[4px] rounded-full border border-ink" />
+        </span>
+      </div>
+      <div className="flex flex-1 gap-1.5">
+        {/* key column + knobs */}
+        <div className="flex w-2/5 flex-col gap-1">
+          <div className="grid flex-1 grid-cols-2 gap-1">
+            <span className="rounded-[2px] bg-ink" />
+            <span className="rounded-[2px] bg-vermilion" />
+            <span className="rounded-[2px] bg-ink" />
+            <span className="rounded-[2px] bg-ink" />
+          </div>
+          <div className="flex items-center justify-around py-0.5">
+            <span className="grid size-4 place-items-center rounded-full bg-ink">
+              <span className="h-[2px] w-2 -rotate-45 bg-vermilion" />
+            </span>
+            <span className="grid size-4 place-items-center rounded-full bg-ink">
+              <span className="h-[2px] w-2 rotate-12 bg-bg/70" />
+            </span>
+          </div>
         </div>
-        <span className="mx-auto mt-1.5 h-[3px] w-2/3 bg-ink" />
+        {/* the dot-matrix display window */}
+        <div className="flex flex-1 flex-col gap-1 bg-ink p-1.5">
+          <span className="h-[5px] w-3/4 bg-bg/90" />
+          <span className="h-[3px] w-1/2 bg-bg/60" />
+          <span className="h-[2px] w-2/5 bg-vermilion" />
+          <div className="mt-auto flex items-end justify-start gap-[2px]">
+            {EQ_BARS.map((b, i) => (
+              <span key={i} className={cn('w-[2px] bg-bg/80', b.h, EQ, b.d)} />
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -203,7 +221,7 @@ function PlatterPreview() {
 
 const PREVIEWS: Record<string, () => ReactNode> = {
   classic: ClassicPreview,
-  spool: SpoolPreview,
+  unit: UnitPreview,
   drift: DriftPreview,
   subamp: SubampPreview,
   tty: TtyPreview,

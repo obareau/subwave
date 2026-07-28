@@ -9,7 +9,7 @@ Write one Discord post announcing a SUB/WAVE release. The audience is listeners 
 
 ## Why this skill exists
 
-The raw material is a release-please PR body or a published GitHub release: a list of `feat(...)` / `fix(...)` lines with issue numbers. That's changelog-speak. The community post needs the *listener-facing* version: what each change lets them do, in plain words, with the station's radio-booth personality. The easy things to get wrong are the voice (reads like AI release notes), em-dashes (a hard no), overselling a small maintenance release, and burying the good stuff under internal chores. This skill encodes the house format and the translation step.
+The raw material is a release-please PR body or a published GitHub release: a list of `feat(...)` / `fix(...)` lines with issue numbers. That's changelog-speak. The community post needs the *listener-facing* version: what each change lets them do, in plain words, with the station's radio-booth personality. The easy things to get wrong are the voice (reads like AI release notes), em-dashes (a hard no), overselling a small maintenance release, burying the good stuff under internal chores, and reusing last release's opener or closer (every post gets freshly coined ones). This skill encodes the house format and the translation step.
 
 ## Step 1: Pull the release data
 
@@ -47,7 +47,7 @@ A big feature release and a small maintenance drop should not read the same. Say
 Output a single fenced ```markdown code block so the user can copy the raw text straight into Discord. The shape:
 
 ```
-📻 SUB/WAVE vX.Y.Z is on the airwaves 📻
+📻 SUB/WAVE vX.Y.Z [freshly coined on-air phrase — see "Openers and closers"] 📻
 
 [Intro: one short paragraph. Name the release's character (big / smaller), say what it's mostly about in plain words, and lead into the list. Radio metaphors welcome (on the dial, in the booth, on air).]
 
@@ -62,21 +62,37 @@ Output a single fenced ```markdown code block so the user can copy the raw text 
 
 Full notes: https://github.com/perminder-klair/subwave/releases/tag/vX.Y.Z
 
-[Thank-you closer to the people who filed issues and sent PRs, then a fresh sign-off. See "Sign-offs" below.]
+[Thank-you closer to the people who filed issues and sent PRs, then a fresh sign-off. See "Openers and closers" below.]
 
 @everyone
 ```
 
 Notes on the parts:
 
-- **Headline**: `📻 SUB/WAVE vX.Y.Z is on the airwaves 📻`. The `📻 … 📻` bookend is the house opener.
+- **Headline**: the `📻 … 📻` bookend around `SUB/WAVE vX.Y.Z` is the fixed part; the phrase after the version is coined fresh every release (see "Openers and closers").
 - **Feature bullets**: emoji + **bold lead**, then prose. One idea per bullet. Merge related commits (e.g. two new stations) into one bullet rather than listing each.
 - **Fixes**: `🔧` prefix, one line each, benefit-first. Only include fixes a user would feel; fold the rest into a single "plus the usual under-the-hood tidying" line or drop them.
 - **`@everyone` goes at the very bottom**, after the sign-off. (This is the operator's standing preference. Confirm only if they say otherwise.)
 
-## Sign-offs
+## Openers and closers: coin fresh ones every release
 
-End with a genuine thank-you to contributors, then a short sign-off. **Vary the closing line release to release** so it doesn't get stale. Don't reach for the same "go make some noise" every time. Draw on the radio world: `See you on the dial. 🎧`, `Catch you on air. 🎧`, `Turn it up. 🎧`, `This one's built on your feedback, so keep it flowing.` Match the energy of the release. If the user has used a specific closer before and wants something new, pick a different metaphor rather than a synonym of the last one.
+Two lines go stale fastest on the wire: the headline phrase inside the `📻 … 📻` bookend, and the closer (thank-you sentence + sign-off). **Both are written new for every release.** Nothing in this section is a menu to pick from; it's a description of the register.
+
+How to coin them:
+
+1. Write two or three candidates for each before settling. Pull imagery from the whole radio world, not just the dial: the transmitter, the tower, the fader, the needle, the mixing desk, the late-night booth, the request line, the test card, static between stations, the ON AIR lamp, a signal finding its frequency. A line that riffs on *this release's content* (a landing-page release can open with the shop window, a transitions release with the crossfade) beats a generic radio line.
+2. Keep the one that matches the release's energy: a big feature drop can be loud, a patch release can be a quiet, dry line.
+3. Check it against the retired list below. If it matches or is a near-synonym of anything there (same verb, same image), throw it out and coin another. Swapping "airwaves" for "wire" is not a new line.
+
+The thank-you sentence follows the same rule: tie it to what actually happened this release (who reported the bug that got fixed, whose idea shipped), not a stock "thanks for the feedback" shape.
+
+**Retired lines** (already aired; never reuse, including near-synonyms):
+
+- Headlines: "is on the airwaves"
+- Sign-offs: "See you on the dial", "Catch you on air", "go make some noise"
+- Thank-yous: "Every fix in that list started as one of your reports. Keep them coming."
+
+**Maintenance:** when the user confirms a post has shipped, append its headline phrase, sign-off, and thank-you line to the retired list above so future runs can't repeat them.
 
 ## Writing rules
 

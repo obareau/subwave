@@ -339,13 +339,13 @@ export default function ImagingPanel() {
   ];
 
   return (
-    <div className="grid max-w-[1060px] gap-4">
+    <div className="grid gap-4">
       {/* Editorial masthead + tab row, on a lifted card surface so the header
           reads as a card like the rest of the admin (Moods / Skills / Shows)
           rather than floating on the page background. */}
       <section className="card">
       <header className="p-4 lg:p-5">
-        <div className="flex items-baseline justify-between gap-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <MonoLabel>imaging</MonoLabel>
           <span className="flex items-center gap-[7px] font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
             <span className="size-1.5 animate-pulse bg-[var(--accent)]" aria-hidden />

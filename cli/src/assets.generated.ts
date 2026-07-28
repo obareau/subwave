@@ -88,6 +88,14 @@ services:
       # Concurrent-listener ceiling for icecast (<limits><clients>).
       # Empty/unset → 100 (the historical default).
       - ICECAST_MAX_CLIENTS=\${ICECAST_MAX_CLIENTS:-}
+      # Reverse proxies whose X-Forwarded-For icecast should believe, so admin
+      # → Listeners shows real listener IPs rather than the edge's container
+      # address. Unset resolves the bundled \`caddy\` by name at render time,
+      # which lands on every restart but misses the very first cold boot (caddy
+      # can't be running yet — it waits on this service's healthcheck). Set
+      # ICECAST_TRUSTED_PROXY_IPS to a pinned address for first-boot accuracy.
+      - ICECAST_TRUSTED_PROXY_IPS=\${ICECAST_TRUSTED_PROXY_IPS:-}
+      - ICECAST_TRUSTED_PROXY_HOSTS=\${ICECAST_TRUSTED_PROXY_HOSTS:-}
       # Keeps the hourly archive paths (%Y-%m-%d/%H-00.mp3) on local wall time.
       - TZ=\${TZ:-Europe/London}
     extra_hosts:
@@ -457,6 +465,12 @@ services:
       # Concurrent-listener ceiling for icecast (<limits><clients>).
       # Empty/unset → 100 (the historical default).
       - ICECAST_MAX_CLIENTS=\${ICECAST_MAX_CLIENTS:-}
+      # There is no bundled edge in this shape, so nothing resolves by default
+      # and listener rows show whatever peer reaches icecast — the operator's
+      # own proxy. Set this to that proxy's address (as icecast sees it) to get
+      # real listener IPs in admin → Listeners. See docs/deployment.md.
+      - ICECAST_TRUSTED_PROXY_IPS=\${ICECAST_TRUSTED_PROXY_IPS:-}
+      - ICECAST_TRUSTED_PROXY_HOSTS=\${ICECAST_TRUSTED_PROXY_HOSTS:-}
       - TZ=\${TZ:-Europe/London}
     ports:
       # BIND_ADDRESS defaults to 0.0.0.0; set 127.0.0.1 in .env for a same-host
@@ -770,6 +784,10 @@ services:
       # Concurrent-listener ceiling for icecast (<limits><clients>).
       # Empty/unset → 100 (the historical default).
       - ICECAST_MAX_CLIENTS=\${ICECAST_MAX_CLIENTS:-}
+      # Dev has no edge in front of icecast (the browser hits it directly), so
+      # this stays empty and listener rows already show the real peer.
+      - ICECAST_TRUSTED_PROXY_IPS=\${ICECAST_TRUSTED_PROXY_IPS:-}
+      - ICECAST_TRUSTED_PROXY_HOSTS=\${ICECAST_TRUSTED_PROXY_HOSTS:-}
       - TZ=\${TZ:-Europe/London}
     extra_hosts:
       # Lets Liquidsoap fetch Subsonic stream URLs that point at host services
@@ -1180,6 +1198,26 @@ SITE_URL=
 # Unset → 100. Lower it to bound bandwidth on a small host.
 # ICECAST_MAX_CLIENTS=
 
+# ───────── Real listener IPs behind a proxy ─────────
+# Icecast only ever sees the reverse proxy in front of it, so admin →
+# Listeners shows that proxy's address (the 172.x rows) rather than the
+# listener's, unless icecast is told which proxy to believe.
+#
+# Unset, the default compose resolves its bundled \`caddy\` by name each time
+# the broadcast container starts. That covers the steady state but NOT the
+# first cold boot (caddy can't be running yet — it waits on broadcast's
+# healthcheck), so listener rows read as the proxy IP until the next restart.
+#
+# Set this to the proxy's address — as icecast sees it — for correctness from
+# the first boot, and whenever the proxy isn't a compose service resolvable
+# from the broadcast container (the byo compose, a host-network nginx). Space
+# or comma separated; must be EXACT addresses, as icecast accepts a CIDR and
+# then silently never matches it.
+# ICECAST_TRUSTED_PROXY_IPS=172.20.0.100
+#
+# Names to resolve instead of hardcoding an address. Unset → \`caddy\`.
+# ICECAST_TRUSTED_PROXY_HOSTS=caddy
+
 # ───────── Overrides for the wizard's fields ─────────
 # These all live in state/settings.json after the wizard runs. Set them here
 # only if you want env to win (12-factor / CI / GitOps style deploys).
@@ -1235,6 +1273,8 @@ SITE_URL=
 # NVIDIA GPU? The heavy stack can run on CUDA instead — not an .env toggle (a
 # GPU device reservation can't live here); layer the analyzer-gpu overlay:
 #   docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
+# (AIO one-click users: no overlay — pull subwave-aio-cuda and pass the GPU to
+# the container. See docs/unraid.md.)
 # ANALYZE_DEVICE=    # auto (default) / cpu / cuda — torch device for CLAP/Demucs;
 #                    # only meaningful on the cuda analyzer flavour
 # ANALYZE_IDLE_UNLOAD_S=  # cuda flavour: seconds of no analysis before models are
@@ -1301,4 +1341,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `0.45.0`; // x-release-please-version
+export const CLI_VERSION = `1.0.0`; // x-release-please-version

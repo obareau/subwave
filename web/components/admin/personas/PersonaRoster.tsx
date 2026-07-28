@@ -41,11 +41,14 @@ export function PersonaRoster({
 
   return (
     <section className="grid gap-4">
+      {/* On phones the actions take a full row of their own under the count —
+          squeezed onto the count's line they run past the right edge. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="caption">roster · {personas.length} / {PERSONA_MAX}</span>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <RosterViewToggle view={view} onChange={setView} />
           <Btn
+            className="min-h-9 sm:min-h-0"
             onClick={onCommunity}
             disabled={communityCount === null}
             title="Browse and install personas shared by other stations"
@@ -55,8 +58,8 @@ export function PersonaRoster({
               <span className="ml-1 text-vermilion">{communityCount}</span>
             )}
           </Btn>
-          <Btn onClick={onOpenPrompt}>System prompt</Btn>
-          <Btn tone="accent" onClick={onAdd} disabled={personas.length >= PERSONA_MAX}>
+          <Btn className="min-h-9 sm:min-h-0" onClick={onOpenPrompt}>System prompt</Btn>
+          <Btn className="min-h-9 sm:min-h-0" tone="accent" onClick={onAdd} disabled={personas.length >= PERSONA_MAX}>
             + Add persona
           </Btn>
         </div>

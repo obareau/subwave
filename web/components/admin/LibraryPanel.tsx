@@ -22,181 +22,54 @@
 //
 // All colours come from theme tokens (the operator picks a theme in Settings),
 // so the page renders correctly under every palette — no hardcoded hex.
+//
+// This file owns the panel's state and data fetching; the pieces it renders
+// live in ./library/ (types, bits, Tabs, BrowseFilters, TrackTable, BlockedTab,
+// HistoryTab, ManualTagEditor, AddToPlaylistBar).
 
-import type { ChangeEvent, FormEvent, ReactNode } from 'react';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Search, RotateCcw, Sparkles, RefreshCw, ListPlus, ListMusic, X, Pencil, Ban,
-  Music, LayoutGrid, Tags, Telescope, ArrowRight, History,
-} from 'lucide-react';
-import { useAdminAuth, ADMIN_API_URL } from '../../lib/adminAuth';
+import type { ChangeEvent, FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Search, Sparkles, RefreshCw, ListMusic, X, Telescope, ArrowRight } from 'lucide-react';
+import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
-import { Input } from '../ui/input';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '../ui/input-group';
-import { Field, FieldLabel } from '../ui/field';
-import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
-} from '../ui/select';
-import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
-import { cn } from '../../lib/cn';
+import { Card, Btn, Seg } from './ui';
+import { llmProviderLabel } from './llm/providerMeta';
 import TaggingPanel, { num } from './LibraryTaggingPanel';
-import type { Coverage, TaggerState, LibraryStatsLite, Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
+import type {
+  Coverage,
+  TaggerState,
+  LibraryStatsLite,
+  Batch,
+  BudgetMode,
+  RescanOpts,
+  TagSteps,
+} from './LibraryTaggingPanel';
 import type { PlaylistSummary } from './LibraryPlaylistsTab';
-import { SkeletonRows, SkeletonText } from '@/components/ui/skeleton';
-import { EmptyState } from '@/components/ui/empty-state';
+import type {
+  BlockEntry,
+  BlockType,
+  BrowseResponse,
+  Energy,
+  PlayEntry,
+  SearchMode,
+  Sort,
+  Tab,
+  SettingsResponse,
+  TableVariant,
+  Track,
+  TrackMode,
+  UntaggedResponse,
+  Vocal,
+} from './library/types';
+import { PAGE_SIZE, SEARCH_PAGE, SORTS, TABS } from './library/types';
+import { Tabs } from './library/Tabs';
+import { BrowseFilters } from './library/BrowseFilters';
+import { TrackTable } from './library/TrackTable';
+import { BlockedTab } from './library/BlockedTab';
+import { HistoryTab } from './library/HistoryTab';
+import { AddToPlaylistBar } from './library/AddToPlaylistBar';
 
-// ---------------------------------------------------------------------------
-// types
-// ---------------------------------------------------------------------------
-interface Track {
-  id: string;
-  title?: string;
-  artist?: string;
-  album?: string;
-  year?: number | string | null;
-  genre?: string | null;
-  duration?: number | null;
-  moods?: string[];
-  energy?: string | null;
-  source?: string | null;
-  taggedAt?: string;
-  // Acoustic-analysis surface — null/undefined until the analyze pass runs.
-  bpm?: number | null;
-  musicalKey?: string | null;
-  loudnessLufs?: number | null;
-  paceMean?: number | null;
-  instrumental?: boolean | null;
-  // Cosine match vs the query — only on sounds-like search results.
-  similarity?: number | null;
-}
-
-interface BrowseResponse {
-  rows: Track[];
-  total: number;
-  moodVocab: string[];
-  stats: {
-    total: number;
-    byMood: Record<string, number>;
-    byEnergy: Record<string, number>;
-    byGenre: Record<string, number>;
-    updatedAt: string | null;
-  };
-}
-
-interface UntaggedResponse { rows: Track[]; nextCursor: string | null }
-
-// Never-play blocklist entry (GET /library/blocklist) — name/artist/album are
-// display snapshots taken at block time, so no Navidrome re-lookup to render.
-type BlockType = 'track' | 'album' | 'artist';
-interface BlockEntry {
-  type: BlockType;
-  id: string;
-  name: string | null;
-  artist: string | null;
-  album: string | null;
-  addedAt: string;
-}
-
-// One aired track from the durable play history (GET /library/history).
-// Title/artist/album are air-time snapshots; showName is the show that was on.
-interface PlayEntry {
-  id: number;
-  trackId: string | null;
-  title: string | null;
-  artist: string | null;
-  album: string | null;
-  playedAt: string;
-  source: string | null;       // 'ai' | 'request' | 'auto'
-  requestedBy: string | null;
-  showId: string | null;
-  showName: string | null;
-}
-
-// Coverage / TaggerState / LibraryStatsLite / Batch / RescanOpts live in
-// LibraryTaggingPanel.tsx alongside the panel that renders them.
-
-interface SettingsResponse {
-  tagger?: TaggerState;
-  libraryStats?: LibraryStatsLite;
-  // Only the slice this panel needs from the full settings payload.
-  values?: {
-    audio?: {
-      embeddings?: boolean;
-      vocalActivity?: boolean;
-      analyzeQuietOnly?: boolean;
-      analyzeQuietMinutes?: number;
-    };
-  };
-  // Daily-token-budget tier — drives the "budget nearly/already used" warning in
-  // the Tagging modal. Absent on an old controller → treated as 'normal'.
-  budget?: { mode: BudgetMode };
-}
-
-type Tab = 'tracks' | 'browse' | 'search' | 'history' | 'blocked';
-// The Tracks tab folds the old Recent + Untagged tabs into one view with an
-// All / Needs-tags toggle; TableVariant keeps TrackTable's per-view behaviour
-// (empty-state copy, accent Tag button) keyed on what's actually shown.
-type TrackMode = 'all' | 'needs';
-type TableVariant = 'recent' | 'browse' | 'search' | 'untagged';
-type Sort = 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
-type Energy = 'any' | 'low' | 'medium' | 'high';
-type Vocal = 'any' | 'instrumental' | 'vocal';
-// 'library' = Navidrome metadata search (/dj/search); 'sound' = natural-language
-// CLAP sounds-like search (/library/search-sound), shown only when coverage
-// reports the capability.
-type SearchMode = 'library' | 'sound';
-
-const PAGE_SIZE = 50;
-const SEARCH_PAGE = 30;
-
-const TABS: Tab[] = ['tracks', 'browse', 'search', 'history', 'blocked'];
-const SORTS: Sort[] = ['artist', 'title', 'year', 'taggedAt', 'bpm', 'loudness', 'pace'];
-
-// ---------------------------------------------------------------------------
-// small shared parts
-// ---------------------------------------------------------------------------
-// Track length as m:ss, or null when unknown/zero (Navidrome omits duration on
-// some rows — don't render "0:00" for those).
-function fmtDuration(sec?: number | null): string | null {
-  if (sec == null || !Number.isFinite(sec) || sec <= 0) return null;
-  const total = Math.round(sec);
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
-}
-
-function EnergyMeter({ level }: { level?: string | null }) {
-  const cls = level === 'high' ? 'h' : level === 'medium' ? 'm' : level === 'low' ? 'l' : '';
-  return (
-    <span className={cn('lib-emeter', cls)} aria-hidden>
-      <span /><span /><span />
-    </span>
-  );
-}
-
-// Album thumbnail via the public /cover/:id proxy, with a letter-tile fallback
-// when art is missing or the request errors. The fallback is token-coloured so
-// it never clashes with the active theme.
-function Thumb({ track }: { track: Track }) {
-  const [errored, setErrored] = useState(false);
-  const letter = (track.album || track.title || track.artist || '?').trim()[0]?.toUpperCase() || '?';
-  const showImg = !!track.id && !errored;
-  return (
-    <span className="lib-thumb">
-      {showImg ? (
-         
-        <img
-          src={`${ADMIN_API_URL}/cover/${encodeURIComponent(track.id)}`}
-          alt=""
-          loading="lazy"
-          onError={() => setErrored(true)}
-        />
-      ) : letter}
-    </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// panel
-// ---------------------------------------------------------------------------
 export default function LibraryPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const ready = hydrated && !needsAuth;
@@ -219,6 +92,11 @@ export default function LibraryPanel() {
   const [quietMins, setQuietMins] = useState<number | null>(null);
   // Daily-token-budget tier from /settings — null until the first slow poll lands.
   const [budgetMode, setBudgetMode] = useState<BudgetMode | null>(null);
+  // Provider attribution for the Tagging modal (#1162) — "Google · gemini-2.0-
+  // flash-lite" for the LLM seed calls, "OpenAI" for the embedding calls. Null
+  // until the slow poll lands (the modal omits the attribution).
+  const [llmLabel, setLlmLabel] = useState<string | null>(null);
+  const [embedLabel, setEmbedLabel] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
@@ -398,6 +276,18 @@ export default function LibraryPanel() {
         );
       }
       if (j.budget) setBudgetMode(j.budget.mode);
+      // Which provider each tagging cost bills to (#1162). The tag-moods seed
+      // calls always ride the chat LLM legs (tag-library resolveTagConsumers);
+      // a blank embedding provider follows the LLM provider. Embedding model is
+      // shown only when explicitly set — the provider-default resolution table
+      // lives in Settings → Library and isn't duplicated here.
+      if (j.values?.llm?.provider) {
+        const llm = j.values.llm;
+        setLlmLabel(llmProviderLabel(llm.provider) + (llm.model ? ` · ${llm.model}` : ''));
+        const emb = j.values.embedding || {};
+        const embProvider = emb.provider || llm.provider;
+        setEmbedLabel(llmProviderLabel(embProvider) + (emb.model ? ` · ${emb.model}` : ''));
+      }
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
@@ -1221,13 +1111,18 @@ export default function LibraryPanel() {
     recentLoading;
 
   return (
-    <div className="grid gap-5">
+    // grid-cols-1: the implicit `auto` track is sized by its items' min-content,
+    // so a doorway card's un-shrinkable copy blew the whole column (and every
+    // card stretched to it) past a phone viewport. minmax(0,1fr) caps the track.
+    <div className="grid grid-cols-1 gap-5">
       {/* Doorways — Playlists and the Observatory live inside Library now
           (pulled out of the sidebar); these are their front doors. */}
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
         <a
           href="/admin/playlists"
-          className="group flex items-center gap-3.5 border border-ink bg-bg p-3.5 transition-colors hover:bg-ink-soft"
+          // min-w-0: a grid item's automatic minimum is its min-content, which
+          // the nowrap/truncated blurb below would otherwise pin ~510px wide.
+          className="group flex min-w-0 items-center gap-3.5 border border-ink bg-bg p-3.5 transition-colors hover:bg-ink-soft"
         >
           <span className="grid size-9 flex-none place-items-center border border-ink bg-[var(--accent)] text-white">
             <ListMusic size={18} />
@@ -1242,7 +1137,7 @@ export default function LibraryPanel() {
         </a>
         <a
           href="/observatory"
-          className="group flex items-center gap-3.5 border border-ink bg-bg p-3.5 transition-colors hover:bg-ink-soft"
+          className="group flex min-w-0 items-center gap-3.5 border border-ink bg-bg p-3.5 transition-colors hover:bg-ink-soft"
         >
           <span className="grid size-9 flex-none place-items-center border border-ink bg-ink text-bg">
             <Telescope size={18} />
@@ -1282,6 +1177,8 @@ export default function LibraryPanel() {
         onToggleQuiet={toggleQuiet}
         onQuietMinutes={saveQuietMinutes}
         budgetMode={budgetMode}
+        llmLabel={llmLabel}
+        embedLabel={embedLabel}
       />
 
       <Tabs tab={tab} setTab={setTab} />
@@ -1359,8 +1256,10 @@ export default function LibraryPanel() {
                 )}
               </div>
             )}
-            <form onSubmit={runSearch} className="grid grid-cols-[1fr_auto_auto] gap-2">
-              <InputGroup>
+            {/* Phone: the query takes a full row of its own and the two buttons
+                share the row under it; from sm: the original single-row grid. */}
+            <form onSubmit={runSearch} className="grid grid-cols-[1fr_auto] gap-2 sm:grid-cols-[1fr_auto_auto]">
+              <InputGroup className="col-span-2 sm:col-span-1">
                 <InputGroupAddon><Search /></InputGroupAddon>
                 <InputGroupInput
                   // `required` only; deliberately no minLength — one-character
@@ -1438,7 +1337,7 @@ export default function LibraryPanel() {
         }
         right={
           tab === 'tracks' ? (
-            <span className="flex items-center gap-2.5">
+            <span className="flex flex-wrap items-center gap-2.5">
               <Seg
                 value={trackMode}
                 options={[
@@ -1486,7 +1385,7 @@ export default function LibraryPanel() {
       )}
 
       {tab === 'browse' && browse && browse.total > PAGE_SIZE && (
-        <div className="flex items-center justify-between text-[11px] text-muted">
+        <div className="flex flex-wrap items-center justify-between gap-y-2 text-[11px] text-muted">
           <span className="mono-num">
             {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, browse.total)} of {num(browse.total)}
           </span>
@@ -1522,756 +1421,3 @@ export default function LibraryPanel() {
 // ---------------------------------------------------------------------------
 // Masthead tabs: icon left, name + subtitle stacked right. No count badges —
 // the panel subtitle below reports the real numbers for whichever view is open.
-function Tabs({ tab, setTab }: {
-  tab: Tab;
-  setTab: (t: Tab) => void;
-}) {
-  const items: { id: Tab; name: string; sub: string; icon: ReactNode }[] = [
-    { id: 'tracks', name: 'Tracks', sub: 'newest & needs tags', icon: <Music size={17} /> },
-    { id: 'browse', name: 'Browse', sub: 'tagged index', icon: <LayoutGrid size={17} /> },
-    { id: 'search', name: 'Search', sub: 'navidrome', icon: <Search size={17} /> },
-    { id: 'history', name: 'History', sub: 'what aired', icon: <History size={17} /> },
-    { id: 'blocked', name: 'Blocked', sub: 'never plays', icon: <Ban size={17} /> },
-  ];
-  return (
-    <div className="lib-tabs">
-      {items.map(it => (
-        <button key={it.id} type="button" className={cn('lib-tab', tab === it.id && 'on')} onClick={() => setTab(it.id)}>
-          {it.icon}
-          <span className="min-w-0">
-            <span className="lib-tab-name">{it.name}</span>
-            <span className="lib-tab-sub">{it.sub}</span>
-          </span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// browse filters
-// ---------------------------------------------------------------------------
-interface BrowseFiltersProps {
-  moodVocab: string[];
-  moodCounts: Record<string, number>;
-  energyCounts: Record<string, number>;
-  genreList: { value: string; songCount: number }[];
-  moods: string[]; setMoods: (m: string[]) => void;
-  energy: Energy; setEnergy: (e: Energy) => void;
-  vocal: Vocal; setVocal: (v: Vocal) => void;
-  genre: string; setGenre: (g: string) => void;
-  yearFrom: string; setYearFrom: (s: string) => void;
-  yearTo: string; setYearTo: (s: string) => void;
-  q: string; setQ: (s: string) => void;
-  sort: Sort; setSort: (s: Sort) => void;
-}
-
-function BrowseFilters(p: BrowseFiltersProps) {
-  const [showAllMoods, setShowAllMoods] = useState(false);
-  const ranked = useMemo(
-    () => [...p.moodVocab].sort((a, b) => (p.moodCounts[b] || 0) - (p.moodCounts[a] || 0)),
-    [p.moodVocab, p.moodCounts],
-  );
-  const shown = showAllMoods ? ranked : ranked.slice(0, 12);
-  const toggleMood = (m: string) =>
-    p.setMoods(p.moods.includes(m) ? p.moods.filter(x => x !== m) : [...p.moods, m]);
-
-  const energyOpts: { id: Energy; label: ReactNode }[] = [
-    { id: 'any', label: 'Any' },
-    { id: 'low', label: <><EnergyMeter level="low" /> Low{p.energyCounts.low ? ` · ${p.energyCounts.low}` : ''}</> },
-    { id: 'medium', label: <><EnergyMeter level="medium" /> Mid{p.energyCounts.medium ? ` · ${p.energyCounts.medium}` : ''}</> },
-    { id: 'high', label: <><EnergyMeter level="high" /> High{p.energyCounts.high ? ` · ${p.energyCounts.high}` : ''}</> },
-  ];
-
-  // Vocal facet rides on the acoustic analysis pass; it only ever narrows to
-  // analysed tracks (un-analysed rows have no vocal ranges to test).
-  const vocalOpts: { id: Vocal; label: string }[] = [
-    { id: 'any', label: 'Any' },
-    { id: 'vocal', label: 'Vocal' },
-    { id: 'instrumental', label: 'Instrumental' },
-  ];
-
-  return (
-    <section className="card">
-      {/* filter results text */}
-      <div className="border-b border-dashed border-separator-strong p-4">
-        <InputGroup>
-          <InputGroupAddon><Search /></InputGroupAddon>
-          <InputGroupInput
-            placeholder="filter results by title, artist, or album…"
-            value={p.q}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => p.setQ(e.target.value)}
-          />
-        </InputGroup>
-      </div>
-
-      {/* moods */}
-      <div className="border-b border-dashed border-separator-strong p-4">
-        <div className="caption mb-2.5">mood</div>
-        <div className="flex flex-wrap gap-1.5">
-          {shown.map(m => (
-            <button key={m} type="button" className={cn('lib-chip', p.moods.includes(m) && 'on')} onClick={() => toggleMood(m)}>
-              {m}<span className="n">{p.moodCounts[m] || 0}</span>
-            </button>
-          ))}
-          {ranked.length > 12 && (
-            <button type="button" className="lib-chip lib-chip-more" onClick={() => setShowAllMoods(s => !s)}>
-              {showAllMoods ? '− less' : `+ ${ranked.length - 12} more`}
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* quick facets — the energy + vocal toggle groups sit on their own row,
-          divided from the dropdown-style refinements below. */}
-      <div className="flex flex-wrap items-end gap-x-4 gap-y-4 border-b border-dashed border-separator-strong p-4">
-        <div className="flex flex-col gap-2">
-          <div className="caption">energy</div>
-          <div className="flex flex-wrap border border-ink">
-            {energyOpts.map((o, i) => (
-              <button
-                key={o.id}
-                type="button"
-                onClick={() => p.setEnergy(o.id)}
-                className={cn(
-                  'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
-                  i > 0 && 'border-l border-ink',
-                  p.energy === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
-                )}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="caption">vocal</div>
-          <div className="flex flex-wrap border border-ink">
-            {vocalOpts.map((o, i) => (
-              <button
-                key={o.id}
-                type="button"
-                onClick={() => p.setVocal(o.id)}
-                className={cn(
-                  'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
-                  i > 0 && 'border-l border-ink',
-                  p.vocal === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
-                )}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* refine — genre, year and sort share a single row. They wrap together as
-          a group on very narrow widths, but none ever strands on its own line. */}
-      <div className="flex flex-wrap items-end gap-x-4 gap-y-4 p-4">
-        <div className="flex flex-col gap-2">
-          <Field>
-            <FieldLabel htmlFor="genre">genre</FieldLabel>
-            <Select value={p.genre || '__any'} onValueChange={v => p.setGenre(v === '__any' ? '' : v)}>
-              <SelectTrigger id="genre" className="min-w-[150px]"><SelectValue placeholder="Any genre" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__any">Any genre</SelectItem>
-                {p.genreList.slice(0, 80).map(g => (
-                  <SelectItem key={g.value} value={g.value}>
-                    {g.value}{g.songCount ? ` · ${g.songCount}` : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="caption">year</div>
-          <div className="flex items-center gap-2">
-            <Input type="number" inputMode="numeric" placeholder="from" aria-label="year from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
-            <span className="text-[10px] text-muted">–</span>
-            <Input type="number" inputMode="numeric" placeholder="to" aria-label="year to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Field>
-            <FieldLabel htmlFor="sort">sort</FieldLabel>
-            <Select value={p.sort} onValueChange={v => p.setSort(v as Sort)}>
-              <SelectTrigger id="sort" className="min-w-[170px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="artist">Artist / album / title</SelectItem>
-                <SelectItem value="title">Title</SelectItem>
-                <SelectItem value="year">Year (newest first)</SelectItem>
-                <SelectItem value="taggedAt">Recently tagged</SelectItem>
-                <SelectItem value="bpm">Tempo (slow → fast)</SelectItem>
-                <SelectItem value="loudness">Loudness (loud → quiet)</SelectItem>
-                <SelectItem value="pace">Pace (intense → calm)</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// track table
-// ---------------------------------------------------------------------------
-interface TrackTableProps {
-  tab: TableVariant;
-  rows: Track[];
-  loading: boolean;
-  queuing: string | null;
-  retagging: string | null;
-  flashId: string | null;
-  onQueue: (t: Track) => void;
-  onRetag: (t: Track) => void;
-  blocking: string | null;
-  onBlock: (t: Track, type: BlockType) => void;
-  vocab: string[];
-  editingId: string | null;
-  manualBusy: string | null;
-  onEdit: (t: Track) => void;
-  onSaveManual: (t: Track, moods: string[], energy: string | null, applyToAlbum: boolean) => void;
-  onCancelEdit: () => void;
-  selected: Set<string>;
-  onToggleSelect: (id: string) => void;
-  onToggleAll: (rows: Track[]) => void;
-}
-
-function TrackTable(p: TrackTableProps) {
-  if (p.loading && p.rows.length === 0) {
-    return <SkeletonRows rows={6} />;
-  }
-  if (p.rows.length === 0) {
-    return (
-      <>
-        {p.tab === 'browse' && (
-          <EmptyState compact title="No tracks match" description="Try clearing some filters." />
-        )}
-        {p.tab === 'search' && (
-          <EmptyState compact title="Search your library" description="Find a track to queue on demand." />
-        )}
-        {p.tab === 'untagged' && (
-          <EmptyState compact title="Everything's tagged" description="Nice — the whole library has moods." />
-        )}
-        {p.tab === 'recent' && <EmptyState compact title="Nothing here yet" />}
-      </>
-    );
-  }
-
-  const allSelected = p.rows.length > 0 && p.rows.every(t => p.selected.has(t.id));
-
-  return (
-    // Dim (don't blank) stale rows while a refetch is in flight, so filter
-    // changes read as "updating" instead of silently showing old results.
-    <div className={cn(p.loading && 'opacity-60 transition-opacity')}>
-      <div className="lib-colhead">
-        <span>
-          <input
-            type="checkbox"
-            checked={allSelected}
-            onChange={() => p.onToggleAll(p.rows)}
-            aria-label={allSelected ? 'deselect all tracks' : 'select all tracks'}
-          />
-        </span>
-        <span />
-        <span>title</span>
-        <span className="h-tags">mood · energy</span>
-        <span />
-      </div>
-      {p.rows.map(t => {
-        const tagged = !!(t.moods && t.moods.length > 0);
-        const editing = p.editingId === t.id;
-        const dur = fmtDuration(t.duration);
-        return (
-          <Fragment key={t.id}>
-          <div className={cn('lib-row', p.flashId === t.id && 'flash')}>
-            <input
-              type="checkbox"
-              checked={p.selected.has(t.id)}
-              onChange={() => p.onToggleSelect(t.id)}
-              aria-label={`select ${t.title || 'track'}`}
-            />
-            <Thumb track={t} />
-            <div className="min-w-0">
-              <div className="lib-title">{t.title || '—'}</div>
-              <div className="lib-artist">{t.artist || '—'}{t.year ? ` · ${t.year}` : ''}{dur ? ` · ${dur}` : ''}</div>
-              {t.album && <div className="lib-album">{t.album}</div>}
-            </div>
-            <div className="lib-tags">
-              {tagged ? (
-                <>
-                  {t.moods!.slice(0, 2).map(m => <span key={m} className="lib-mtag">{m}</span>)}
-                  {t.energy && <span className="lib-mtag"><EnergyMeter level={t.energy} />{t.energy}</span>}
-                  {t.source === 'manual' && <span className="lib-mtag" title="hand-tagged by an operator">manual</span>}
-                </>
-              ) : (
-                <span className="lib-needs" title="needs tags — tag it so the DJ can pick it" aria-label="needs tags">
-                  <Tags size={12} />
-                </span>
-              )}
-              {/* acoustic-analysis badges — independent of mood tagging, shown
-                  whenever the analyze pass has filled them in */}
-              {t.bpm != null && <span className="lib-mtag lib-atag" title="tempo">{Math.round(t.bpm)} BPM</span>}
-              {t.musicalKey && <span className="lib-mtag lib-atag" title="musical key">{t.musicalKey}</span>}
-              {t.loudnessLufs != null && <span className="lib-mtag lib-atag" title="integrated loudness (LUFS)">{t.loudnessLufs.toFixed(1)} LUFS</span>}
-              {t.instrumental === true && <span className="lib-mtag lib-atag" title="no vocals detected">instrumental</span>}
-              {/* sounds-like results carry their cosine match vs the query —
-                  shows where relevance falls off down the list */}
-              {t.similarity != null && <span className="lib-mtag lib-atag" title="sound match vs your description">≈ {Math.round(t.similarity * 100)}%</span>}
-            </div>
-            {/* icon-only action cluster — tooltips carry the verbs; the fixed
-                150px grid track keeps it aligned under the (empty) header cell */}
-            <div className="flex items-center justify-end gap-1.5">
-              <Btn sm onClick={() => p.onQueue(t)} disabled={!!p.queuing} title="Queue on air">
-                {p.queuing === t.id ? '…' : <ListPlus size={12} />}
-              </Btn>
-              <Btn
-                sm
-                tone={editing ? 'accent' : undefined}
-                onClick={() => p.onEdit(t)}
-                disabled={!!p.manualBusy}
-                title="Edit moods manually"
-              >
-                {editing ? <X size={12} /> : <Pencil size={12} />}
-              </Btn>
-              {/* All track tabs — an untagged track found via search/recent can
-                  be LLM-tagged on the spot (/library/retag takes the row body). */}
-              <Btn
-                sm
-                tone={p.tab === 'untagged' || !tagged ? 'accent' : 'solid'}
-                onClick={() => p.onRetag(t)}
-                disabled={!!p.retagging}
-                title={tagged ? 'Retag with AI' : 'Tag with AI'}
-              >
-                {p.retagging === t.id ? '…' : tagged
-                  ? <RotateCcw size={11} />
-                  : <Sparkles size={11} />}
-              </Btn>
-              <BlockMenu
-                track={t}
-                busy={p.blocking === t.id}
-                disabled={!!p.blocking}
-                onBlock={p.onBlock}
-              />
-            </div>
-          </div>
-          {editing && (
-            <ManualTagEditor
-              track={t}
-              vocab={p.vocab}
-              busy={p.manualBusy === t.id}
-              onSave={(moods, energy, applyToAlbum) => p.onSaveManual(t, moods, energy, applyToAlbum)}
-              onCancel={p.onCancelEdit}
-            />
-          )}
-          </Fragment>
-        );
-      })}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// BlockMenu — the per-row "Never play" action. A Ban button opening a small
-// scope menu (track / album / artist); the server resolves album/artist ids
-// from the track id, so the row only needs t.id. No confirm dialog — blocking
-// is one-click reversible from the Blocked tab.
-// ---------------------------------------------------------------------------
-function BlockMenu({ track, busy, disabled, onBlock }: {
-  track: Track;
-  busy: boolean;
-  disabled: boolean;
-  onBlock: (t: Track, type: BlockType) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const pick = (type: BlockType) => { setOpen(false); onBlock(track, type); };
-
-  // Dismiss on an outside pointer/touch, on focus leaving the group, or on
-  // Escape — via document listeners rather than a full-screen click-catcher
-  // div, which relies on a non-semantic clickable element with no keyboard
-  // path. `pointerdown` covers mouse, touch, and pen in one listener.
-  //
-  // The disclosed panel is deliberately a plain group of <button>s and NOT
-  // role="menu"/"menuitem": that role pair is a contract for the full menu
-  // keyboard pattern (arrow-key roving focus, Home/End, focus into the first
-  // item on open). Announcing a menu we don't implement leaves screen-reader
-  // users pressing arrow keys at something that only answers to Tab, which is
-  // worse than the plain buttons they'd otherwise get.
-  useEffect(() => {
-    if (!open) return;
-    const outside = (target: EventTarget | null) =>
-      !!rootRef.current && !rootRef.current.contains(target as Node);
-    const onPointer = (e: PointerEvent) => { if (outside(e.target)) setOpen(false); };
-    const onFocusIn = (e: FocusEvent) => { if (outside(e.target)) setOpen(false); };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      setOpen(false);
-      // Escape returns focus to the control that opened the panel, so keyboard
-      // users don't get dropped back to the top of the document.
-      triggerRef.current?.focus();
-    };
-    document.addEventListener('pointerdown', onPointer);
-    document.addEventListener('focusin', onFocusIn);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onPointer);
-      document.removeEventListener('focusin', onFocusIn);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  return (
-    <div ref={rootRef} className="relative">
-      <Btn
-        ref={triggerRef}
-        sm
-        onClick={() => setOpen(o => !o)}
-        disabled={disabled}
-        title="Never play this on air"
-        aria-expanded={open}
-        aria-haspopup="true"
-      >
-        {busy ? '…' : <Ban size={12} />}
-      </Btn>
-      {open && (
-        <div className="absolute top-full right-0 z-50 mt-1 min-w-[200px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-          <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('track')}>
-            Never play this track
-          </button>
-          {track.album && (
-            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('album')}>
-              Never play this album
-            </button>
-          )}
-          {track.artist && (
-            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('artist')}>
-              Never play this artist
-              <span className="block text-[10px] text-muted">primary credit only — collabs filed under other artists still play</span>
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// BlockedTab — the never-play blocklist manager. Lists entries newest-first
-// with a type badge and one-click unblock. The list governs AIRING only:
-// blocked tracks still appear in browse/search (the library browser shows the
-// library), they just never make it to the queue.
-// ---------------------------------------------------------------------------
-function BlockedTab({ entries, loading, unblocking, onUnblock, onRefresh }: {
-  entries: BlockEntry[] | null;
-  loading: boolean;
-  unblocking: string | null;
-  onUnblock: (e: BlockEntry) => void;
-  onRefresh: () => void;
-}) {
-  const rows = (entries || []).slice().sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''));
-  return (
-    <Card
-      title="Never play"
-      sub={entries ? `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'} — these are refused everywhere: DJ picks, requests, even manual queueing` : ''}
-      right={
-        <Btn sm onClick={onRefresh} disabled={loading}>
-          <RefreshCw size={11} /> {loading ? 'Loading…' : 'Refresh'}
-        </Btn>
-      }
-      bodyClass="!p-0"
-    >
-      {rows.length === 0 ? (
-        loading ? (
-          <SkeletonRows rows={4} className="m-4" />
-        ) : (
-          <EmptyState
-            compact
-            title="Nothing blocked"
-            description={<>Use the <Ban size={11} className="inline align-[-1px]" /> action on any track row to keep a track, album or artist off the air.</>}
-          />
-        )
-      ) : (
-        <div className={cn(loading && 'opacity-60 transition-opacity')}>
-          {rows.map(e => {
-            const key = `${e.type}:${e.id}`;
-            return (
-              <div key={key} className="flex items-center gap-3 border-b border-dashed border-[var(--separator-strong)] px-4 py-2.5 last:border-b-0">
-                <span className="lib-mtag shrink-0" title={`blocked ${e.type}`}>{e.type}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="lib-title">{e.name || e.id}</div>
-                  {(e.artist || e.album) && e.type !== 'artist' && (
-                    <div className="lib-artist">{e.artist || ''}{e.album && e.type === 'track' ? ` · ${e.album}` : ''}</div>
-                  )}
-                </div>
-                <span className="hidden text-[11px] text-muted sm:block" title="blocked on">
-                  {e.addedAt ? new Date(e.addedAt).toLocaleDateString('en-GB') : ''}
-                </span>
-                <Btn sm onClick={() => onUnblock(e)} disabled={!!unblocking}>
-                  {unblocking === key ? '…' : <><X size={12} /> Unblock</>}
-                </Btn>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// HistoryTab — the durable play log (GET /library/history), newest first.
-// Every aired track with when it played, how it was picked (DJ / request /
-// auto playlist), and which show was on air. Rows with a track id can be
-// re-queued straight from here. Grouped by day so a scan of "what aired last
-// night" doesn't need to parse timestamps.
-// ---------------------------------------------------------------------------
-function playDayLabel(iso: string): string {
-  const d = new Date(iso);
-  const today = new Date();
-  const yesterday = new Date(today.getTime() - 86400000);
-  if (d.toDateString() === today.toDateString()) return 'Today';
-  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
-  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-}
-
-function playSourceLabel(p: PlayEntry): string {
-  if (p.source === 'request') return p.requestedBy ? `request · ${p.requestedBy}` : 'request';
-  if (p.source === 'ai') return 'DJ pick';
-  return 'auto';
-}
-
-function HistoryTab({ rows, total, page, setPage, loading, queuing, onQueue, onRefresh }: {
-  rows: PlayEntry[] | null;
-  total: number;
-  page: number;
-  setPage: (fn: (p: number) => number) => void;
-  loading: boolean;
-  queuing: string | null;
-  onQueue: (t: Track) => void;
-  onRefresh: () => void;
-}) {
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  return (
-    <>
-      <Card
-        title="Play history"
-        sub={rows ? `${num(total)} play${total === 1 ? '' : 's'} on record — every aired track, with how it was picked and what show was on` : ''}
-        right={
-          <Btn sm onClick={onRefresh} disabled={loading}>
-            <RefreshCw size={11} /> {loading ? 'Loading…' : 'Refresh'}
-          </Btn>
-        }
-        bodyClass="!p-0"
-      >
-        {!rows || rows.length === 0 ? (
-          loading || !rows ? (
-            <SkeletonRows rows={4} className="m-4" />
-          ) : (
-            <EmptyState
-              compact
-              title="Nothing on record yet"
-              description="Plays are logged from the moment this version starts airing tracks."
-            />
-          )
-        ) : (
-          <div className={cn(loading && 'opacity-60 transition-opacity')}>
-            {rows.map((p, i) => {
-              const day = playDayLabel(p.playedAt);
-              const prev = i > 0 ? rows[i - 1] : null;
-              const prevDay = prev ? playDayLabel(prev.playedAt) : null;
-              const time = new Date(p.playedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-              return (
-                <Fragment key={p.id}>
-                  {day !== prevDay && (
-                    <div className="caption border-b border-dashed border-[var(--separator-strong)] px-4 py-1.5 text-muted">{day}</div>
-                  )}
-                  <div className="flex items-center gap-3 border-b border-dashed border-[var(--separator-strong)] px-4 py-2.5 last:border-b-0">
-                    <span className="mono-num w-11 shrink-0 text-[11px] text-muted" title={new Date(p.playedAt).toLocaleString('en-GB')}>
-                      {time}
-                    </span>
-                    <Thumb track={{ id: p.trackId || '', title: p.title || undefined, artist: p.artist || undefined, album: p.album || undefined }} />
-                    <div className="min-w-0 flex-1">
-                      <div className="lib-title">{p.title || 'unknown'}</div>
-                      <div className="lib-artist">{p.artist || ''}{p.album ? ` · ${p.album}` : ''}</div>
-                    </div>
-                    {p.showName && (
-                      <span className="lib-mtag hidden shrink-0 md:inline-block" title="show on air">{p.showName}</span>
-                    )}
-                    <span className="hidden w-24 shrink-0 text-right text-[11px] text-muted sm:block" title="how it was picked">
-                      {playSourceLabel(p)}
-                    </span>
-                    <Btn
-                      sm
-                      onClick={() => onQueue({ id: p.trackId!, title: p.title || undefined, artist: p.artist || undefined, album: p.album || undefined })}
-                      disabled={!p.trackId || !!queuing}
-                      title={p.trackId ? 'queue this track again' : 'no track id recorded for this play'}
-                    >
-                      {queuing && queuing === p.trackId ? '…' : <><ListPlus size={12} /> Queue</>}
-                    </Btn>
-                  </div>
-                </Fragment>
-              );
-            })}
-          </div>
-        )}
-      </Card>
-
-      {total > PAGE_SIZE && (
-        <div className="flex items-center justify-between text-[11px] text-muted">
-          <span className="mono-num">
-            {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {num(total)}
-          </span>
-          <span className="flex items-center gap-2">
-            <Btn sm disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>‹ prev</Btn>
-            <span className="mono-num">page {page + 1} of {totalPages}</span>
-            <Btn sm disabled={page + 1 >= totalPages} onClick={() => setPage(p => p + 1)}>next ›</Btn>
-          </span>
-        </div>
-      )}
-    </>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ManualTagEditor — inline mood/energy editor under a track row. Operator-set
-// tags (source='manual') feed songsByMood() → the picker exactly like the
-// LLM tagger's, and "apply to whole album" tags every track on the album so a
-// folder/album of content can be targeted at once (discussion #336).
-// ---------------------------------------------------------------------------
-const ENERGY_SEG: { id: string; label: string }[] = [
-  { id: 'none', label: 'none' },
-  { id: 'low', label: 'low' },
-  { id: 'medium', label: 'med' },
-  { id: 'high', label: 'high' },
-];
-
-function ManualTagEditor(props: {
-  track: Track;
-  vocab: string[];
-  busy: boolean;
-  onSave: (moods: string[], energy: string | null, applyToAlbum: boolean) => void;
-  onCancel: () => void;
-}) {
-  const { track, vocab, busy } = props;
-  const [sel, setSel] = useState<string[]>((track.moods || []).slice(0, 3));
-  const [energy, setEnergy] = useState<string>(track.energy || 'none');
-  const [applyToAlbum, setApplyToAlbum] = useState(false);
-
-  const toggle = (m: string) =>
-    setSel(cur => cur.includes(m) ? cur.filter(x => x !== m) : (cur.length >= 3 ? cur : [...cur, m]));
-  const energyVal = energy === 'none' ? null : energy;
-
-  return (
-    <div className="grid gap-3 border-b border-ink bg-[var(--ink-softer)] px-4 py-3">
-      <div className="grid gap-1.5">
-        <Eyebrow>moods · up to 3</Eyebrow>
-        <div className="flex flex-wrap gap-1.5">
-          {vocab.length === 0 && <SkeletonText lines={1} />}
-          {vocab.map(m => {
-            const on = sel.includes(m);
-            return (
-              <Pill
-                key={m}
-                tone={on ? 'accent' : 'default'}
-                onClick={busy || (!on && sel.length >= 3) ? undefined : () => toggle(m)}
-                className={cn(
-                  (busy || (!on && sel.length >= 3)) && !on && 'opacity-40',
-                  !busy && 'cursor-pointer',
-                )}
-              >
-                {m}
-              </Pill>
-            );
-          })}
-        </div>
-      </div>
-      <div className="grid gap-1.5">
-        <Eyebrow>energy</Eyebrow>
-        <div><Seg value={energy} options={ENERGY_SEG} onChange={setEnergy} /></div>
-      </div>
-      <label className="flex items-center gap-2 text-[12px] text-ink">
-        <input
-          type="checkbox"
-          checked={applyToAlbum}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => setApplyToAlbum(e.target.checked)}
-          disabled={busy}
-        />
-        apply to whole album{track.album ? ` “${track.album}”` : ''}
-      </label>
-      <div className="flex items-center gap-2">
-        <Btn sm tone="accent" onClick={() => props.onSave(sel, energyVal, applyToAlbum)} disabled={busy || sel.length === 0}>
-          {busy ? 'Saving…' : 'Save tags'}
-        </Btn>
-        <Btn sm tone="danger" onClick={() => props.onSave([], null, applyToAlbum)} disabled={busy}>
-          Clear tags
-        </Btn>
-        <Btn sm onClick={props.onCancel} disabled={busy}>Cancel</Btn>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// AddToPlaylistBar — shown while rows are selected on any track tab. Adds the
-// selection to an existing Navidrome playlist or creates a new one; both go
-// through the controller's /playlists routes (Subsonic createPlaylist /
-// updatePlaylist under the hood).
-// ---------------------------------------------------------------------------
-function AddToPlaylistBar({ count, playlists, busy, onAdd, onClear }: {
-  count: number;
-  playlists: PlaylistSummary[] | null;
-  busy: boolean;
-  onAdd: (target: { playlistId?: string; name?: string }) => void;
-  onClear: () => void;
-}) {
-  const [target, setTarget] = useState<string>('__new');
-  const [name, setName] = useState('');
-  const creating = target === '__new';
-  const canAdd = creating ? !!name.trim() : true;
-
-  return (
-    <Card bodyClass="!py-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="text-[12px] font-bold text-ink">
-          {count} track{count === 1 ? '' : 's'} selected
-        </span>
-        <Select value={target} onValueChange={setTarget}>
-          <SelectTrigger className="min-w-[180px]" aria-label="Target playlist"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__new">New playlist…</SelectItem>
-            {(playlists || []).map(p => (
-              <SelectItem key={p.id} value={p.id}>
-                {p.name} · {p.songCount}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {creating && (
-          <Input
-            placeholder="playlist name"
-            aria-label="New playlist name"
-            className="w-48"
-            value={name}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setName(e.target.value)}
-          />
-        )}
-        <Btn
-          sm
-          tone="accent"
-          disabled={busy || !canAdd}
-          onClick={() => onAdd(creating ? { name: name.trim() } : { playlistId: target })}
-        >
-          <ListMusic size={12} /> {busy ? 'Adding…' : creating ? 'Create playlist' : 'Add to playlist'}
-        </Btn>
-        <Btn sm onClick={onClear} disabled={busy}>Clear selection</Btn>
-      </div>
-    </Card>
-  );
-}

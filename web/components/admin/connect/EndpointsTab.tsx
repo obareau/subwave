@@ -41,8 +41,8 @@ export default function EndpointsTab({ catalog, adminFetch }: Props) {
             {groups.reduce((n, g) => n + g.endpoints.length, 0)} endpoint
             {groups.reduce((n, g) => n + g.endpoints.length, 0) === 1 ? '' : 's'}
           </span>
-          <span className="caption ml-auto text-muted">
-            Base <code>{catalog.apiBase}</code>
+          <span className="caption ml-auto min-w-0 text-muted">
+            Base <code className="break-all">{catalog.apiBase}</code>
           </span>
         </div>
       </Card>

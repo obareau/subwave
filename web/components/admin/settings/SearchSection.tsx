@@ -176,7 +176,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
             <>
               <div className="field">
                 <Label>{keyed.name} API key</Label>
-                <div className="flex items-stretch gap-2">
+                <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                   <Input
                     type="password"
                     autoComplete="off"
@@ -214,7 +214,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
             <>
               <div className="field">
                 <Label>SearXNG URL</Label>
-                <div className="flex items-stretch gap-2">
+                <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                   <Input
                     type="url"
                     placeholder="http://192.168.0.112:8888"

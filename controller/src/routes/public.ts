@@ -23,6 +23,7 @@ import { listCommunityShows } from '../shows/community.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
+import { publicGuestIds, publicPersonaShape, soulsArePublic } from '../util/public-persona.js';
 import { checkAuthRateLimit, clientIp } from '../middleware/ratelimit.js';
 import { STATE_ROOT } from '../config.js';
 import { activeStationId } from '../stations/resolve.js';
@@ -59,6 +60,11 @@ function mimeForAvatar(filename: string): string {
 function avatarUrlFor(personaId?: string | null): string {
   return personaId ? `/persona-avatar/${encodeURIComponent(personaId)}` : '';
 }
+
+// The listener-safe persona shape + the souls disclosure rule live in
+// util/public-persona.ts so GET /schedule and GET /personas can't drift apart
+// on what they publish, and so the rule is unit-pinnable. Read per-request
+// (never cached) — flipping the toggle applies live.
 
 // Resolve the public origin to build tune-in URLs from. SITE_URL (set by the
 // operator) wins — it's the trusted, canonical address and is immune to a
@@ -396,20 +402,18 @@ router.get('/dj', async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // GET /schedule — listener-facing week view. Returns the show definitions,
-// the 7×24 grid, and a lightweight persona index ({ id, name, avatar }) so
-// the player can paint host names + avatars without a separate lookup. No
-// souls, no TTS config, no admin-only fields — anything the DJ already says
-// on air or signals via on-air persona identity.
+// the 7×24 grid, and a persona index (id/name/tagline/avatar, plus `soul` when
+// privacy.publishPersonaSouls is on) so a client can paint the whole roster —
+// hosts AND guest co-hosts — from this one request. No TTS config, no
+// behaviour dials, no admin-only fields.
 // ---------------------------------------------------------------------------
 router.get('/schedule', async (req, res) => {
   try {
     await settings.load();
     const s = settings.get();
-    const personas = (s.personas || []).map((p: any) => ({
-      id: p.id,
-      name: p.name,
-      avatar: avatarUrlFor(p.id),
-    }));
+    const withSouls = soulsArePublic(s);
+    const roster = s.personas || [];
+    const personas = roster.map((p: any) => publicPersonaShape(p, withSouls, avatarUrlFor(p.id)));
     const shows = (s.shows || []).map((show: any) => ({
       id: show.id,
       name: show.name,
@@ -419,11 +423,20 @@ router.get('/schedule', async (req, res) => {
       moods: Array.isArray(show.moods) ? show.moods : [],
       mood: Array.isArray(show.moods) && show.moods.length ? show.moods[0] : '',
       personaId: show.personaId,
+      // Guest co-hosts as ids into the `personas` index above — resolved
+      // against the live roster, so a persona deleted after the show was saved
+      // simply vanishes. Empty array for a solo show, so existing clients see
+      // a harmless extra [].
+      guestPersonaIds: publicGuestIds(show.guestPersonaIds, roster),
     }));
     res.json({
       personas,
       shows,
       schedule: s.schedule,
+      // Same discriminator /personas carries: lets a schedule-only client tell
+      // "no souls published" from "souls on but blank" without inferring it
+      // from key presence (ambiguous on an empty roster).
+      soulsPublished: withSouls,
       // Timed takeover (#930): the pin currently in force, or null. Expired /
       // dangling overrides report as null even before the janitor sweeps them.
       override: settings.getScheduleOverride(),
@@ -434,6 +447,34 @@ router.get('/schedule', async (req, res) => {
       // needed.
       timezone: getStationTimezone(),
       locale: s.locale,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /personas — the station's full DJ roster as one listener-safe index
+// (id/name/tagline/avatar, plus `soul` when privacy.publishPersonaSouls is on).
+// The same shape /schedule embeds, for clients that want the roster without
+// the week grid — a "meet the DJs" page. `activePersonaId` marks the operator's
+// selected persona; note a scheduled show can put a different one on air, so
+// use /dj (or /now-playing's activeShow) for "who is speaking right now".
+// ---------------------------------------------------------------------------
+router.get('/personas', async (req, res) => {
+  try {
+    await settings.load();
+    const s = settings.get();
+    const withSouls = soulsArePublic(s);
+    res.json({
+      personas: (s.personas || []).map((p: any) =>
+        publicPersonaShape(p, withSouls, avatarUrlFor(p.id)),
+      ),
+      activePersonaId: s.activePersonaId || '',
+      // Lets a client tell "this station publishes no souls" from "every soul
+      // happens to be blank", so it can hide the bio column instead of
+      // rendering a wall of empty cards.
+      soulsPublished: withSouls,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

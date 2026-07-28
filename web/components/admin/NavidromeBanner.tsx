@@ -52,19 +52,19 @@ export default function NavidromeBanner({
   return (
     <div
       role="alert"
-      className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-7 py-2 text-[11px] text-ink"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-5 py-2 text-[11px] text-ink sm:px-7"
     >
       <AlertTriangle size={14} className="shrink-0 text-[var(--danger)]" aria-hidden="true" />
       <span>
         <b>Can&rsquo;t reach Navidrome.</b> The DJ has no music source
-        {status.reason ? <> — {status.reason}</> : null}. Check the URL / username / password in
-        setup and that Navidrome is running.
+        {status.reason ? <> — {status.reason}</> : null}. Check the connection in Settings &rarr;
+        Music source and that Navidrome is running.
       </span>
       <Link
-        href="/admin/doctor"
-        className="ml-auto font-bold text-[var(--danger)] underline-offset-2 hover:underline"
+        href="/admin/settings?section=music"
+        className="ml-auto inline-flex min-h-9 items-center font-bold text-[var(--danger)] underline-offset-2 hover:underline sm:min-h-0"
       >
-        DJ Doc &rarr;
+        Music source &rarr;
       </Link>
     </div>
   );

@@ -21,327 +21,44 @@ import { Switch } from '../ui/switch';
 import { V3Alert } from '../ui/alert';
 import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../../lib/cn';
-
-const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
-
-// Mirrors SHOW_MOODS in controller/src/settings.ts (stable vocab).
-const MOODS = [
-  'energetic', 'calm', 'reflective', 'celebratory', 'romantic', 'spiritual',
-  'focus', 'workout', 'driving', 'cooking', 'rainy', 'sunny', 'night', 'morning',
-  'evening', 'festival', 'cultural',
-];
-const ENERGIES = ['low', 'medium', 'high'];
-type ArcShape = 'flat' | 'build' | 'peak-then-cool' | 'wind-down';
-const ARCS: { id: ArcShape; label: string; hint: string }[] = [
-  { id: 'flat', label: 'Steady', hint: 'even energy throughout' },
-  { id: 'build', label: 'Build', hint: 'calm → energetic' },
-  { id: 'peak-then-cool', label: 'Peak', hint: 'rise, then cool down' },
-  { id: 'wind-down', label: 'Wind down', hint: 'high → mellow' },
-];
-// Band domains. Anchors parked at the extremes mean "unbounded" on that end.
-const LEN_MAX = 600;                              // track length: 0 → 10:00, 15s notches
-const LEN_STEP = 15;
-const BPM_MIN = 60;                               // tempo: 60 → 200 bpm, 5 bpm notches
-const BPM_MAX = 200;
-const BPM_STEP = 5;
-const YEAR_MIN = 1950;                            // release year: 1950 → current year
-const YEAR_MAX = new Date().getFullYear();
-
-// Bar palette for the energy graph — theme-aware mixes rather than the mock's
-// light-theme hexes, so dark mode keeps the same low/med/high contrast. Raw
-// values feed SVG `fill` attributes; the class twins style HTML swatches.
-const EN_LOW = 'color-mix(in oklab, var(--ink) 22%, var(--bg))';
-const EN_MED = 'color-mix(in oklab, var(--ink) 80%, var(--bg))';
-const EN_HIGH = 'var(--accent)';
-const EN_LOW_BG = 'bg-[color-mix(in_oklab,var(--ink)_22%,var(--bg))]';
-const EN_MED_BG = 'bg-[color-mix(in_oklab,var(--ink)_80%,var(--bg))]';
-const EN_HIGH_BG = 'bg-[var(--accent)]';
-
-type View = 'result' | 'empty' | 'generating' | 'nomatch' | 'error';
-type GenMode = 'fresh' | 'regenerate' | 'more';
-
-interface DraftTrack {
-  id: string;
-  title: string;
-  artist: string;
-  album?: string;
-  durationSec: number;
-  year?: number | null;
-  genre?: string | null;
-  energy?: string | null;
-  moods?: string[];
-  instrumental?: boolean | null;
-}
-interface SeedChip { id: string; title: string; artist: string }
-interface PlaylistSummary { id: string; name: string; songCount: number; synced?: boolean; lastSyncedAt?: string | null }
-
-// Loose shape for /dj/search rows and /playlists/:id entries — the controller
-// returns Subsonic-derived fields with varying key names across endpoints.
-interface RawTrackRow {
-  id: string;
-  title?: string;
-  artist?: string;
-  album?: string;
-  duration?: number;
-  durationSec?: number;
-  year?: number | null;
-  genre?: string | null;
-  energy?: string | null;
-  moods?: string[];
-}
-
-function rowToDraft(s: RawTrackRow): DraftTrack {
-  return {
-    id: s.id,
-    title: s.title || '',
-    artist: s.artist || '',
-    album: s.album,
-    durationSec: s.durationSec ?? s.duration ?? 0,
-    year: s.year,
-    genre: s.genre ?? null,
-    energy: s.energy ?? null,
-    moods: s.moods || [],
-    instrumental: null,
-  };
-}
-
-function fmtDur(sec: number): string {
-  const s = Math.max(0, Math.round(sec));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const ss = s % 60;
-  if (h) return `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
-  return `${m}:${String(ss).padStart(2, '0')}`;
-}
-function fmtRun(total: number): string {
-  const h = Math.floor(total / 3600);
-  const m = Math.round((total % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
-function relTime(iso: string): string {
-  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const h = Math.floor(mins / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d ago`;
-  return new Date(iso).toLocaleDateString();
-}
-const energyPct = (e?: string | null): number => (e === 'low' ? 34 : e === 'high' ? 92 : 64);
-const energyColor = (e?: string | null): string => (e === 'low' ? EN_LOW : e === 'high' ? EN_HIGH : EN_MED);
-const energyBgClass = (e?: string | null): string => (e === 'low' ? EN_LOW_BG : e === 'high' ? EN_HIGH_BG : EN_MED_BG);
-// Untagged tracks read '—', not a fake 'med' — an untagged library shouldn't
-// masquerade as uniformly mid-energy (the bars go translucent for the same reason).
-const energyLabel = (e?: string | null): string =>
-  e === 'low' || e === 'medium' || e === 'high' ? (e === 'medium' ? 'med' : e) : '—';
-const energyKnown = (e?: string | null): boolean => e === 'low' || e === 'medium' || e === 'high';
-
-// ── shared micro-pieces (design idiom: mono eyebrows, sharp toggles) ─────────
-
-function Eyeb({ children, muted, className }: { children: React.ReactNode; muted?: boolean; className?: string }) {
-  return (
-    <span className={cn('font-mono text-[10px] font-bold tracking-[0.16em] uppercase', muted ? 'text-muted' : 'text-ink', className)}>
-      {children}
-    </span>
-  );
-}
-
-function Tog({ on, onClick, title, children }: { on: boolean; onClick: () => void; title?: string; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className={cn(
-        'border px-[11px] py-1.5 font-mono text-[11px] font-semibold tracking-[0.03em] transition',
-        on ? 'border-ink bg-ink text-bg' : 'border-separator-strong bg-bg text-ink hover:border-ink',
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function IconBtn({ onClick, disabled, title, className, children }: {
-  onClick?: () => void; disabled?: boolean; title?: string; className?: string; children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      className={cn(
-        'grid size-[30px] place-items-center border border-transparent text-muted transition',
-        'hover:border-separator-soft hover:bg-ink-soft hover:text-ink disabled:opacity-25 disabled:hover:border-transparent disabled:hover:bg-transparent',
-        className,
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Chip({ accent, onRemove, children }: { accent?: boolean; onRemove?: () => void; children: React.ReactNode }) {
-  return (
-    <span className={cn(
-      'inline-flex items-center gap-1.5 border bg-bg px-[7px] py-[3px] font-mono text-[10px] font-semibold tracking-[0.06em] uppercase',
-      accent ? 'border-[var(--accent)] text-vermilion' : 'border-separator-strong text-ink',
-    )}>
-      {children}
-      {onRemove && (
-        <button type="button" onClick={onRemove} className="cursor-pointer text-muted hover:text-ink" title="remove">
-          <X className="size-3" />
-        </button>
-      )}
-    </span>
-  );
-}
-
-// ── Dual-anchor range — two overlaid native sliders sharing one track, with an
-// accent band between the anchors. No dependency; thumbs stay keyboardable.
-function DualRange({ min, max, step, lo, hi, disabled, onLo, onHi, loLabel, hiLabel }: {
-  min: number; max: number; step: number; lo: number; hi: number; disabled?: boolean;
-  onLo: (v: number) => void; onHi: (v: number) => void; loLabel: string; hiLabel: string;
-}) {
-  const bandRef = useRef<HTMLDivElement>(null);
-  const span = max - min || 1;
-  const loPct = ((lo - min) / span) * 100;
-  const hiPct = ((hi - min) / span) * 100;
-  useDynamicStyle(bandRef, { left: `${loPct}%`, width: `${Math.max(0, hiPct - loPct)}%` });
-  const thumb =
-    'pointer-events-none absolute inset-0 h-5 w-full appearance-none bg-transparent outline-none ' +
-    '[&::-webkit-slider-runnable-track]:bg-transparent [&::-webkit-slider-thumb]:pointer-events-auto ' +
-    '[&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none ' +
-    '[&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-ink [&::-webkit-slider-thumb]:bg-[var(--accent)] ' +
-    '[&::-moz-range-track]:bg-transparent [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:size-3.5 ' +
-    '[&::-moz-range-thumb]:rounded-none [&::-moz-range-thumb]:border [&::-moz-range-thumb]:border-ink [&::-moz-range-thumb]:bg-[var(--accent)]';
-  return (
-    <div className={cn('relative h-5', disabled && 'opacity-40')}>
-      <div className="absolute top-1/2 right-0 left-0 h-[3px] -translate-y-1/2 bg-separator-strong" />
-      <div ref={bandRef} className="absolute top-1/2 h-[3px] -translate-y-1/2 bg-[var(--accent)]" />
-      <input
-        type="range" min={min} max={max} step={step} value={lo} disabled={disabled}
-        onChange={e => onLo(Math.min(+e.target.value, hi))}
-        aria-label={loLabel}
-        // When both anchors crowd the right end, lift the lo thumb so it stays grabbable.
-        className={cn(thumb, lo > max - step * 4 && 'z-10')}
-      />
-      <input
-        type="range" min={min} max={max} step={step} value={hi} disabled={disabled}
-        onChange={e => onHi(Math.max(+e.target.value, lo))}
-        aria-label={hiLabel}
-        className={thumb}
-      />
-    </div>
-  );
-}
-
-function SwitchRow({ label, hint, on, onToggle, mutedLabel }: {
-  label: string; hint: string; on: boolean; onToggle: (v: boolean) => void; mutedLabel?: boolean;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div>
-        <div className={cn('text-[13px] font-semibold', mutedLabel && 'text-muted')}>{label}</div>
-        <div className="font-mono text-[10px] text-muted">{hint}</div>
-      </div>
-      <Switch checked={on} onCheckedChange={onToggle} aria-label={label} />
-    </div>
-  );
-}
-
-// ── Energy tape-strip — slim per-track bars + dashed target arc. Collapsible,
-// and every bar is a jump-link: click scrolls its track row into view. ────────
-
-function EnergyGraph({ tracks, arc, open, onToggle, onBarClick }: {
-  tracks: DraftTrack[]; arc: ArcShape; open: boolean; onToggle: () => void; onBarClick: (i: number) => void;
-}) {
-  const n = tracks.length;
-  const arcLabel = ARCS.find(a => a.id === arc)?.label || 'Steady';
-  const noneTagged = useMemo(() => tracks.every(t => !energyKnown(t.energy)), [tracks]);
-  const targetPts = useMemo(() => {
-    const f = (p: number): number => {
-      if (arc === 'build') return p;
-      if (arc === 'wind-down') return 1 - p;
-      if (arc === 'peak-then-cool') return p < 0.6 ? p / 0.6 : 1 - ((p - 0.6) / 0.4) * 0.65;
-      return 0.5;
-    };
-    return tracks.map((_, i) => {
-      const p = n > 1 ? i / (n - 1) : 0;
-      return `${(i + 0.5).toFixed(2)},${(82 - f(p) * 64).toFixed(2)}`;
-    }).join(' ');
-  }, [tracks, arc, n]);
-  if (n === 0) return null;
-  return (
-    <div className="flex-none border-b border-separator-soft px-4 sm:px-6">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex h-7 w-full items-center justify-between gap-3 text-left"
-        title={open ? 'collapse the energy strip' : 'expand the energy strip'}
-      >
-        <span className="flex min-w-0 items-center gap-2.5">
-          <Eyeb muted>Energy</Eyeb>
-          {noneTagged && open && (
-            <span className="truncate font-mono text-[9px] text-muted/80">
-              untagged — run the library tagger (Library → Tag) to chart the real arc
-            </span>
-          )}
-        </span>
-        <span className="flex flex-none items-center gap-3 font-mono text-[9px] text-muted">
-          {open && !noneTagged && (
-            <>
-              <span className="hidden items-center gap-1 sm:flex"><span className={cn('inline-block size-2', EN_LOW_BG)} />low</span>
-              <span className="hidden items-center gap-1 sm:flex"><span className={cn('inline-block size-2', EN_MED_BG)} />med</span>
-              <span className="hidden items-center gap-1 sm:flex"><span className={cn('inline-block size-2', EN_HIGH_BG)} />high</span>
-            </>
-          )}
-          {open && (
-            <span className="flex items-center gap-1">
-              <svg width="14" height="8" aria-hidden><line x1="0" y1="4" x2="14" y2="4" stroke="var(--ink)" strokeWidth="1.5" strokeDasharray="3 2" /></svg>
-              target · {arcLabel}
-            </span>
-          )}
-          {open ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-        </span>
-      </button>
-      {open && (
-        <div className="relative h-11 pb-1.5">
-          <svg viewBox={`0 0 ${n} 100`} preserveAspectRatio="none" className="block h-full w-full">
-            {tracks.map((t, i) => {
-              const pct = energyPct(t.energy);
-              return (
-                <rect
-                  key={`${t.id}-${i}`}
-                  x={(i + 0.1).toFixed(3)}
-                  y={(100 - pct).toFixed(2)}
-                  width={0.8}
-                  height={pct}
-                  fill={energyColor(t.energy)}
-                  onClick={() => onBarClick(i)}
-                  className={cn('cursor-pointer hover:opacity-70', !energyKnown(t.energy) && 'opacity-35')}
-                >
-                  <title>{i + 1}. {t.title} — {t.artist}</title>
-                </rect>
-              );
-            })}
-            <polyline
-              points={targetPts}
-              fill="none"
-              stroke="var(--ink)"
-              strokeWidth="1.5"
-              strokeDasharray="3 2"
-              vectorEffect="non-scaling-stroke"
-              className="pointer-events-none opacity-60"
-            />
-          </svg>
-        </div>
-      )}
-    </div>
-  );
-}
+import { EnergyGraph } from './playlist-builder/EnergyGraph';
+import {
+  Chip,
+  DualRange,
+  Eyeb,
+  IconBtn,
+  SwitchRow,
+  Tog,
+  energyBgClass,
+  energyLabel,
+} from './playlist-builder/bits';
+import { runGenerationJob } from './playlist-builder/generate';
+import type {
+  ArcShape,
+  DraftTrack,
+  GenMode,
+  PlaylistSummary,
+  RawTrackRow,
+  SeedChip,
+  View,
+} from './playlist-builder/types';
+import {
+  API,
+  ARCS,
+  BPM_MAX,
+  BPM_MIN,
+  BPM_STEP,
+  ENERGIES,
+  LEN_MAX,
+  LEN_STEP,
+  MOODS,
+  YEAR_MAX,
+  YEAR_MIN,
+  fmtDur,
+  fmtRun,
+  relTime,
+  rowToDraft,
+} from './playlist-builder/types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -547,18 +264,7 @@ export default function PlaylistBuilderPanel() {
     const exclude = mode === 'fresh' ? [] : tracks.map(t => t.id);
     setView('generating');
     try {
-      const r = await adminFetch('/playlists/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildBody(exclude)),
-      });
-      const j = await r.json();
-      if (!r.ok) {
-        setErrorMsg(j.error || 'generation failed');
-        setView(mode === 'more' && tracks.length ? 'result' : 'error');
-        if (mode === 'more' && tracks.length) flash(j.error || 'could not fetch more');
-        return;
-      }
+      const j = await runGenerationJob(adminFetch, buildBody(exclude));
       const got: DraftTrack[] = j.tracks || [];
       if (!got.length) {
         setView(mode === 'more' && tracks.length ? 'result' : 'nomatch');
@@ -582,8 +288,10 @@ export default function PlaylistBuilderPanel() {
       }
       setView('result');
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'generation failed');
+      const msg = err instanceof Error ? err.message : 'generation failed';
+      setErrorMsg(msg);
       setView(mode === 'more' && tracks.length ? 'result' : 'error');
+      if (mode === 'more' && tracks.length) flash(msg);
     } finally {
       generatingRef.current = false;
     }
@@ -1207,13 +915,16 @@ export default function PlaylistBuilderPanel() {
                 {/* Deck head — one title row with the toolbar, one meta strip.
                     Caveats and sync fold into the strip; the list gets the rest. */}
                 <div className="flex-none border-b border-ink px-4 pt-1.5 pb-2.5 sm:px-6">
-                  <div className="flex items-center gap-3">
+                  {/* The three deck actions eat ~185px, which leaves a 24px
+                      title field about eight characters at 390px — give the
+                      name its own line and let the actions wrap under it. */}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                     <input
                       value={name}
                       onChange={e => setName(e.target.value)}
                       placeholder="Untitled set"
                       aria-label="Playlist name"
-                      className="min-w-0 flex-1 border-b border-transparent bg-transparent py-0.5 font-display text-2xl font-bold tracking-[-0.01em] text-ink outline-none placeholder:text-muted/50 hover:border-separator-soft focus:border-[var(--accent)]"
+                      className="min-w-0 flex-1 basis-full border-b border-transparent bg-transparent py-0.5 font-display text-2xl font-bold tracking-[-0.01em] text-ink outline-none placeholder:text-muted/50 hover:border-separator-soft focus:border-[var(--accent)] sm:basis-0"
                     />
                     <div className="flex flex-none items-center gap-1.5">
                       <Button variant="ghost" size="sm" className="h-8" onClick={openBrowse} title="open a playlist from the music server">
@@ -1374,7 +1085,10 @@ export default function PlaylistBuilderPanel() {
                           </div>
                         )}
                       </div>
-                      <div className="flex items-center gap-2">
+                      {/* The duration/energy block beside three 30px icon
+                          buttons is ~170px wide — stacked, the trailing column
+                          costs 90px and the title keeps the rest. */}
+                      <div className="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
                         <div className="flex flex-col items-end gap-[3px]">
                           <span className="font-mono text-xs text-ink">{fmtDur(t.durationSec || 0)}</span>
                           <span className="flex items-center gap-[5px] font-mono text-[10px] text-muted">
@@ -1383,9 +1097,12 @@ export default function PlaylistBuilderPanel() {
                           </span>
                         </div>
                         <div className="flex items-center gap-0.5 transition-opacity lg:opacity-0 lg:group-hover:opacity-100">
-                          <IconBtn onClick={() => move(i, i - 1)} disabled={i === 0} title="Move up"><ArrowUp className="size-[15px]" /></IconBtn>
-                          <IconBtn onClick={() => move(i, i + 1)} disabled={i === tracks.length - 1} title="Move down"><ArrowDown className="size-[15px]" /></IconBtn>
-                          <IconBtn onClick={() => removeAt(i)} title="Remove"><X className="size-[15px]" /></IconBtn>
+                          {/* Reorder has no drag handle on mobile (the grip is
+                              `sm:` only), so these are the only way to move a
+                              row — size them for a thumb. */}
+                          <IconBtn className="size-9 sm:size-[30px]" onClick={() => move(i, i - 1)} disabled={i === 0} title="Move up"><ArrowUp className="size-[15px]" /></IconBtn>
+                          <IconBtn className="size-9 sm:size-[30px]" onClick={() => move(i, i + 1)} disabled={i === tracks.length - 1} title="Move down"><ArrowDown className="size-[15px]" /></IconBtn>
+                          <IconBtn className="size-9 sm:size-[30px]" onClick={() => removeAt(i)} title="Remove"><X className="size-[15px]" /></IconBtn>
                         </div>
                       </div>
                     </div>
@@ -1414,8 +1131,8 @@ export default function PlaylistBuilderPanel() {
                         <div className="text-[13px] leading-[1.5] text-muted">Type a mood on the left, optionally add seed tracks and tuning, and let the curator assemble the set.</div>
                       </div>
                     </div>
-                    <div className="flex items-center justify-between gap-3.5 border border-separator-strong p-4">
-                      <div className="flex gap-3.5">
+                    <div className="flex flex-wrap items-center justify-between gap-3.5 border border-separator-strong p-4">
+                      <div className="flex min-w-0 gap-3.5">
                         <div className="grid size-[26px] flex-none place-items-center border border-ink font-mono text-xs font-bold">2</div>
                         <div>
                           <div className="mb-0.5 text-sm font-bold">Open an existing playlist</div>
@@ -1486,7 +1203,7 @@ export default function PlaylistBuilderPanel() {
 
       {/* TOAST */}
       {toast && (
-        <div className="fixed top-[70px] right-6 z-[60] flex max-w-[340px] items-center gap-3 bg-ink px-3.5 py-3 text-bg shadow-drawer">
+        <div className="fixed top-[70px] right-4 left-4 z-[60] flex items-center gap-3 bg-ink px-3.5 py-3 text-bg shadow-drawer sm:right-6 sm:left-auto sm:max-w-[340px]">
           <span className="text-[13px] leading-[1.4]">{toast}</span>
           <button type="button" onClick={() => setToast('')} className="flex-none text-bg/70 hover:text-bg" title="dismiss">
             <X className="size-3.5" />
@@ -1652,11 +1369,11 @@ export default function PlaylistBuilderPanel() {
                 <Switch checked={saveSync} onCheckedChange={setSaveSync} aria-label="Keep in sync" />
               </div>
             </div>
-            <div className="flex items-center justify-between gap-3 border-t border-ink px-5 py-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-ink px-5 py-3.5">
               <span className="font-mono text-[10px] text-muted">
                 Then pin it to a show in <a href="/admin/shows" className="text-vermilion hover:text-ink">Shows</a> →
               </span>
-              <div className="flex gap-2.5">
+              <div className="flex flex-none gap-2.5">
                 <Button variant="ghost" className="h-10" onClick={() => setModal(null)}>Cancel</Button>
                 <Button variant="accent" className="h-10" disabled={saving || !saveName.trim()} onClick={doSave}>
                   {saving ? 'Saving…' : 'Save playlist'}

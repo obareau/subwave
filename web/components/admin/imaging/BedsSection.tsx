@@ -91,8 +91,8 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         metrics={<TabMetric accent n={pad2(list.length)} l="beds" />}
         actions={
           <>
-            <Btn sm onClick={() => setModal('import')} disabled={busy}>Import</Btn>
-            <Btn sm tone="solid" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
+            <Btn sm className="min-h-9 sm:min-h-0" onClick={() => setModal('import')} disabled={busy}>Import</Btn>
+            <Btn sm tone="solid" className="min-h-9 sm:min-h-0" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
           </>
         }
       />
@@ -127,9 +127,11 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
       {/* Thresholds */}
       <PanelBox>
         <PanelHead label="when to use a bed" />
-        <div className="grid grid-cols-2">
-          <div className="border-r border-separator-soft p-[18px]">
-            <div className="flex items-center gap-2.5">
+        {/* One column on mobile — two 155px cells can't hold a sentence, a
+            number field and a unit. The divider swaps side with the axis. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2">
+          <div className="border-b border-separator-soft p-[18px] sm:border-r sm:border-b-0">
+            <div className="flex flex-wrap items-center gap-2.5">
               <span className="text-[13px] font-semibold">Bed links longer than</span>
               <Input
                 className="mono-num w-[72px]"
@@ -156,7 +158,7 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
             </p>
           </div>
           <div className="p-[18px]">
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2.5">
               <span className="text-[13px] font-semibold">Ramp into the next song</span>
               <Input
                 className="mono-num w-[72px]"
@@ -194,7 +196,9 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
             {list.map(b => (
               <div
                 key={b.name}
-                className="grid grid-cols-[1fr_auto] items-center gap-[18px] px-[18px] py-[15px]"
+                /* Mobile drops the play/delete cluster under the text — see
+                   JinglesSection for the same reflow. */
+                className="grid grid-cols-1 items-center gap-3 px-[18px] py-[15px] sm:grid-cols-[1fr_auto] sm:gap-[18px]"
               >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-baseline gap-3">
@@ -225,6 +229,7 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
                       variant="ghost"
                       size="icon"
                       aria-label="Delete bed"
+                      className="size-9 sm:size-8"
                       disabled={busy || b.builtin}
                       onClick={() => onDelete(b.name)}
                     >
@@ -246,10 +251,11 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         sub="an instrumental we’ll generate with ElevenLabs"
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
+            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={() => setModal(null)}>Cancel</Button>
             <Btn
               sm
               tone="accent"
+              className="min-h-9 sm:min-h-0"
               onClick={doCreate}
               disabled={busy || !ready || !bedsForm.name.trim() || !bedsForm.prompt.trim()}
             >
@@ -325,8 +331,8 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         sub="an instrumental the DJ can talk over"
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
-            <Btn sm tone="accent" onClick={doImport} disabled={busy || !importFile || !importName.trim()}>
+            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={() => setModal(null)}>Cancel</Button>
+            <Btn sm tone="accent" className="min-h-9 sm:min-h-0" onClick={doImport} disabled={busy || !importFile || !importName.trim()}>
               {busy ? 'Importing…' : 'Import'}
             </Btn>
           </>

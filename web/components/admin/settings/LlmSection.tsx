@@ -419,7 +419,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             <>
               <div className="field">
                 <Label>Bearer token</Label>
-                <div className="flex items-stretch gap-2">
+                <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                   <Input
                     type="password"
                     autoComplete="off"
@@ -487,7 +487,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
               <>
                 <div className="field">
                   <Label>{llmProviderLabel(form.llm.provider)} API key</Label>
-                  <div className="flex items-stretch gap-2">
+                  <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                     <Input
                       type="password"
                       autoComplete="off"
@@ -519,7 +519,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
           <div className="field">
             <Label>Model</Label>
-            <div className="flex items-stretch gap-2">
+            <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
               {primaryDiscovery.models.length > 0 ? (
                 <ModelCombobox
                   models={primaryDiscovery.models}
@@ -604,7 +604,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
       <Card title="Fallback" sub="backup when the primary is offline">
         <div className="grid gap-[18px]">
-          <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
             <div>
               <div className="text-[13px] font-bold">Use a backup LLM</div>
               <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
@@ -736,7 +736,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <>
                   <div className="field">
                     <Label>Bearer token</Label>
-                    <div className="flex items-stretch gap-2">
+                    <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                       <Input
                         type="password"
                         autoComplete="off"
@@ -799,7 +799,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   <>
                     <div className="field">
                       <Label>{llmProviderLabel(form.llm.fallback.provider)} API key</Label>
-                      <div className="flex items-stretch gap-2">
+                      <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                         <Input
                           type="password"
                           autoComplete="off"
@@ -826,7 +826,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
               <div className="field">
                 <Label>Backup model</Label>
-                <div className="flex items-stretch gap-2">
+                <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                   {fallbackDiscovery.models.length > 0 ? (
                     <ModelCombobox
                       models={fallbackDiscovery.models}
@@ -881,7 +881,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <KeyStatus envVar={fallbackKeyVar} present={!!data.env?.[fallbackKeyVar]} />
               )}
 
-              <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
                 <div>
                   <div className="text-[13px] font-bold">Backup chain-of-thought</div>
                   <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
@@ -907,7 +907,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       </Card>
 
       <Card title="Reasoning" sub="thinking models">
-        <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
           <div>
             <div className="text-[13px] font-bold">Chain-of-thought</div>
             <div className="field-hint mt-1 max-w-[440px]">
@@ -957,7 +957,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       </Card>
 
       <Card title="Next-track picker" sub="how the DJ chooses">
-        <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
           <div>
             <div className="text-[13px] font-bold">Agentic picker</div>
             <div className="field-hint mt-1 max-w-[440px]">
@@ -1003,7 +1003,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         )}
 
         {form.llm.pickerAgent && (
-          <div className="mt-4 grid grid-cols-[1fr_auto] items-center gap-4">
+          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
             <div>
               <div className="text-[13px] font-bold">Resolve described requests via web</div>
               <div className="field-hint mt-1 max-w-[440px]">
@@ -1049,7 +1049,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       </Card>
 
       <Card title="Idle behaviour" sub="when no one's listening">
-        <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
           <div>
             <div className="text-[13px] font-bold">Pause DJ when empty</div>
             <div className="field-hint mt-1 max-w-[440px]">
@@ -1119,7 +1119,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         )}
 
         {form.llm.dailyTokenCap > 0 && (
-          <div className="mt-4 grid grid-cols-[1fr_auto] items-center gap-4">
+          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
             <div>
               <div className="text-[13px] font-bold">Always answer requests</div>
               <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">

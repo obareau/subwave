@@ -8,6 +8,8 @@ to work.
 > **Not TTS?** Library *analysis* (CLAP "sounds-like" + Demucs vocals) has its
 > own GPU path — the `docker-compose.analyzer-gpu.yml` overlay, no rebuild
 > needed. See [docs/tts-heavy.md → Heavy analysis on an NVIDIA GPU](tts-heavy.md#heavy-analysis-on-an-nvidia-gpu-cuda).
+> On the **all-in-one** image there's no overlay: point the container at the
+> `subwave-aio-cuda` tag instead — see [docs/unraid.md](unraid.md#acoustic-analysis-default-on--expressive-voices-opt-in).
 
 | | Easy route (OpenAI layer) | Native route (sidecar on GPU) |
 |---|---|---|

@@ -171,9 +171,14 @@ regular cadence — it's cheap insurance.
     a visible GPU the worker logs a warning and runs on CPU.
   - **All-in-one image** (\`analyzer local\` — the AIO bundles the analyzer
     in-process): switch the single container's image to
-    \`ghcr.io/perminder-klair/subwave-aio-heavy\`. Do NOT point an AIO install at
-    \`subwave-analyzer-heavy\` — that's the bare analyzer micro-service, and swapping
-    the AIO container to it replaces the whole station with just an analyzer.
+    \`ghcr.io/perminder-klair/subwave-aio-heavy\`, or on an NVIDIA host
+    \`ghcr.io/perminder-klair/subwave-aio-cuda\` (same heavy features on the GPU)
+    with GPU passthrough — \`--gpus all\`, or on Unraid the nvidia runtime plus
+    NVIDIA_VISIBLE_DEVICES / NVIDIA_DRIVER_CAPABILITIES. There is no compose
+    overlay for the AIO; the GPU rides on the image. Do NOT point an AIO install
+    at \`subwave-analyzer-heavy\` or \`subwave-analyzer-cuda\` — those are the bare
+    analyzer micro-service, and swapping the AIO container to one replaces the
+    whole station with just an analyzer.
   - Or turn the setting off (it's costing nothing but false expectations).
 
 ## Listener-request web-resolve (settings.llm.requestWebResolve)

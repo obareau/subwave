@@ -1,4 +1,5 @@
 import ManualPage from './ManualPage';
+import ManualFigure from './ManualFigure';
 
 export default function Requests() {
   return (
@@ -21,6 +22,14 @@ export default function Requests() {
           <li><strong>An artist</strong> — &ldquo;something by Aphex Twin.&rdquo;</li>
           <li><strong>A mood</strong> — &ldquo;something for a rainy Sunday morning.&rdquo;</li>
         </ul>
+        <ManualFigure
+          src="/screenshots/player-request-song.webp"
+          alt="The request panel on a phone: a request slip headed LINE OPEN with a written note and a signature, four suggestion chips, and a SEND TO THE BOOTH button"
+          caption="The request slip. The chips underneath fill it in for you — more like this, something for right now, or surprise me."
+          width={828}
+          height={1792}
+          shot="phone"
+        />
       </section>
 
       <section className="bs-section">

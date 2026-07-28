@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability, modelTolerant, schemaHint, clipText, soulBrief, SOUL_BRIEF_MAX } from '../src/llm/internal/core/pure.js';
+import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability, modelTolerant, schemaHint, clipText, soulBrief, SOUL_BRIEF_MAX, renderTerminalPrompt, messageText } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -520,6 +520,83 @@ async function main() {
     assert.equal(agentPlan({ provider: 'openai-compatible' }, {}, 3), 'done-tool');
     assert.equal(agentPlan({ provider: 'openai' }, null, 3), 'free-text');
     assert.equal(agentPlan({ provider: 'ollama' }, null, 0), 'free-text');
+  });
+
+  // ---- Terminal single-turn collapse (issue #1157) ----
+  // The last leg of djAgent's cascade flattens the agent's chat window + the
+  // discovery trail into ONE user prompt, so a backend that answers the terminal
+  // `done` step in prose (llama.cpp / LM Studio + Hermes, GLM after a refusal)
+  // gets asked in the single-turn shape it DOES answer with a forced tool call.
+  // These pin the two properties the collapse actually rides on: the real
+  // candidate ids survive into the prompt, and the multi-turn tool plumbing does not.
+  console.log('renderTerminalPrompt / messageText:');
+  await test('messageText reads both the string and the parts-array content shapes', () => {
+    assert.equal(messageText({ role: 'user', content: '  pick a track  ' }), 'pick a track');
+    assert.equal(messageText({ role: 'assistant', content: [{ type: 'text', text: 'one' }, { type: 'text', text: 'two' }] }), 'one\ntwo');
+    // Tool plumbing carries no renderable text — the findings block covers it,
+    // and replaying it here would rebuild the shape the collapse exists to shed.
+    assert.equal(messageText({ role: 'assistant', content: [{ type: 'tool-call', toolName: 'searchByMood', input: {} }] }), '');
+    assert.equal(messageText({ role: 'user', content: undefined }), '');
+    assert.equal(messageText(null), '');
+  });
+  await test('carries real candidate ids from the trail into the prompt', () => {
+    const prompt = renderTerminalPrompt(
+      [
+        { role: 'assistant', content: 'Just span Blue Monday.' },
+        { role: 'user', content: 'Pick the track to play next. Stay silent — no link this time.' },
+      ],
+      [{ name: 'searchByMood', args: { mood: 'late-night' }, result: [{ id: 'nEeVD8AWxtsGqdGS5vIvMr', title: 'Blue in Green' }] }],
+    );
+    assert.ok(prompt.includes('nEeVD8AWxtsGqdGS5vIvMr'), 'the discovered id must survive — without it a cornered model can only fabricate one');
+    assert.ok(prompt.includes('searchByMood'), 'names the tool that produced the findings');
+    assert.ok(prompt.includes('late-night'), 'keeps the args that produced the findings');
+    // The last user turn is the task, restated on its own rather than left in history.
+    assert.ok(/Your task:\nPick the track to play next\./.test(prompt), 'last user turn becomes the task');
+    assert.ok(prompt.includes('Earlier in this session:'), 'prior turns stay as context');
+    assert.equal(prompt.split('Pick the track to play next').length - 1, 1, 'the task is stated once, not also left in the history block');
+    assert.ok(prompt.includes('do not invent ids'), 'anti-fabrication line rides along with findings');
+  });
+  await test('drops the findings block and its anti-fabrication line when nothing was discovered', () => {
+    const prompt = renderTerminalPrompt([{ role: 'user', content: 'Read the hourly time check.' }], []);
+    assert.ok(!prompt.includes('What your tools already found'), 'no empty findings header');
+    assert.ok(!prompt.includes('do not invent ids'), 'an id warning with no ids on offer is just noise');
+    assert.ok(prompt.includes('Your task:'), 'the task still lands');
+    assert.ok(prompt.trimEnd().endsWith('Answer now, in one step.'), 'still asks for the one-shot answer');
+  });
+  await test('never renders the synthetic done tool as a finding', () => {
+    const prompt = renderTerminalPrompt(
+      [{ role: 'user', content: 'Pick.' }],
+      [{ name: 'done', args: { id: 'x' }, result: null }, { name: 'searchByMood', args: {}, result: [{ id: 'realId' }] }],
+    );
+    assert.ok(!prompt.includes('done('), '`done` is the schema-emit signal, not a discovery result');
+    assert.ok(prompt.includes('realId'), 'the genuine discovery still renders');
+  });
+  await test('caps a runaway trail instead of shipping an unbounded prompt, and says so', () => {
+    const fat = Array.from({ length: 12 }, (_, i) => ({
+      name: `tool${i}`,
+      args: {},
+      result: [{ id: `id${i}`, blurb: 'x'.repeat(5000) }],
+    }));
+    const prompt = renderTerminalPrompt([{ role: 'user', content: 'Pick.' }], fat);
+    assert.ok(prompt.length < 40_000, `prompt stays bounded (was ${prompt.length})`);
+    assert.ok(/omitted for length/.test(prompt), 'truncation is announced, never silent');
+    assert.ok(prompt.includes('id0'), 'the first results — the ones most likely to matter — survive');
+  });
+  await test('a window with no user turn still produces a usable prompt', () => {
+    const prompt = renderTerminalPrompt([{ role: 'assistant', content: 'thinking out loud' }], null);
+    assert.ok(prompt.includes('thinking out loud'), 'assistant-only history is kept as context');
+    assert.ok(prompt.includes('Answer now'), 'and it still asks for the answer');
+  });
+  await test('assistant turns after the task turn are kept as context, not dropped', () => {
+    const prompt = renderTerminalPrompt(
+      [
+        { role: 'user', content: 'Pick the track to play next.' },
+        { role: 'assistant', content: 'Leaning towards something mellow.' },
+      ],
+      [],
+    );
+    assert.ok(prompt.includes('Leaning towards something mellow.'), 'a trailing assistant turn survives into the history block');
+    assert.ok(/Your task:\nPick the track to play next\./.test(prompt), 'the task is still the last user turn');
   });
 
   // ---- JSON / thinking salvage ----

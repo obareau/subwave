@@ -62,11 +62,12 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
   };
 }
 
-// The prompt-template library. An older controller (no djPrompts field)
-// degrades to its single custom djPrompt as a lone library entry.
+// The prompt-template library + house rules. An older controller (no
+// djPrompts field) degrades to its single custom djPrompt as a lone library
+// entry; one without djHouseRules (pre-#1182) degrades to no house rules.
 export function promptLibraryFromSettings(
   j: SettingsResponse,
-): Pick<FormState, 'djPrompts' | 'activeDjPromptId'> {
+): Pick<FormState, 'djPrompts' | 'activeDjPromptId' | 'djHouseRules'> {
   const v = j.values || {};
   const defaultPrompt = j.defaults?.djPrompt || '';
   let djPrompts: DjPromptPreset[] = Array.isArray(v.djPrompts)
@@ -87,7 +88,8 @@ export function promptLibraryFromSettings(
   if (activeDjPromptId && !djPrompts.some(p => p.id === activeDjPromptId)) {
     activeDjPromptId = '';
   }
-  return { djPrompts, activeDjPromptId };
+  const djHouseRules = typeof v.djHouseRules === 'string' ? v.djHouseRules : '';
+  return { djPrompts, activeDjPromptId, djHouseRules };
 }
 
 // The whole form, straight off a /settings response. null when the controller

@@ -23,7 +23,9 @@
 # one container with no sidecars, so it bakes the venv in and runs it via the
 # controller's in-process local backend (ANALYZE_PYTHON). The heavy CLAP
 # "sounds-like" + Demucs vocal stack is OFF here (kept lean/small); CI publishes
-# a `subwave-aio-heavy` tag (WITH_CLAP=1 WITH_DEMUCS=1) for operators who want it.
+# a `subwave-aio-heavy` tag (WITH_CLAP=1 WITH_DEMUCS=1) for operators who want it,
+# and a `subwave-aio-cuda` tag (+ WITH_CUDA=1) that runs that same heavy stack on
+# an NVIDIA GPU — see the analyzer block below and docs/unraid.md.
 
 # ---- web build: Next.js standalone (mirrors web/Dockerfile) ----------------
 FROM node:22-bookworm-slim AS webbuild
@@ -48,6 +50,9 @@ RUN npm run build
 # ---- caddy binary: lift the glibc build from the official Debian image ------
 FROM caddy:2 AS caddybin
 
+# ---- node binary: lift Node 22 from the official image ----------------------
+FROM node:22-bookworm-slim AS nodebin
+
 # ---- final: everything under the liquidsoap (Debian bookworm) base ----------
 # v2.4.5 minimum — same reason as Dockerfile.broadcast: 2.4.4's O(n) clock
 # scan made the per-transition DJ effect chains stall the stream clock.
@@ -66,20 +71,24 @@ ENV DEBIAN_FRONTEND=noninteractive
 #  - ffmpeg: jingle/SFX transcode on import (audio/audio-import.ts)
 #  - python3/python3-venv: the Kokoro worker venv
 #  - wget/tar/xz-utils: Piper + Kokoro model/binary pulls
-#  - gnupg: NodeSource apt key
 RUN apt-get update -qq \
  && apt-get install -y --no-install-recommends \
         icecast2 sudo openssl curl ca-certificates \
         iputils-ping \
         espeak-ng libsndfile1 ffmpeg \
         python3 python3-venv \
-        wget tar xz-utils gnupg \
+        wget tar xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
-# Node.js 22 (NodeSource) — runs both the controller (tsx) and the web server.
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
- && apt-get install -y --no-install-recommends nodejs \
- && rm -rf /var/lib/apt/lists/*
+# Node.js 22 — runs both the controller (tsx) and the web server. Lifted from
+# the official image (same bookworm libc as this base) rather than installed
+# from NodeSource's apt repo: deb.nodesource.com serves per-IP 403s from its
+# CDN (nodesource/distributions#1844) and took out the v1.1.0 publish run.
+COPY --from=nodebin /usr/local/bin/node /usr/local/bin/node
+COPY --from=nodebin /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=nodebin /usr/local/include/node /usr/local/include/node
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 # Caddy — the loopback edge.
 COPY --from=caddybin /usr/bin/caddy /usr/local/bin/caddy
@@ -151,18 +160,42 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 #
 # Version pins mirror the analyzer venv in docker/Dockerfile.analyzer — keep the
 # two in lockstep (same wheels, reproducible rebuilds). torch/torchaudio are held
-# at 2.6.0 off the CPU wheel index. The AIO deliberately stays CPU-only (no
-# WITH_CUDA here): GPU analysis is the split stack's subwave-analyzer-cuda
-# flavour via the docker-compose.analyzer-gpu.yml overlay — a one-click
-# container with GPU passthrough is its own project.
+# at 2.6.0 repo-wide; WITH_CUDA only switches which 2.6.0 BUILD is installed —
+# the cpu wheel index (default) or cu124.
+#
+# WITH_CUDA=1 is the `subwave-aio-cuda` flavour (#1186): heavy + NVIDIA GPU, for
+# operators who run the one-click container on a box with a card and want CLAP +
+# Demucs off the CPU. It implies the heavy tier (CUDA torch with no CLAP/Demucs
+# would be several GB of dead weight), so CI builds it WITH_CLAP=1 WITH_DEMUCS=1.
+# The cu124 wheels vendor the CUDA runtime as nvidia-*-cu12 pip deps, so the base
+# image stays as-is and the host needs only the NVIDIA driver + container runtime
+# (on Unraid: the Nvidia Driver plugin, plus `--runtime=nvidia` and
+# NVIDIA_VISIBLE_DEVICES in the container's extra parameters — see docs/unraid.md).
+# Nothing else changes: analyze_worker.py picks the device itself (ANALYZE_DEVICE
+# defaults to auto — cuda when torch sees a GPU, else cpu with a logged warning),
+# so this image degrades to CPU on a driverless host rather than failing. It is
+# several GB larger than -heavy; the split stack's equivalent is the
+# subwave-analyzer-cuda image via the docker-compose.analyzer-gpu.yml overlay.
+#
+# NOTE: the analyzer venv runs on this base's system python3 (liquidsoap/Debian
+# trixie → 3.13, unlike Dockerfile.analyzer's python:3.11-slim). torch 2.6.0
+# publishes cp313 wheels on both the cpu and cu124 indexes, so the shared pin
+# holds on either side of the switch.
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
-RUN python3 -m venv /opt/analyzer/venv && \
+ARG WITH_CUDA=0
+RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
+    if [ "$WITH_CUDA" = "1" ]; then TORCH_INDEX="https://download.pytorch.org/whl/cu124"; fi && \
+    python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
     if [ "$WITH_CLAP" = "1" ]; then \
+      # onnxruntime stays the CPU build even under WITH_CUDA: the ONNX path is
+      # the optional CLAP_MODEL_PATH custom-export route, and onnxruntime-gpu
+      # drags in a fragile CUDA/cuDNN version matrix. The default transformers
+      # path is what runs on the GPU.
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu \
+        --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
         torch==2.6.0 transformers==5.13.0 onnxruntime==1.27.0 && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
@@ -176,7 +209,7 @@ RUN python3 -m venv /opt/analyzer/venv && \
       # base's apt python3 has none, so python3-dev is required for Python.h.
       apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev python3-dev && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu \
+        --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
         torch==2.6.0 torchaudio==2.6.0 demucs==4.0.1 diffq==0.2.4 && \
       /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq" && \

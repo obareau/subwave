@@ -26,6 +26,8 @@ state/skills/
 
 There's a ready-made example in the repo at `docs/examples/skills/moon-phase`. Copy it into `state/skills/`, open the admin Skills page, and hit Rescan. Your skill shows up in the list, ready to toggle on.
 
+![The admin Skills page: a table of skills, each with its brief, cooldown and how many DJs may run it, a Run now button and an on/off switch. The ones written by hand carry a CUSTOM tag next to their name](/screenshots/admin-skills.webp)
+
 Want it to react to real data? Add a `tool.mjs` and the DJ can check something live, like tonight's moon or the surf report, before it opens its mouth.
 
 ## The ones that ship are yours too

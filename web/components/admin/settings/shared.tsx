@@ -59,6 +59,10 @@ export const ELEVENLABS_VS_DEFAULTS = {
 } as const;
 
 export interface TtsForm {
+  // Station-wide voice switch. false = music only — the DJ never speaks and no
+  // script is generated for it. Jingles are unaffected (jingleRatio owns those)
+  // and manual segment triggers still fire. Mirrors DEFAULTS.tts.enabled.
+  enabled: boolean;
   defaultEngine: string;
   kokoro: { voice: string };
   chatterbox: { referenceVoice: string };
@@ -195,6 +199,7 @@ export interface TransitionsForm {
   pairDrain: boolean;   // hold picks until the successor is known (#749 fix)
   stemBlends: boolean;  // pre-rendered stem-blend seams (needs pairDrain + stem cache)
   stemCache: boolean;   // settings.audio.stemCache — persist Demucs stems during analysis
+  stemCacheGb: string;  // settings.audio.stemCacheGb — byte budget the LRU sweep enforces
 }
 
 export interface PrivacyForm {
@@ -203,6 +208,9 @@ export interface PrivacyForm {
   /** Round-trips the 'set' redaction sentinel when saved and untouched.
    *  One shared secret behind both locks above. */
   password: string;
+  /** Disclosure, not a lock: publish every persona's soul on the roster-wide
+   *  public reads (/schedule, /personas). Takes no part in the password rule. */
+  publishPersonaSouls: boolean;
 }
 
 export interface FormState {
@@ -270,6 +278,7 @@ export interface SettingsData {
       units?: 'metric' | 'imperial';
     };
     tts?: {
+      enabled?: boolean;
       defaultEngine?: string;
       kokoro?: { voice?: string; lang?: string };
       chatterbox?: { referenceVoice?: string };
@@ -300,7 +309,12 @@ export interface SettingsData {
     sfx?: { enabled?: boolean };
     beds?: { enabled?: boolean; thresholdSec?: number; crossSec?: number };
     ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
-    privacy?: { privatePlayer?: boolean; listenerAuth?: boolean; password?: string };
+    privacy?: {
+      privatePlayer?: boolean;
+      listenerAuth?: boolean;
+      password?: string;
+      publishPersonaSouls?: boolean;
+    };
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
       listenbrainz?: Partial<ScrobbleListenbrainzForm>;
@@ -353,6 +367,15 @@ export interface SettingsData {
   };
   tagger?: { running?: boolean };
   env?: Record<string, unknown>;
+  // Navidrome connection read state (Settings → Music source). passSet only —
+  // the password value never reaches the browser. Env flags are per-field:
+  // url can be env-managed while user/pass come from the wizard/admin.
+  navidrome?: {
+    url?: string;
+    user?: string;
+    passSet?: boolean;
+    env?: { url?: boolean; user?: boolean; pass?: boolean };
+  };
   streamOnAir?: boolean;
   // What timezone '' (Auto) resolves to — the controller's own zone.
   serverTimezone?: string;
@@ -448,15 +471,20 @@ interface SaveBarProps {
 export function SaveBar({ note, busy, onSave, saveLabel, extra }: SaveBarProps) {
   return (
     <div className="flex flex-wrap items-center gap-3 border border-ink bg-[var(--ink-softer)] p-3">
-      <span className="size-1.5 rounded-full bg-vermilion" />
-      <span className="text-[12px] leading-[1.5] text-muted">{note}</span>
-      <span className="ml-auto flex gap-2">
+      <span className="size-1.5 shrink-0 rounded-full bg-vermilion" />
+      {/* min-w-0 + break-words: notes carry unbroken values (an
+          `openai-compatible:Qwen3…gguf` model id) that would otherwise set the
+          flex item's min-content and push the bar past a phone viewport. */}
+      <span className="min-w-0 text-[12px] leading-[1.5] break-words text-muted">{note}</span>
+      {/* Full-width action row on a phone (the note takes the whole first
+          line anyway); `sm:` restores the right-aligned inline cluster. */}
+      <span className="ml-auto flex w-full gap-2 sm:w-auto">
         {extra}
         {/* whileTap fires before the network call — operator feels the
             commit even though the actual save toast lands a few hundred
             ms later. */}
-        <m.span whileTap={{ scale: 0.97 }} className="inline-flex">
-          <Btn tone="accent" onClick={onSave} disabled={busy}>{saveLabel}</Btn>
+        <m.span whileTap={{ scale: 0.97 }} className="inline-flex flex-1 sm:flex-none">
+          <Btn tone="accent" onClick={onSave} disabled={busy} className="w-full sm:w-auto">{saveLabel}</Btn>
         </m.span>
       </span>
     </div>
@@ -512,7 +540,8 @@ export function KeyTestResult({ result }: KeyTestResultProps) {
   return (
     <div
       className={cn(
-        'mt-2 max-w-[560px] rounded border bg-[var(--ink-softer)] px-3 py-2 text-[11px] leading-[1.6]',
+        // break-words: provider errors carry raw URLs / long ids.
+        'mt-2 max-w-[560px] rounded border bg-[var(--ink-softer)] px-3 py-2 text-[11px] leading-[1.6] break-words',
         result.ok
           ? 'border-[var(--accent)] text-[color:var(--accent)]'
           : 'border-[var(--danger)] text-[var(--danger)]',

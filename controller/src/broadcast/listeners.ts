@@ -6,10 +6,13 @@
 //
 // The count *folds Safari's double connection* into one (see groupConnections /
 // dedupeListeners): iOS/macOS Safari opens two identical sockets per client, so
-// a raw sum double-counts every Apple listener. We can't key on IP — behind a
-// reverse proxy (Caddy → Icecast) every connection carries the proxy's IP, not
-// the listener's, and icecast-KH ignores X-Forwarded-For, so the real client IP
-// never reaches Icecast. Instead we count every non-Safari socket as a listener
+// a raw sum double-counts every Apple listener. We can't key on IP, for two
+// reasons that both survive the trusted-proxy work: behind a reverse proxy
+// (Caddy → Icecast) a connection only carries the listener's real address when
+// the operator has named that proxy in icecast's <x-forwarded-for> (rendered by
+// docker/broadcast-entrypoint.sh — unset, and every row is the proxy's own IP);
+// and even with it set, a household behind one NAT is several listeners on one
+// address. Instead we count every non-Safari socket as a listener
 // and pair Safari's two near-simultaneous sockets by user-agent + connect-time.
 // That dedup needs the per-connection admin feed (/admin/listclients); the
 // public status-json.xsl still supplies online/bitrate and the fallback sum
@@ -385,10 +388,10 @@ function isSafariDouble(ua: string): boolean {
 }
 
 // Number of distinct listeners — the headline count. Folds Safari's double
-// back into one (see groupConnections) without keying on IP, which is useless
-// behind a reverse proxy (every socket carries the proxy's IP). Single source of
-// truth with the admin table: both derive from groupConnections so they can't
-// drift apart.
+// back into one (see groupConnections) without keying on IP, which is either
+// useless (an untrusted proxy makes every socket carry the proxy's address) or
+// wrong (one NAT is many listeners). Single source of truth with the admin
+// table: both derive from groupConnections so they can't drift apart.
 export function dedupeListeners(conns: ListenerConnection[]): number {
   return groupConnections(conns).length;
 }

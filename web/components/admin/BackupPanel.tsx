@@ -231,7 +231,7 @@ export default function BackupPanel() {
             <span className="font-bold text-vermilion">Restored:</span>{' '}
             {result.restored?.length ? result.restored.join(', ') : '(nothing)'}
             {result.requiresRestart && (
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-2 flex flex-wrap items-center gap-2">
                 <span className="text-muted">Mixer settings changed. Restart to apply.</span>
                 <Btn sm tone="danger" onClick={restartMixer} disabled={restarting}>
                   {restarting ? 'Restarting…' : 'Restart mixer'}
@@ -274,7 +274,7 @@ export default function BackupPanel() {
           {stateDir ? (
             <>
               {' '}(the directory mounted into the container at{' '}
-              <code className="text-ink">{stateDir}</code>)
+              <code className="break-words text-ink">{stateDir}</code>)
             </>
           ) : null}
           , then <strong>Refresh</strong> and restore it here; it never travels through the proxy.
@@ -298,7 +298,13 @@ export default function BackupPanel() {
                     {fmtSize(f.size)} · {new Date(f.mtime).toLocaleString()}
                   </div>
                 </div>
-                <Btn sm tone="solid" onClick={() => pickDisk(f.name)} disabled={importing}>
+                <Btn
+                  sm
+                  tone="solid"
+                  onClick={() => pickDisk(f.name)}
+                  disabled={importing}
+                  className="shrink-0"
+                >
                   {importing && pending?.kind === 'disk' && pending.name === f.name
                     ? 'Restoring…'
                     : 'Restore'}

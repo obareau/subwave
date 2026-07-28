@@ -9,6 +9,21 @@
 	# This list is hardcoded and must be refreshed by hand when Cloudflare changes
 	# its ranges — pull the canonical lists from:
 	#   https://www.cloudflare.com/ips-v4  and  https://www.cloudflare.com/ips-v6
+	#
+	# These are the addresses of the machines that CONNECT TO CADDY, which is why
+	# the list is Cloudflare's public ranges: with proxied DNS, the peer really is
+	# a Cloudflare edge. A Cloudflare TUNNEL is different — `cloudflared` runs as
+	# a container beside this one, so the peer is a private Docker address, no
+	# entry here matches, and Caddy discards the forwarded header it arrived
+	# with. Tunnel operators need to append `private_ranges` to the list below.
+	#
+	# It is not the default because it is a real trust decision: trusting private
+	# ranges means anything that can reach this Caddy from private address space
+	# can forge X-Forwarded-For, which both fakes rows in admin → Listeners and
+	# defeats the controller's per-IP rate limiting (middleware/ratelimit.ts keys
+	# on the left-most entry). Safe when the tunnel is the only ingress; not safe
+	# when the host port is also reachable from a shared LAN. See
+	# docs/deployment.md for the full recipe.
 	servers {
 		trusted_proxies static \
  173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 \

@@ -19,6 +19,10 @@ Open the request panel in the player and type what you're after. You don't need 
 
 Send it. The DJ reads what you meant (the artist, the mood, the intent), finds candidates in your library, and lines one up.
 
+<figure data-shot="phone">
+  <img src="/screenshots/player-request-song.webp" alt="The request panel on a phone: a slip headed LINE OPEN with a handwritten-looking note and a signature underneath, four suggestion chips reading more like this, drive home vibes, overcast mood and surprise me, and a red SEND TO THE BOOTH button." />
+</figure>
+
 ## What happens next
 
 Your pick joins the queue and plays for everyone, because there's only one stream. When it comes on, the DJ usually says a quick line introducing it, sometimes nodding to the request itself. It won't cut off the current song, because tracks always finish, so think of it as leaning over and asking the DJ, not grabbing the aux cord.

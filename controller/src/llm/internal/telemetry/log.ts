@@ -27,11 +27,24 @@ export function record(call: any) {
   recentCalls.unshift(call);
   if (recentCalls.length > MAX_CALLS) recentCalls.length = MAX_CALLS;
   // Mirror summarizeLlm: only successful calls that report usage contribute.
-  if (call.ok && call.usage?.total) {
-    lifetimeTokens += call.usage.total;
-    // Same guard feeds today's tally — the number the daily token cap enforces.
-    addDailyUsage(call.usage.total);
-  }
+  if (call.ok && call.usage?.total) lifetimeTokens += call.usage.total;
+
+  // Today's tally is deliberately NOT under the `ok` guard above (issue #1195).
+  // The provider bills for a call that throws just the same, and djAgent's
+  // cascade can burn several legs' worth before it gives up — a pick that runs
+  // main → recovery → terminal collapse and still throws spent three billable
+  // calls, then falls back to the pool picker (a fourth, which IS counted).
+  // Counting only successes made the cap a cap on *successful* spend, which an
+  // operator on a flaky model could overshoot via failures alone. The number is
+  // already on the record: failureDiagnostics() (core/pure.ts) normalises the
+  // summed `err.usage` that agent.ts attaches on the throw, and failover.ts's
+  // recordFailure spreads it on. The lifetime ticker stays success-only on
+  // purpose — it's the listener-facing counter on the player and mirrors
+  // summarizeLlm (stats.ts), so /stats semantics are unchanged.
+  //
+  // Not every failure carries usage: provider HTTP errors and deadline aborts
+  // throw bare, so this makes the cap more honest, not exhaustive.
+  if (call.usage?.total) addDailyUsage(call.usage.total);
 
   // Durable, trace-correlated event. The ring buffer above is lost on restart
   // and uncorrelated; this lands on the unified events.jsonl timeline.

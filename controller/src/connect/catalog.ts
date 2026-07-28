@@ -177,14 +177,40 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
         summary: 'Weekly show schedule',
         description:
           'The listener-facing week view: show definitions, the 7×24 grid, and a ' +
-          'persona index (id/name/avatar), painted in the station\'s timezone. No ' +
-          'admin-only fields.',
+          'persona index (id/name/tagline/avatar), painted in the station\'s ' +
+          'timezone. Each show carries `guestPersonaIds` — guest co-hosts, ' +
+          'resolved against the live roster — which you join against the persona ' +
+          'index by id. Persona `soul` blurbs are included only when the operator ' +
+          'turns on Settings → Station → publish persona souls (`soulsPublished` ' +
+          'reports which). No admin-only fields.',
         auth: 'none',
         responseExample: {
-          personas: [{ id: 'frequency', name: 'Frequency', avatar: '/persona-avatar/frequency' }],
-          shows: [{ id: 'late-shift', name: 'The Late Shift', topic: 'after-hours', mood: 'nocturnal', personaId: 'frequency' }],
+          personas: [{ id: 'frequency', name: 'Frequency', tagline: 'after-dark selector', avatar: '/persona-avatar/frequency' }],
+          shows: [{ id: 'late-shift', name: 'The Late Shift', topic: 'after-hours', mood: 'nocturnal', personaId: 'frequency', guestPersonaIds: ['nyx'] }],
           schedule: { mon: [], tue: [] },
+          soulsPublished: false,
           timezone: 'Europe/London',
+        },
+      },
+      {
+        method: 'GET',
+        path: '/personas',
+        summary: 'DJ roster',
+        description:
+          'The station\'s full DJ roster in one request — id, name, tagline and ' +
+          'avatar URL for every persona, for a "meet the DJs" page. Each ' +
+          'persona\'s `soul` blurb rides along only when the operator turns on ' +
+          'Settings → Station → publish persona souls (`soulsPublished` reports ' +
+          'which). `activePersonaId` is the operator-selected persona; a ' +
+          'scheduled show can put a different one on air, so use /dj for who is ' +
+          'actually speaking right now.',
+        auth: 'none',
+        responseExample: {
+          personas: [
+            { id: 'frequency', name: 'Frequency', tagline: 'after-dark selector', avatar: '/persona-avatar/frequency' },
+          ],
+          activePersonaId: 'frequency',
+          soulsPublished: false,
         },
       },
       {

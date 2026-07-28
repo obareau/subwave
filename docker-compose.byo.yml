@@ -64,6 +64,12 @@ services:
       # Concurrent-listener ceiling for icecast (<limits><clients>).
       # Empty/unset → 100 (the historical default).
       - ICECAST_MAX_CLIENTS=${ICECAST_MAX_CLIENTS:-}
+      # There is no bundled edge in this shape, so nothing resolves by default
+      # and listener rows show whatever peer reaches icecast — the operator's
+      # own proxy. Set this to that proxy's address (as icecast sees it) to get
+      # real listener IPs in admin → Listeners. See docs/deployment.md.
+      - ICECAST_TRUSTED_PROXY_IPS=${ICECAST_TRUSTED_PROXY_IPS:-}
+      - ICECAST_TRUSTED_PROXY_HOSTS=${ICECAST_TRUSTED_PROXY_HOSTS:-}
       - TZ=${TZ:-Europe/London}
     ports:
       # BIND_ADDRESS defaults to 0.0.0.0; set 127.0.0.1 in .env for a same-host

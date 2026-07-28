@@ -47,6 +47,13 @@ interface Props {
   // Daily-token-budget tier from /settings — drives the pre-run spend warning.
   // null (old controller / not yet polled) is treated as 'normal' (no warning).
   budgetMode: BudgetMode | null;
+  // Provider attribution for the Run tab's cost preview (#1162): the mood/energy
+  // seed calls bill to the DJ's chat LLM (settings.llm), NOT the embedding
+  // provider — operators kept assuming the embedding setting covered the whole
+  // job. llmLabel ≈ "Google · gemini-2.0-flash-lite", embedLabel ≈ "OpenAI".
+  // null until the settings poll lands (the line just omits the attribution).
+  llmLabel: string | null;
+  embedLabel: string | null;
   // when set, the modal opens straight to the matching tab/selection
   intent: 'reembed' | null;
   // handlers
@@ -195,7 +202,9 @@ export default function LibraryTaggingModal(p: Props) {
         ))}
       </div>
 
-      <div className="flex flex-col gap-4 p-5">
+      {/* p-3 on phones: the Modal body already carries px-5, so the nested p-5
+          left ~275px of usable width inside a 358px dialog. */}
+      <div className="flex flex-col gap-4 p-3 sm:p-5">
         {/* Daily-token-budget caution — shown on both tabs when the day's spend
             is near (soft) or past (hard) the cap, so a run's LLM steps won't
             surprise the operator with extra spend or mid-run failures. */}
@@ -227,12 +236,14 @@ export default function LibraryTaggingModal(p: Props) {
                 hint="Fetch Last.fm tags + lyrics per track to sharpen the mood read. External API calls — slower on big batches." />
               <Pass on={steps.tagMoods} onClick={() => toggleStep('tagMoods')}
                 name="Tag moods (LLM)" tag="AI · billed"
-                hint="The core step: embeds each track, then your LLM picks mood & energy and spreads tags to similar songs. Uses model calls." />
+                hint="The core step: embeds each track, then your DJ's LLM picks mood & energy and spreads tags to similar songs. Billed to the Settings → LLM provider — the embedding provider only handles similarity." />
               {steps.tagMoods && seedEst != null && inScope != null && (
                 <p className="-mt-1 pl-[26px] text-[11px] leading-[1.5] text-muted">
                   ≈ <span className="mono-num">{num(seedEst)}</span> LLM seed calls in ~
-                  <span className="mono-num">{Math.ceil(seedEst / 25)}</span> batches, plus re-checks
+                  <span className="mono-num">{Math.ceil(seedEst / 25)}</span> batches
+                  {p.llmLabel && <> on <b>{p.llmLabel}</b></>}, plus re-checks
                   for uncertain tracks · ≈ <span className="mono-num">{num(inScope)}</span> embedding calls
+                  {p.embedLabel && <> on <b>{p.embedLabel}</b></>}
                 </p>
               )}
               <Pass on={effSteps.analyze} onClick={() => toggleStep('analyze')} disabled={analyzeLocked}
@@ -329,7 +340,7 @@ export default function LibraryTaggingModal(p: Props) {
                 </div>
               )}
             </div>
-            <div className="flex items-center justify-end gap-2.5 border-t border-dashed border-separator-strong pt-3.5">
+            <div className="flex flex-wrap items-center justify-end gap-2.5 border-t border-dashed border-separator-strong pt-3.5">
               <Btn onClick={() => p.onOpenChange(false)}>Cancel</Btn>
               <Btn tone="accent" disabled={!anyPass || p.busy} onClick={runRescan}>
                 <RefreshCw size={12} /> {passAllSelected ? 'Run full re-scan' : 'Run re-scan'}
@@ -379,7 +390,7 @@ export default function LibraryTaggingModal(p: Props) {
                 </span>
               </span>
             </button>
-            <div className="flex items-center justify-end gap-2.5 border-t border-dashed border-separator-strong pt-3.5">
+            <div className="flex flex-wrap items-center justify-end gap-2.5 border-t border-dashed border-separator-strong pt-3.5">
               <Btn onClick={() => p.onOpenChange(false)}>Cancel</Btn>
               {/* second confirmation happens in the danger dialog this opens */}
               <Btn tone="danger" disabled={!resetAck || p.busy} onClick={() => setConfirmReset(true)}>

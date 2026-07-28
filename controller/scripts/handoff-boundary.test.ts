@@ -34,6 +34,7 @@
 
 import assert from 'node:assert/strict';
 import { contextDate, handoffIsStale, rollIsBackward } from '../src/broadcast/session.js';
+import { PICK_SHOW_LOOKAHEAD_SEC, pickLeadSec } from '../src/broadcast/queue/pure.js';
 
 const MAX_AGE = 20 * 60_000;   // mirrors HANDOFF_MAX_AGE_MS in dj-agent.ts
 
@@ -156,6 +157,65 @@ function main() {
     for (const bad of ['not-a-date', '', 12345, {}] as any[]) {
       assert.equal(rollIsBackward(new Date(), bad), false, `ctxAt=${JSON.stringify(bad)}`);
     }
+  });
+
+  console.log('\nlook-ahead lead (pickLeadSec):');
+
+  test('no held predecessor → the on-air track REMAINING, not its duration', () => {
+    // A 7-minute track five minutes in: the next pick starts in 2 min.
+    assert.equal(pickLeadSec(120), 120);
+  });
+
+  test('#1205 — a part-played track cannot push showAt past the boundary', () => {
+    // Reported case: 20:00-22:00 After Hours → 22:00 Discovery. At 21:55 the
+    // deadline backstop fires the cycle with an empty queue; the on-air track
+    // started 21:50 and runs 7 min, so it ends at 21:57 and the next pick is
+    // still After Hours. The old full-duration lead (7 min) probed 22:04 and
+    // aired the handoff mid-song, five minutes early.
+    const now = Date.parse('2026-07-25T21:55:00.000Z');
+    const boundary = Date.parse('2026-07-25T22:00:00.000Z');
+    const lead = pickLeadSec(120);                       // 2 min left of the track
+    const showAt = now + ((lead as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+    assert.ok(showAt < boundary, `showAt ${new Date(showAt).toISOString()} crossed the boundary`);
+    // The old arithmetic, kept as the thing being regressed against.
+    const oldShowAt = now + (7 * 60 + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+    assert.ok(oldShowAt > boundary, 'the pre-fix lead should have crossed it');
+  });
+
+  test('a track ending genuinely inside the next show still rolls', () => {
+    // Same grid, but now it IS 21:58 with 90s left: the pick airs at 21:59:30
+    // and plays almost entirely inside Discovery. The look-ahead margin is
+    // what carries it over — that behaviour must survive the fix.
+    const now = Date.parse('2026-07-25T21:58:00.000Z');
+    const boundary = Date.parse('2026-07-25T22:00:00.000Z');
+    const showAt = now + ((pickLeadSec(90) as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+    assert.ok(showAt > boundary, 'a changeover track should still resolve the incoming show');
+  });
+
+  test('at a track start remaining ≈ duration → byte-for-byte the old lead', () => {
+    assert.equal(pickLeadSec(420), 420);
+  });
+
+  test('held predecessor (deadline path) → remaining + the held track', () => {
+    assert.equal(pickLeadSec(30, 240), 270);
+  });
+
+  test('held predecessor of unknown length → no look-ahead', () => {
+    for (const bad of [0, NaN, Infinity, -5]) {
+      assert.equal(pickLeadSec(30, bad), null, `held=${bad}`);
+    }
+  });
+
+  test('unknown clock → no look-ahead, never a bogus lead', () => {
+    for (const bad of [null, undefined, NaN, Infinity, '120'] as any[]) {
+      assert.equal(pickLeadSec(bad), null, `remaining=${String(bad)}`);
+      assert.equal(pickLeadSec(bad, 240), null, `remaining=${String(bad)} (held)`);
+    }
+  });
+
+  test('a track past its cue-out clamps at 0, never pulls showAt backwards', () => {
+    assert.equal(pickLeadSec(-12), 0);
+    assert.equal(pickLeadSec(-12, 240), 240);
   });
 
   console.log(failures ? `\n${failures} failing` : '\nall passing');

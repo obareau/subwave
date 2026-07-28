@@ -200,7 +200,7 @@ export default function FestivalsSection() {
         sub="Dates that set a mood, marked across the year. Add your local holidays, regional celebrations, or personal landmarks — the station leans into the nearest one as it comes around."
         metrics={festivals ? [{ n: String(festivals.length), l: `date${festivals.length === 1 ? '' : 's'}`, accent: true }] : undefined}
         actions={
-          <Btn tone="accent" onClick={startAdd} disabled={festivals === null}>
+          <Btn tone="accent" className="min-h-9 sm:min-h-0" onClick={startAdd} disabled={festivals === null}>
             Add festival
           </Btn>
         }
@@ -234,12 +234,15 @@ export default function FestivalsSection() {
                       type="button"
                       disabled={busy}
                       onClick={() => startEdit(idx)}
-                      className="grid w-full cursor-pointer grid-cols-[30px_1fr_auto] items-baseline gap-x-3 px-1.5 py-2 text-left hover:bg-[var(--ink-soft)]"
+                      /* Mobile drops the mood/window facets onto a second row
+                         under the name — three columns leave the name ~170px
+                         at 390px, so long festival names lose their tail. */
+                      className="grid w-full cursor-pointer grid-cols-[30px_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1 px-1.5 py-2 text-left hover:bg-[var(--ink-soft)] sm:grid-cols-[30px_1fr_auto] sm:gap-y-0"
                     >
-                      <span className="mono-num text-[12px] text-muted">
+                      <span className="mono-num col-start-1 row-start-1 text-[12px] text-muted">
                         {String(f.day).padStart(2, '0')}
                       </span>
-                      <span className="min-w-0">
+                      <span className="col-start-2 row-start-1 min-w-0">
                         <span className="flex items-baseline gap-2.5">
                           <span className="truncate text-[13px] font-bold">{f.name}</span>
                           {timings[idx]?.active ? (
@@ -258,7 +261,7 @@ export default function FestivalsSection() {
                           </span>
                         ) : null}
                       </span>
-                      <span className="flex items-baseline gap-2.5 text-[10px] tracking-[0.08em] text-muted">
+                      <span className="col-start-2 row-start-2 flex items-baseline gap-2.5 text-[10px] tracking-[0.08em] text-muted sm:col-start-3 sm:row-start-1">
                         <span>{f.mood}</span>
                         {f.windowDays ? <span className="mono-num">±{f.windowDays}d</span> : null}
                       </span>
@@ -278,19 +281,20 @@ export default function FestivalsSection() {
         sub={editIdx !== null && editing ? editing.name : undefined}
         width={520}
         footer={
-          <div className="flex w-full items-center justify-between gap-2">
+          <div className="flex w-full flex-wrap items-center justify-between gap-2">
             {editIdx !== null ? (
-              <Btn sm tone="danger" onClick={() => setConfirmDelete(editIdx)} disabled={busy}>
+              <Btn sm tone="danger" className="min-h-9 sm:min-h-0" onClick={() => setConfirmDelete(editIdx)} disabled={busy}>
                 Remove
               </Btn>
             ) : (
               <span />
             )}
             <div className="flex items-center gap-2">
-              <Btn sm onClick={cancelEdit} disabled={busy}>Cancel</Btn>
+              <Btn sm className="min-h-9 sm:min-h-0" onClick={cancelEdit} disabled={busy}>Cancel</Btn>
               <Btn
                 sm
                 tone="accent"
+                className="min-h-9 sm:min-h-0"
                 onClick={commitEdit}
                 disabled={busy || !editing?.name.trim()}
               >

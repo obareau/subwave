@@ -44,7 +44,10 @@ export function PersonaHero({
         {onAirPersona?.tagline.trim() && (
           <span className="text-[11px] text-muted">— {onAirPersona.tagline.trim()}</span>
         )}
-        <span className="caption ml-4">
+        {/* The extra gap is a desktop separator between the name block and the
+            settings block; on a phone this chip starts a wrapped line, where a
+            leading indent just reads as a misalignment. */}
+        <span className="caption sm:ml-4">
           frequency · {onAirPersona ? onAirPersona.frequency : '—'}
         </span>
         <span className="caption">voice · {onAirPersona ? engineLabel(onAirPersona) : '—'}</span>

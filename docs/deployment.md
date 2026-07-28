@@ -250,6 +250,108 @@ need to be UI-managed because the schema is too rich for env vars.
 
 ---
 
+## Real listener IPs behind a proxy
+
+Admin → **Listeners** shows one row per connection, with an IP. Behind a reverse
+proxy, that IP is the *proxy's* — the `172.x` container address of the bundled
+Caddy — because the proxy is the only peer Icecast ever talks to.
+
+Icecast will believe the `X-Forwarded-For` header, but only from proxies you name
+explicitly. Two facts about the Icecast build shipped here (icecast-KH 2.4.0-kh22)
+shape how you configure it:
+
+- **It matches on an exact IP.** A CIDR like `172.16.0.0/12` is accepted without
+  any error and then silently never matches. There is no "trust this subnet".
+- **It reads the left-most entry** of the forwarded chain, which is the original
+  client — correct even though Caddy appends its own peer on the way through.
+
+One consequence of the left-most read: when Cloudflare fronts the stack (proxied
+DNS or a tunnel), a client can seed its own `X-Forwarded-For` and Cloudflare
+*appends* the real IP rather than replacing it — so the left-most entry, and the
+row in the Listeners table, is whatever the client claimed. Treat the IPs as
+advisory in that setup. Listener *counts* are unaffected either way (they never
+key on IP), and direct-to-Caddy connections can't spoof (an untrusted peer's
+header is discarded and rewritten).
+
+### Bundled Caddy (default compose)
+
+Nothing to do for the steady state: the broadcast container resolves `caddy` by
+name every time it starts, so listener rows are correct after the first restart.
+
+The gap is the *first* cold `docker compose up` — Caddy waits on broadcast's
+healthcheck, so it isn't running yet when broadcast renders its config, and rows
+read as the proxy IP until the next bounce. If you want it right immediately, pin
+the edge to a static address and name it:
+
+```yaml
+# docker-compose.yml
+services:
+  caddy:
+    networks:
+      default:
+        ipv4_address: 172.20.0.100
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+```
+
+```bash
+# .env
+ICECAST_TRUSTED_PROXY_IPS=172.20.0.100
+```
+
+Pick a subnet that isn't already allocated on the host — `docker compose up` fails
+with a pool-overlap error if it collides, and `docker network ls` plus
+`docker network inspect` will tell you what's taken.
+
+### Your own proxy (`docker-compose.byo.yml`)
+
+There's no bundled edge to resolve, so set the address your proxy reaches Icecast
+from. On a host-network nginx that's usually the Docker bridge gateway:
+
+```bash
+ICECAST_TRUSTED_PROXY_IPS=172.17.0.1
+```
+
+If you're unsure what Icecast is actually seeing, the current (wrong) IP in the
+Listeners table *is* the address to trust.
+
+### Cloudflare Tunnel
+
+A tunnel needs one extra step, because there are two hops to fix rather than one.
+`cloudflared` runs as its own container, so the peer reaching Caddy is a private
+Docker address — not one of the Cloudflare ranges `docker/Caddyfile` trusts — and
+Caddy discards the forwarded header it arrived with. Append `private_ranges` to
+the `trusted_proxies` list so Caddy keeps it:
+
+```caddy
+servers {
+    trusted_proxies static \
+        173.245.48.0/20 ... 2c0f:f248::/32 \
+        private_ranges
+}
+```
+
+then configure the Icecast hop as above.
+
+> **Weigh this one.** Trusting private ranges means anything that can reach Caddy
+> from private address space can forge `X-Forwarded-For` — which fakes rows in the
+> Listeners table *and* defeats the controller's per-IP rate limiting, since that
+> keys on the left-most entry. Fine when the tunnel is the only way in; not fine
+> when the host port is also exposed to a shared LAN.
+
+*(Thanks to the community member who worked this out and wrote it up on Discord.)*
+
+### All-in-one image
+
+Nothing to configure — Caddy is in the same container, so loopback is trusted
+automatically.
+
+---
+
 ## What's intentionally not included
 
 - **A `curl | sh` installer.** The two-file install (`curl docker-compose.yml` + `curl .env.example`) is the deliberate "as simple as it can be without piping random scripts into your shell" line.

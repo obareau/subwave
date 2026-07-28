@@ -27,6 +27,32 @@ tabs:
   station events (track changes, requests, on-air segments), with every payload
   shape documented.
 
+## Building a public station page
+
+The unauthenticated reads are enough to render a full programming guide without
+an admin credential:
+
+- `GET /schedule` — show definitions, the 7×24 grid, and a persona index
+  (`id`, `name`, `tagline`, `avatar`). Each show carries `personaId` for its
+  host and `guestPersonaIds` for its co-hosts; both are ids you join against
+  that index, and both are resolved against the live roster, so a persona
+  deleted after the show was saved simply drops out.
+- `GET /personas` — the same persona index on its own, for a "meet the DJs"
+  page that doesn't need the week grid.
+- `GET /dj` — who is on air *right now* (a scheduled show can put someone other
+  than `activePersonaId` behind the mic).
+- `GET /now-playing` — the current track, plus `context.activeShow` with the
+  live show's host and guests already hydrated.
+
+**Persona souls are opt-in.** A persona's `soul` is its system prompt rather
+than a written bio, so the roster-wide reads above publish it only when the
+operator turns on **Settings → Station → Public API → publish persona souls**.
+Off (the default), the field is *absent* rather than empty — both `/schedule`
+and `/personas` report which mode you're in via `soulsPublished`, so a client
+can hide the bio column instead of rendering blank cards. `tagline` is the field intended for
+public display and is always present. `GET /dj` publishes the on-air persona's
+soul regardless, as it always has.
+
 ## OpenAPI
 
 The Connect page's **Download OpenAPI** button (and `GET /api/connect/openapi.json`,

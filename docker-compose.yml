@@ -79,6 +79,14 @@ services:
       # Concurrent-listener ceiling for icecast (<limits><clients>).
       # Empty/unset → 100 (the historical default).
       - ICECAST_MAX_CLIENTS=${ICECAST_MAX_CLIENTS:-}
+      # Reverse proxies whose X-Forwarded-For icecast should believe, so admin
+      # → Listeners shows real listener IPs rather than the edge's container
+      # address. Unset resolves the bundled `caddy` by name at render time,
+      # which lands on every restart but misses the very first cold boot (caddy
+      # can't be running yet — it waits on this service's healthcheck). Set
+      # ICECAST_TRUSTED_PROXY_IPS to a pinned address for first-boot accuracy.
+      - ICECAST_TRUSTED_PROXY_IPS=${ICECAST_TRUSTED_PROXY_IPS:-}
+      - ICECAST_TRUSTED_PROXY_HOSTS=${ICECAST_TRUSTED_PROXY_HOSTS:-}
       # Keeps the hourly archive paths (%Y-%m-%d/%H-00.mp3) on local wall time.
       - TZ=${TZ:-Europe/London}
     extra_hosts:

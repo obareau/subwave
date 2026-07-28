@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import ManualPage from './ManualPage';
+import ManualFigure from './ManualFigure';
 import CodeBlock from '@/components/CodeBlock';
 
 export default function AcousticAnalysis() {
@@ -28,6 +29,13 @@ export default function AcousticAnalysis() {
           Silicon). Coverage climbs on the <Link href="/admin/library">Library</Link> page
           under <strong>Acoustic analysis · bpm / key</strong>.
         </p>
+        <ManualFigure
+          src="/screenshots/admin-library.webp"
+          alt="The admin Library page, with a one-line acoustic-analysis strip reading bpm/key 99 percent, sounds-like 99 percent, vocal off, beneath the mood-and-energy tagging bar"
+          caption="Coverage lives on the Library page — one line under the tagging bar, a percentage per dimension. Expand it to start a pass or watch one run."
+          width={2732}
+          height={2048}
+        />
         <div className="bs-callout">
           <div className="bs-eyebrow">&ldquo;ENGINE OFF&rdquo;?</div>
           <p>
@@ -143,8 +151,28 @@ ANALYZER_HEAVY=1`}</CodeBlock>
             Point the analyzer container&rsquo;s image at{' '}
             <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-analyzer-cuda</code>{' '}
             and pass the GPU through (<code className="bs-code-inline">--gpus all</code> or
-            your platform&rsquo;s equivalent). The AIO one-click container stays CPU-only —
-            GPU analysis needs the split stack.
+            your platform&rsquo;s equivalent).
+          </p>
+        </div>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">ALL-IN-ONE (ONE-CLICK) INSTALLS</div>
+          <p>
+            The AIO has no separate analyzer to swap, so there&rsquo;s no overlay: the GPU
+            rides on the image. Point the container at{' '}
+            <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-aio-cuda</code>{' '}
+            — the same heavy features on CUDA — and hand it the card
+            (<code className="bs-code-inline">--gpus all</code>, or on Unraid the nvidia
+            runtime plus <code className="bs-code-inline">NVIDIA_VISIBLE_DEVICES</code>;{' '}
+            <a className="bs-link" href="/setup/unraid#acoustic-analysis">
+              step-by-step here
+            </a>
+            ). Everything above about device selection and VRAM applies unchanged.
+          </p>
+          <p>
+            Don&rsquo;t point an AIO install at{' '}
+            <code className="bs-code-inline">subwave-analyzer-cuda</code> — that&rsquo;s the
+            bare analyzer micro-service, and swapping to it replaces your whole station
+            with just an analyzer.
           </p>
         </div>
         <p>

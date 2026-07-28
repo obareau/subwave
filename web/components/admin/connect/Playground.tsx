@@ -188,13 +188,15 @@ export default function Playground({ endpoint, apiBase, adminFetch }: Props) {
         </div>
       )}
 
-      <div className="flex items-center gap-3">
+      {/* The request URL gets its own full-width line on a phone — sharing the
+          row with the Send button leaves it ~200px of scroll-only input. */}
+      <div className="flex flex-wrap items-center gap-3">
         <Btn sm tone={endpoint.mutatesAir ? 'danger' : 'solid'} onClick={send} disabled={sending}>
           {sending ? 'Sending…' : `Send ${endpoint.method}`}
         </Btn>
         <Snippet
           code={`${apiBase}${relPath}`}
-          className="h-7 min-w-0 flex-1 rounded-none border-separator-strong bg-transparent"
+          className="h-7 w-full min-w-0 flex-1 rounded-none border-separator-strong bg-transparent sm:w-auto"
         >
           <SnippetInput className="text-[11px] text-muted" aria-label="Request URL" />
           <SnippetAddon align="inline-end">
