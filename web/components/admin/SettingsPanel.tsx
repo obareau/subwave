@@ -148,6 +148,15 @@ export default function SettingsPanel() {
         password: v.privacy?.password ?? '',
         publishPersonaSouls: v.privacy?.publishPersonaSouls ?? false,
       },
+      requests: {
+        enabled: v.requests?.enabled !== false,
+        maxPending: String(v.requests?.maxPending ?? 6),
+        cooldownSec: String(v.requests?.cooldownSec ?? 60),
+        perIpHourlyCap: String(v.requests?.perIpHourlyCap ?? 8),
+        globalHourlyCap: String(v.requests?.globalHourlyCap ?? 30),
+        repeatCooldownMin: String(v.requests?.repeatCooldownMin ?? 120),
+        onePendingPerIp: v.requests?.onePendingPerIp !== false,
+      },
       kokoroLang: v.tts?.kokoro?.lang ?? '',
       weather: {
         lat: String(v.weather?.lat ?? ''),

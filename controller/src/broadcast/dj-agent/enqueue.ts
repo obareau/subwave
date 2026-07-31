@@ -9,6 +9,8 @@ import * as subsonic from '../../music/subsonic.js';
 import * as dj from '../../llm/dj.js';
 import { stripThinking } from '../../llm/sdk.js';
 import { recordPick } from '../../llm/log.js';
+import * as requestLog from '../request-log.js';
+import { echoesRecentRequest } from '../../util/request-guard.js';
 import { speechPaceScale } from '../../audio/tts.js';
 import { normalizeForDisplay, normalizeForSpeech, spokenWordScale } from '../../audio/speech-text.js';
 import { introMsOf } from './runs.js';
@@ -35,6 +37,32 @@ export function trackFields(song) {
     // tells queue.applyLoudnessGain to recover it with a getSong lookup.
     replayGain: song.replayGain,
   };
+}
+
+// Echo guard on the PICK path. The picker agent conditions on the session
+// window, which quotes listener request text verbatim for ~40 turns / 4h — so
+// an injected phrasing that survived the opener regexes can come back out in a
+// LATER pick's spoken link, long after the request that carried it was guarded
+// and resolved. Policy (thresholds, lookback) lives in util/request-guard.ts
+// with the rest of it; this just applies it and logs. Dropping is the only sane
+// action here — the link's generation context is gone, and an unannounced track
+// is a non-event on air.
+//
+// Exported because callers apply it BEFORE enqueuePick too, exactly as they
+// pre-apply trimLinkToIntro and for the same reason: the session turn must
+// record the line as it will actually air, dropped links as null. A
+// pre-applied DROP (null) short-circuits at the chokepoint's second call — no
+// re-check, no double log. A pre-applied KEEP does get re-scanned there
+// (enqueuePick's second trimLinkToIntro pass can trim the kept text further),
+// but that scan can't flip a no-hit into a hit: trimLinkToIntro only ever
+// shortens text down to a leading prefix, and both echoesRequest measures
+// (longest common run, LCS ratio) are non-increasing as the script shrinks to
+// a prefix of itself — a second scan over less text finds no more than the
+// first one did.
+export function dropEchoedLink(link: string | null, queue: any): string | null {
+  if (!link || !echoesRecentRequest(link, requestLog.recentRequests)) return link;
+  queue.log('request-guard', `pick link echoed recent listener request text — link dropped`);
+  return null;
 }
 
 // Talk-within-the-intro budget (#962), applied to a between-track link in DJ
@@ -103,7 +131,7 @@ export async function enqueuePick(
   // whole-line ratio was an over-estimate and this pass trims a little
   // further. Air always honours the duration budget; the session turn can
   // occasionally carry the slightly longer reading.
-  const introLink = trimLinkToIntro(link, song);
+  const introLink = dropEchoedLink(trimLinkToIntro(link, song), queue);
   const track: any = trackFields(song);
   // Flag the transition effects on this pick (DJ mode only). getAnnotatedUri
   // stamps liq_sweep / liq_washout / liq_dissolve / liq_chop; radio.liq ramps

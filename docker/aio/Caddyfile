@@ -29,6 +29,16 @@
 		}
 	}
 
+	# /api/listener-auth — NOT reachable from the internet. Icecast is in this
+	# same container and calls the controller directly on localhost:7701 (see
+	# supervisor.sh render_icecast), so the edge never needs to carry it.
+	# Through /api/* it was an unthrottled oracle for the shared
+	# privacy.password that /api/station-auth rate-limits. Kept in lockstep
+	# with docker/Caddyfile.
+	handle /api/listener-auth {
+		respond 404
+	}
+
 	# /api/* — controller REST API (prefix stripped so its routes stay at root).
 	handle_path /api/* {
 		reverse_proxy 127.0.0.1:7701

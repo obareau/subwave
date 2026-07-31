@@ -20,9 +20,17 @@
 # The web UI assumes same-origin routing for /api and /stream.mp3 by default
 # (it's baked into the image at build time). To keep that working, point your
 # proxy at a single hostname and replicate the route table from docker/Caddyfile:
+#   /api/listener-auth → 404 / deny         (see below — do this one first)
 #   /stream.mp3  → host:${ICECAST_PORT}      (disable buffering for live audio)
 #   /api/*       → host:${CONTROLLER_PORT}   (strip the /api prefix)
 #   everything   → host:${WEB_PORT}
+#
+# Block /api/listener-auth at your proxy. It is Icecast's URL-auth callback and
+# answers 200/401 on the shared privacy.password, so exposing it hands the
+# internet a password oracle for the same secret that guards the private player
+# (#478). Icecast reaches the controller directly over the compose network, so
+# it never needs to come through your proxy. The controller slows repeated
+# failures as a backstop, but not routing the path is the real fix.
 #
 # If you need separate hostnames per surface, you'll have to rebuild the web
 # image with NEXT_PUBLIC_API_URL / NEXT_PUBLIC_STREAM_URL set — those are

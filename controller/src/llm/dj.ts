@@ -16,6 +16,7 @@ export { introBudgetPhrase, enforceIntroBudget, firstVocalMsFor } from './intern
 export { matchRequest, identifyTrackFromText } from './internal/prompts/request.js';
 export {
   AIR_TIME_CLAUSE,
+  REQUESTER_NAME_CLAUSE,
   generateIntro,
   generateStationId,
   generateSignoff,

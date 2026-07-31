@@ -28,6 +28,14 @@ const { voiceEnabled, autoVoiceAllowed, voiceStatus } = await import('../src/bro
 const { shouldFire } = await import('../src/broadcast/dj-gate.js');
 const { requestSchema } = await import('../src/broadcast/dj-agent/schemas.js');
 
+// requestSchema() is now wrapped in modelTolerant (z.preprocess) — see the C1
+// chat-escape work (Task 5) — so the plain ZodObject's `.shape` sits one level
+// down, at `.def.out.shape`. Falls back to `.shape` so this keeps working if a
+// future change ever hands back an unwrapped object again.
+function shapeOf(schema: any): Record<string, unknown> {
+  return schema?.def?.out?.shape ?? schema.shape;
+}
+
 // Every kind dj-gate arbitrates. All must go quiet together — a kind added to
 // shouldFire() without a voice check would slip through this list, so keep it
 // in sync with the `kind ===` branches there.
@@ -83,12 +91,12 @@ try {
   // The request agent's contract follows the switch: voice off removes the
   // intro field entirely, so no tokens are ever spent writing a line that
   // can't air (the pick-path counterpart is wantLink=false).
-  assert.ok(!('intro' in requestSchema().shape), 'voice off: requestSchema drops the intro field');
+  assert.ok(!('intro' in shapeOf(requestSchema())), 'voice off: requestSchema drops the intro field');
 
   // ── Back ON: the ladder resumes exactly as before ──────────────────────────
   await settings.update({ tts: { enabled: true } });
   assert.equal(voiceEnabled(), true, 'the switch is reversible');
-  assert.ok('intro' in requestSchema().shape, 'voice on: requestSchema offers the intro field again');
+  assert.ok('intro' in shapeOf(requestSchema()), 'voice on: requestSchema offers the intro field again');
   const resumed = MINUTES.flatMap(m => KINDS.map(k => ({ k, m })))
     .filter(({ k, m }) => shouldFire(k, atMinute(m)));
   assert.deepEqual(resumed, liveSlots, 'flipping back restores the exact same slots');

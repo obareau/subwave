@@ -67,6 +67,15 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
       password: form.privacy.password,
       publishPersonaSouls: form.privacy.publishPersonaSouls,
     },
+    requests: {
+      enabled: form.requests.enabled,
+      maxPending: parseInt(form.requests.maxPending, 10),
+      cooldownSec: parseInt(form.requests.cooldownSec, 10),
+      perIpHourlyCap: parseInt(form.requests.perIpHourlyCap, 10),
+      globalHourlyCap: parseInt(form.requests.globalHourlyCap, 10),
+      repeatCooldownMin: parseInt(form.requests.repeatCooldownMin, 10),
+      onePendingPerIp: form.requests.onePendingPerIp,
+    },
   });
 
   // Re-render every 30s so the station-clock preview keeps walking — it's
@@ -374,6 +383,141 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
         </div>
       </Card>
 
+      <Card title="Listener requests" sub="Rate limits and the pause switch for POST /request">
+        <div className="grid gap-3">
+          <div className="field">
+            <Label>Accept requests</Label>
+            <Seg
+              options={[...ON_OFF]}
+              value={form.requests.enabled ? 'on' : 'off'}
+              onChange={id =>
+                setForm(f => ({ ...f, requests: { ...f.requests, enabled: id === 'on' } }))
+              }
+            />
+            <div className="field-hint">
+              Off closes the request line instantly, no restart needed — the fast way to shut
+              requests down mid-raid. During the incident that prompted this page, the only
+              switch was an env var that needed a restart to flip; this applies live. Track picks
+              and everything else keep playing either way.
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>Max queued requests</Label>
+            <Input
+              className="mono-num w-28"
+              aria-label="Max queued requests"
+              type="number"
+              min={1}
+              max={50}
+              step={1}
+              value={form.requests.maxPending}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, requests: { ...f.requests, maxPending: e.target.value } }))
+              }
+            />
+            <div className="field-hint">
+              How many requested tracks may sit queued ahead of the auto-picker at once,
+              regardless of who asked. Clamped 1&ndash;50.
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>Seconds between requests</Label>
+            <Input
+              className="mono-num w-28"
+              aria-label="Seconds between requests"
+              type="number"
+              min={5}
+              max={600}
+              step={1}
+              value={form.requests.cooldownSec}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, requests: { ...f.requests, cooldownSec: e.target.value } }))
+              }
+            />
+            <div className="field-hint">
+              Minimum gap enforced between any two requests, station-wide — the basic anti-spam
+              throttle. Clamped 5&ndash;600s.
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>Per-listener hourly cap</Label>
+            <Input
+              className="mono-num w-28"
+              aria-label="Per-listener hourly cap"
+              type="number"
+              min={1}
+              max={100}
+              step={1}
+              value={form.requests.perIpHourlyCap}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, requests: { ...f.requests, perIpHourlyCap: e.target.value } }))
+              }
+            />
+            <div className="field-hint">
+              Requests any one IP address may make per hour. Clamped 1&ndash;100.
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>Station hourly cap</Label>
+            <Input
+              className="mono-num w-28"
+              aria-label="Station hourly cap"
+              type="number"
+              min={5}
+              max={500}
+              step={1}
+              value={form.requests.globalHourlyCap}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, requests: { ...f.requests, globalHourlyCap: e.target.value } }))
+              }
+            />
+            <div className="field-hint">
+              Requests the whole station accepts per hour, summed across every listener.
+              Clamped 5&ndash;500.
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>Repeat cooldown (min, 0 = off)</Label>
+            <Input
+              className="mono-num w-28"
+              aria-label="Repeat cooldown in minutes"
+              type="number"
+              min={0}
+              max={1440}
+              step={1}
+              value={form.requests.repeatCooldownMin}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, requests: { ...f.requests, repeatCooldownMin: e.target.value } }))
+              }
+            />
+            <div className="field-hint">
+              Blocks the same track being requested again until this many minutes have passed.
+              0 turns the check off. Clamped 0&ndash;1440.
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>One request per listener at a time</Label>
+            <Seg
+              options={[...ON_OFF]}
+              value={form.requests.onePendingPerIp ? 'on' : 'off'}
+              onChange={id =>
+                setForm(f => ({ ...f, requests: { ...f.requests, onePendingPerIp: id === 'on' } }))
+              }
+            />
+            <div className="field-hint">
+              On: an IP can&apos;t queue a second request until its first one has played. Stops
+              one listener from stacking the whole queue with requests of their own.
+            </div>
+          </div>
+        </div>
+      </Card>
+
       <Card title="Public API" sub="What the unauthenticated reads hand out">
         <div className="field">
           <Label>Publish persona souls</Label>
@@ -398,7 +542,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
       </Card>
 
       <SaveBar
-        note="Station name, location, timezone, locale, the private player, and the public-API toggle apply live. Turning the stream password on or off needs a mixer restart."
+        note="Station name, location, timezone, locale, the private player, listener-request limits, and the public-API toggle apply live. Turning the stream password on or off needs a mixer restart."
         busy={busy}
         onSave={save}
         saveLabel="Save station settings"

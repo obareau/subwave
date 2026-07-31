@@ -51,7 +51,7 @@ async function memo(
 
 export async function tavilySearch(query: string): Promise<SearchResponse> {
   const apiKey = settings.get().search?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey;
-  const res = await fetch(TAVILY_ENDPOINT, {
+  const res = await fetchWithTimeout(TAVILY_ENDPOINT, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -64,6 +64,7 @@ export async function tavilySearch(query: string): Promise<SearchResponse> {
       include_answer: true,
       max_results: 5,
     }),
+    timeoutMs: 30_000,
   });
   if (!res.ok) throw new Error(`Tavily HTTP ${res.status}`);
   const data: any = await res.json();
@@ -87,6 +88,13 @@ export async function tavilySearch(query: string): Promise<SearchResponse> {
 // avoids the "did you mean…" disambiguation pages, which never contain useful
 // detail. We send a real User-Agent — DDG silently 200s with an empty body
 // otherwise.
+//
+// The deadline matters more here than on the other backends: this is the
+// DEFAULT provider (see searchWeb below), and DDG is known to accept a
+// connection and then hold it, which without a timeout parks the request on
+// undici's ~300s default. memo() only caches AFTER the call resolves, so
+// concurrent duplicate queries each open their own socket rather than sharing
+// one.
 export async function duckduckgoSearch(query: string): Promise<SearchResponse> {
   const url = new URL(DDG_ENDPOINT);
   url.searchParams.set('q', query);
@@ -94,10 +102,11 @@ export async function duckduckgoSearch(query: string): Promise<SearchResponse> {
   url.searchParams.set('no_html', '1');
   url.searchParams.set('skip_disambig', '1');
   url.searchParams.set('no_redirect', '1');
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: {
       'User-Agent': 'SUB-WAVE radio controller (https://github.com/perminder-klair/subwave)',
     },
+    timeoutMs: 30_000,
   });
   if (!res.ok) throw new Error(`DuckDuckGo HTTP ${res.status}`);
   const data: any = await res.json();

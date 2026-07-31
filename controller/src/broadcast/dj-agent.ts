@@ -44,9 +44,10 @@ import {
   breakerOpen,
   breakerSuccess,
 } from './dj-agent/breaker.js';
-import { enqueuePick, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
+import { dropEchoedLink, enqueuePick, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
 import { advanceRun, runActive } from './dj-agent/runs.js';
-import { pickSchemaBase, pickSystem } from './dj-agent/schemas.js';
+import { pickSchemaBase, pickSystem, requestSystem } from './dj-agent/schemas.js';
+import { guardIntro, screenAck } from '../util/request-guard.js';
 
 // Re-exported so every existing `from './dj-agent.js'` import keeps working —
 // including scripts/llm-bench, which sits outside tsconfig's include and so
@@ -96,6 +97,50 @@ async function repickFromSeen({ seen, badId, wantLink, showAt = null, playlistRe
       schema,
       temperature: 0.5,
       kind: 'djAgentRepick',
+    });
+  } catch {
+    return null;
+  }
+}
+
+// Request-flavoured corrective re-pick (D1): mirrors repickFromSeen above —
+// the request agent returned an id outside its own discovery trail. Observed
+// live: the SAME hallucinated id recurring across independent requests hours
+// apart (e.g. `1q8OwSA2qIzk4n1ikV06wa`, `OAlSQiljTZx5b8OvwfEAIg`, both seen
+// twice) — which looks like the model copying an id out of a session event
+// turn (every pick event tags the current track `[id: …]`) rather than
+// fabricating one fresh; the idInSessionWindow diagnostic on the eventual
+// pick.rejected event (runRequestViaAgent below) is what turns that hunch
+// into a number instead of a guess. One djObject call constrained to the
+// run's own candidates (z.enum — a decode-time grammar on local models, a
+// Zod reject elsewhere, same story as repickFromSeen) salvages the run
+// instead of discarding it wholesale to the caller's stateless matcher
+// cascade — which still runs when this misses too (no candidates, or the
+// call itself fails). Reuses requestSystem() and requestSchema()'s own field
+// wording, gated on the same autoVoiceAllowed() check for `intro`, so a
+// re-picked request stays byte-consistent with a first-try one. Never
+// throws — a salvage failure falls through to the caller's rejection path
+// unchanged.
+async function repickRequestFromSeen({ seen, badId, requester, text }:
+  { seen: Map<string, any>; badId: string | null; requester: string; text: string }) {
+  const ids = [...seen.keys()];
+  if (ids.length === 0) return null;
+  const wantIntro = autoVoiceAllowed();
+  const schema = modelTolerant(z.object({
+    id: z.enum(ids as [string, ...string[]]).describe('the exact id of one candidate'),
+    ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
+    ...(wantIntro ? {
+      intro: z.string().describe(`a natural DJ intro for the track in the DJ voice; weave in what the listener asked for without reading the request back verbatim. It airs over the track's opening seconds, so write it in the present tense — never "next" or "coming up". ${dj.lengthPhrase('intro')}`),
+    } : {}),
+  }));
+  try {
+    return await djObject({
+      system: requestSystem(),
+      prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
+        + `\n\nListener "${requester}" asked: "${text}". The id you returned (${badId ?? 'none'}) matches none of the candidates above. Choose the best candidate id from the list for this request, and write "ack"${wantIntro ? ' and "intro"' : ''} to match.`,
+      schema,
+      temperature: 0.3,
+      kind: 'djAgentRequestRepick',
     });
   } catch {
     return null;
@@ -329,7 +374,10 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   // the chokepoint (near-idempotent — see the note there); it runs here too so
   // the session turn below records the line as it will actually air — trimmed,
   // and dropped links as null, never a line the listeners didn't hear.
-  const say = trimLinkToIntro(rawSay, song) || '';
+  // dropEchoedLink rides along for the same invariant: the echo guard also runs
+  // at the chokepoint, but a link nulled only in there would leave `meta.say`
+  // below quoting text no listener ever heard.
+  const say = dropEchoedLink(trimLinkToIntro(rawSay, song), queue) || '';
   // Transition effects on this pick (persona djMode via settings.effectsActive),
   // independent of whether a link airs.
   const link = (wantLink && say) ? say : null;
@@ -663,18 +711,41 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     if (last && last.role === 'user') last.content += '\n' + tail;
     else messages.push({ role: 'user', content: tail });
 
-    const { object, toolCalls, extras } = await requestAgent.run({
+    const run = await requestAgent.run({
       messages,
       recentIds,
     });
+    const { toolCalls, extras } = run;
+    // Reassigned when the unknown-id salvage below (repickRequestFromSeen)
+    // lands a corrective re-pick — same let-after-destructure shape
+    // pickViaAgent uses for the identical reason.
+    let object = run.object;
+
+    // Chat escape (C1): an explicit kind:"chat" WITH a null id means "this
+    // wasn't a music request" — answer in persona, queue nothing, skip the
+    // cascade entirely. The `kind` half is load-bearing: a null id on its own
+    // is also what an OMITTED id looks like by the time coerceModelPayload is
+    // done with it (schemas.ts requestSchema), and a weak model forgetting the
+    // field would otherwise silently turn a real music request into "nothing
+    // plays". Without kind:"chat" this falls through to the repick salvage and
+    // then the caller's stateless cascade, so the listener still gets music.
+    // Echo guard (A2): this ack is the model's own free-text answer, generated
+    // straight from a message that may carry an injected script — guard it the
+    // same way the cascade's chat branch does (request.ts). Not just a display
+    // concern: this text becomes a `dj`-role session turn that later
+    // `windowMessages()` calls condition on, so an unguarded echo here can
+    // poison future generations even though it never reaches tts.speak.
+    if (object?.kind === 'chat' && !object?.id && typeof object?.ack === 'string' && object.ack.trim()) {
+      const screened = screenAck(object.ack, text, 'Heard you loud and clear.');
+      if (screened.guard) queue.log('request-guard', `agent chat ack echoed request text — replaced`);
+      session.appendTurn({ role: 'dj', kind: 'request', text: screened.ack, meta: { requester, toolCalls } });
+      return { ack: screened.ack, track: null, introScript: null, guard: screened.guard };
+    }
 
     let song = object?.id ? extras.seen.get(object.id) : null;
     // Near-miss repair, same as the pick path: an unambiguous prefix /
     // clear-winner edit-distance match against the run's own candidates
-    // rescues an id the model transcribed imperfectly (#939). No re-pick
-    // stage here — a request that
-    // can't resolve should fall to the caller's stateless matcher cascade,
-    // which understands the listener's actual text.
+    // rescues an id the model transcribed imperfectly (#939).
     if (!song && object?.id && extras.seen.size) {
       const fixed = nearestId(object.id, extras.seen.keys());
       if (fixed) {
@@ -682,9 +753,48 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
         song = extras.seen.get(fixed);
       }
     }
+    // Corrective re-pick (D1), same as the pick path's stage 2: the model
+    // fabricated an id outright while its `seen` map held real candidates.
+    // One djObject call constrained to that set (repickRequestFromSeen,
+    // above) salvages the run instead of discarding it wholesale — the
+    // caller's stateless matcher cascade is still the fallback when this
+    // misses too (empty seen, or the re-pick call itself fails).
+    if (!song && extras.seen.size) {
+      const repicked = await repickRequestFromSeen({ seen: extras.seen, badId: object?.id ?? null, requester, text });
+      if (repicked) {
+        logEvent('pick.repicked', { agent: 'request', from: object?.id ?? null, to: repicked.id, candidates: extras.seen.size });
+        queue.log('request', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);
+        object = repicked;
+        song = extras.seen.get(repicked.id);
+      }
+    }
     if (!song) {
-      logEvent('pick.rejected', { agent: 'request', id: object?.id ?? null, candidates: extras.seen.size, toolCalls });
+      // idInSessionWindow (D2 telemetry): does the bad id appear verbatim
+      // anywhere in the EXACT window this run saw (the local `messages` array
+      // built above, not a fresh session.windowMessages() call — a concurrent
+      // request's session turn can shift the window between this run and now,
+      // which would corrupt the diagnostic in either direction)? A hit
+      // corroborates the copy-not-fabricate hypothesis behind
+      // repickRequestFromSeen (the same hallucinated id recurring hours apart,
+      // live — see its comment); a miss doesn't rule that out, it just narrows
+      // what's worth chasing next.
+      const windowText = messages.map((m: any) => String(m.content ?? '')).join('\n');
+      logEvent('pick.rejected', {
+        agent: 'request', id: object?.id ?? null, candidates: extras.seen.size, toolCalls,
+        idInSessionWindow: !!(object?.id && windowText.includes(object.id)),
+      });
       throw new Error(`request agent returned unknown id ${object?.id}`);
+    }
+
+    // Repeat cooldown (B6) — mirrors the cascade path. `refused` is what tells
+    // the caller nothing was queued: it returns a track (the one it declined,
+    // so the ack and the operator log can name it), and without the flag the
+    // route reported a queue position for a play that will never happen.
+    const cdMin = Number((settings.get() as any)?.requests?.repeatCooldownMin ?? 120);
+    if (cdMin > 0 && queue.recentlyPlayedIds(cdMin / 60).has(song.id)) {
+      const cdAck = queue.cooldownAck(song.id, song.title);
+      session.appendTurn({ role: 'dj', kind: 'request', text: cdAck, meta: { trackId: song.id, requester, toolCalls } });
+      return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: null, refused: 'cooldown' };
     }
 
     // Station voice off (settings.tts.enabled) → no intro. requestSchema()
@@ -693,7 +803,25 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // mid-run (the schema resolved before the flip) and a model inventing the
     // field anyway. Every read below keys off this one binding, and the
     // session then records the ack rather than a line that never aired.
-    const intro = autoVoiceAllowed() && typeof object.intro === 'string' ? object.intro.trim() : '';
+    // Echo guard (A2): a script that reads the request back is regenerated
+    // with the request text withheld — it can't echo what it never saw.
+    const rawIntro = autoVoiceAllowed() && typeof object.intro === 'string' ? object.intro.trim() : '';
+    const guarded = await guardIntro(rawIntro || null, text, () => dj.generateIntro({
+      track: trackFields(song), context: null, requestedBy: requester,
+    }));
+    if (guarded.guard) queue.log('request-guard', `agent intro echoed request text — ${guarded.guard}`);
+    const intro = guarded.script || '';
+    // The personalised line is screenAck's FALLBACK rather than a `||` on the
+    // return below: screenAck already substitutes for an empty ack, so `ack`
+    // is never falsy and a downstream `||` is unreachable. Threading it in here
+    // means the listener gets the named line in both cases the fallback covers
+    // — the model wrote nothing, and the model echoed their own text back.
+    const screened = screenAck(object.ack, text, `Coming up for you, ${requester}.`);
+    if (screened.guard) queue.log('request-guard', `agent ack echoed request text — replaced`);
+    const ack = screened.ack;
+    // Both guards can fire on one request (the model echoed in the ack AND in
+    // the intro) — join rather than let one verdict hide the other.
+    const guardVerdict = [guarded.guard, screened.guard].filter(Boolean).join('+') || null;
     const pos = await queue.push({
       track: trackFields(song),
       requestedBy: requester,
@@ -712,24 +840,31 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // "coming up", no intro to air) and still append the line as the session
     // reply so the request event isn't left without one.
     if (pos === -1) {
-      const ack = queue.dedupAck(song.id);
+      const dupAck = queue.dedupAck(song.id);
       session.appendTurn({
         role: 'dj', kind: 'request',
-        text: ack,
+        text: dupAck,
         meta: { trackId: song.id, requester, toolCalls },
       });
-      return { ack, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null };
+      // The echo guards already ran above even though this pick turned out to
+      // be a duplicate — surface the verdict rather than losing it. `refused`
+      // for the same reason as the cooldown branch: nothing was queued here.
+      return { ack: dupAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: guardVerdict, refused: 'already-queued' };
     }
     session.appendTurn({
       role: 'dj', kind: 'request',
-      text: intro || object.ack || `Queued "${song.title}".`,
+      // `ack` is guaranteed non-empty (screenAck substitutes), so it always
+      // wins over the title fallback when there's no intro — the fallback is
+      // kept only as a guard against a future edit making `ack` optional.
+      text: intro || ack || `Queued "${song.title}".`,
       meta: { trackId: song.id, requester, toolCalls },
     });
 
     return {
-      ack: object.ack || `Coming up for you, ${requester}.`,
+      ack,
       track: { title: song.title, artist: song.artist, id: song.id },
       introScript: intro || null,
+      guard: guardVerdict,
     };
   });
 }

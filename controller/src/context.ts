@@ -2,6 +2,7 @@
 // Used by the autonomous scheduler to pick mood-appropriate tracks.
 
 import { config } from './config.js';
+import { fetchWithTimeout } from './util/fetch-timeout.js';
 import { resolveActiveShow, resolveOnAirLocation, get as getSettings, moodScheduleFor, weatherMoodFor } from './settings.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
@@ -140,7 +141,7 @@ export async function getWeather() {
   try {
     const unitParam = imperial ? '&temperature_unit=fahrenheit' : '';
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${config.weather.lat}&longitude=${config.weather.lng}&current=temperature_2m,weather_code,is_day${unitParam}`;
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, { timeoutMs: 10_000 });
     const data = await res.json() as any;
     const code = data.current.weather_code;
     const condition = mapWeatherCode(code);
@@ -217,7 +218,11 @@ export async function geocodePlace(query: string): Promise<GeocodeResult[]> {
     'https://geocoding-api.open-meteo.com/v1/search?name=' +
     encodeURIComponent(q) +
     '&count=6&language=en&format=json';
-  const res = await fetch(url);
+  // Bounded because GET /geocode is public and unauthenticated: a stalled
+  // upstream would otherwise park a handler until undici's ~300s default, and
+  // unique queries all miss the 200-entry cache. Matches the deadline
+  // /cover/:id already puts on its proxy fetch.
+  const res = await fetchWithTimeout(url, { timeoutMs: 10_000 });
   if (!res.ok) throw new Error(`geocoding upstream ${res.status}`);
   const data = (await res.json()) as { results?: any[] };
   const results: GeocodeResult[] = (data.results || []).map((r: any) => {

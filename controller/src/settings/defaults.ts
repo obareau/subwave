@@ -184,6 +184,23 @@ export const DEFAULTS = {
   // persona's soul, one at a time, and removing that would break existing
   // public clients. This toggle is about handing over the whole roster at once.
   privacy: { privatePlayer: false, listenerAuth: false, password: '', publishPersonaSouls: false },
+  // Listener-request pipeline gates (request-system hardening, 2026-07-28).
+  // `enabled` is the master on/off for POST /request. The rest bound the
+  // request rate from a few angles at once: `maxPending` caps the queue depth
+  // regardless of source, `globalHourlyCap` bounds total requests/hour across
+  // all listeners, `repeatCooldownMin` blocks the same track being
+  // re-requested too soon (0 = off), `cooldownSec` is the minimum gap between
+  // any two requests, and `perIpHourlyCap`/`onePendingPerIp` bound a single
+  // IP's share. Every field applies live — no restart.
+  requests: {
+    enabled: true,
+    maxPending: 6,
+    globalHourlyCap: 30,
+    repeatCooldownMin: 120,
+    cooldownSec: 60,
+    perIpHourlyCap: 8,
+    onePendingPerIp: true,
+  },
   // Global DJ prompt template. '' means "use DEFAULT_DJ_PROMPT_TEMPLATE".
   // Always the RESOLVED text of the active djPrompts entry — kept so
   // renderDjPrompt() (and an older controller sharing the same settings.json)

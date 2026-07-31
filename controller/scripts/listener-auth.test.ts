@@ -155,4 +155,33 @@ assert.equal(
   'absent candidate denies',
 );
 
+// --- brute-force damper ---------------------------------------------------
+// The edge (docker/Caddyfile + docker/aio/Caddyfile) 404s /api/listener-auth,
+// but byo-proxy operators write their own route table, so the handler damps
+// repeated FAILURES itself. The property that matters: the delay escalates and
+// then saturates, and it is driven only by failures — the route never calls
+// this on an allow, so a listener with the right password is never slowed.
+const { listenerAuthFailureDelayMs, resetListenerAuthFailures } =
+  await import('../src/middleware/ratelimit.js');
+
+resetListenerAuthFailures();
+const t0 = Date.now();
+assert.equal(listenerAuthFailureDelayMs(t0), 250, 'first failure costs one step');
+assert.equal(listenerAuthFailureDelayMs(t0), 500, 'delay escalates per failure');
+assert.equal(listenerAuthFailureDelayMs(t0), 750, 'delay keeps escalating');
+
+// Saturates rather than growing without bound — an attacker can't push the
+// handler into holding sockets open for minutes at a time.
+for (let i = 0; i < 50; i += 1) listenerAuthFailureDelayMs(t0);
+assert.equal(listenerAuthFailureDelayMs(t0), 2000, 'delay saturates at the cap');
+
+// A fresh window starts the ladder over, so a burst of wrong guesses hours ago
+// doesn't permanently penalise a station that has since been left alone.
+assert.equal(
+  listenerAuthFailureDelayMs(t0 + 15 * 60_000 + 1),
+  250,
+  'window rollover resets the ladder',
+);
+resetListenerAuthFailures();
+
 console.log('listener-auth.test.ts: all assertions passed');

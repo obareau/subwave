@@ -4,6 +4,11 @@
 
 export { recentCalls, record, recordPick, lifetimeTokenCount } from './internal/telemetry/log.js';
 
+// Done-tool retry churn (D2) — the strategy layer's two "stopped without
+// calling done" retry sites record here; /debug reports the since-boot count
+// so an operator can see the retry rate per model choice.
+export { recordAgentRetry, agentDoneRetryCount } from './internal/telemetry/log.js';
+
 // Daily LLM token tally — the running count the budget cap is enforced against.
 // `seedDailyUsageFromLog` is called once at boot (server.ts) so a mid-day
 // restart resumes the count instead of resetting it. `budgetMode` (the pure

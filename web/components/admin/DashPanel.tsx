@@ -39,11 +39,6 @@ import {
   type PromptInputMessage,
 } from '../ai-elements/prompt-input';
 import { Suggestion, Suggestions } from '../ai-elements/suggestion';
-import {
-  Conversation,
-  ConversationContent,
-  ConversationScrollButton,
-} from '../ai-elements/conversation';
 import { Message, MessageContent } from '../ai-elements/message';
 import type { ChatStatus } from 'ai';
 import { ScrollArea, ScrollBar } from '../ui/scroll-area';
@@ -374,11 +369,15 @@ export default function DashPanel() {
   const listenersObj = listenersValue && typeof listenersValue === 'object' ? listenersValue : null;
   const upcoming = q.upcoming || [];
   const history = q.history || [];
-  // Booth log is the live DJ session in air order — oldest first, newest at
-  // the bottom, where the Conversation's stick-to-bottom tail holds the view.
-  // (The controller's djLog ring buffer is operator diagnostics — it lives on
-  // /admin/debug only.)
+  // Booth log is the live DJ session, shown NEWEST FIRST — the operator
+  // watching the dash cares about what just went out, not the top of the
+  // session. `sessionMessages` arrives in air order, so reverse for display
+  // while carrying each turn's ORIGINAL index along: turnKey() folds the index
+  // into the React key, and a display index would shift under every turn the
+  // station adds, remounting the whole list. (The controller's djLog ring
+  // buffer is operator diagnostics — it lives on /admin/debug only.)
   const booth = status?.sessionMessages || [];
+  const boothNewestFirst = booth.map((turn, i) => ({ turn, i })).reverse();
 
   const showName = status?.activeShow?.name || ctx?.time?.show || '—';
   const weatherText = ctx?.weather?.condition
@@ -539,12 +538,17 @@ export default function DashPanel() {
                 {/* The absolute-inset wrapper keeps the log's content out of
                     the card's intrinsic height, so the card tracks the right
                     column instead of growing to fit every session turn. The
-                    Conversation (stick-to-bottom) owns the scroll region and
-                    holds the view pinned to the newest turn — a live tail. */}
+                    scroller is anchored at the TOP rather than stick-to-bottom:
+                    with newest first, turns prepend, and a container sitting at
+                    scrollTop 0 keeps showing the newest turn on its own. */}
                 <div className="absolute inset-0">
-                  <Conversation className="h-full">
-                    <ConversationContent className="gap-2 p-0 pr-2">
-                      {booth.map((turn, i) => (
+                  <div
+                    className="h-full overflow-y-auto"
+                    role="log"
+                    aria-live="polite"
+                  >
+                    <div className="flex flex-col gap-2 pr-2">
+                      {boothNewestFirst.map(({ turn, i }) => (
                         <Message
                           key={turnKey(turn, i)}
                           from="assistant"
@@ -570,9 +574,8 @@ export default function DashPanel() {
                           </MessageContent>
                         </Message>
                       ))}
-                    </ConversationContent>
-                    <ConversationScrollButton className="rounded-none border-ink" />
-                  </Conversation>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

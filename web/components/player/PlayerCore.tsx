@@ -37,6 +37,10 @@ import type { RequestResult } from '@/lib/types';
 
 export interface PlayerAudio {
   audioRef: RefObject<HTMLAudioElement | null>;
+  /** Ref callback for the shell's <audio> element. Skins read audioRef; only
+   *  the shell that renders the element attaches it, and it must use this
+   *  rather than audioRef so the hook sees a remount (see usePlayer). */
+  attachAudio: (el: HTMLAudioElement | null) => void;
   tunedIn: boolean;
   status: PlayerStatus;
   volume: number;
@@ -94,6 +98,7 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   const client = useStationClient();
   const {
     audioRef,
+    attachAudio,
     tunedIn,
     status,
     volume,
@@ -103,13 +108,8 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
     toggleMute,
     muted,
     idleStopped,
-    getListenerLagMs,
   } = usePlayer();
-  // Player before feed: the feed's listener-time hold prefers the audio
-  // element's measured lag over the advertised stream.bufferSeconds, so the
-  // title flip and elapsed clock track what THIS tab actually hears
-  // (getListenerLagMs is identity-stable — no feed resubscription).
-  const feed = useStationFeed(getListenerLagMs);
+  const feed = useStationFeed();
 
   // Only an explicit false is offline — see PlayerAudio.offline.
   const offline = feed.streamOnline === false;
@@ -188,10 +188,10 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   const { latencyMs, quality } = signal;
   const audioValue = useMemo<PlayerAudio>(
     () => ({
-      audioRef, tunedIn, status, volume, muted, idleStopped, offline,
+      audioRef, attachAudio, tunedIn, status, volume, muted, idleStopped, offline,
       signal: { latencyMs, quality },
     }),
-    [audioRef, tunedIn, status, volume, muted, idleStopped, offline, latencyMs, quality],
+    [audioRef, attachAudio, tunedIn, status, volume, muted, idleStopped, offline, latencyMs, quality],
   );
 
   return (

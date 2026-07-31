@@ -1,6 +1,6 @@
 ---
 name: subwave-news-dispatch
-description: Write a news post for the SUB/WAVE "Dispatches" page, a short human-friendly tutorial about a feature, fix, or release. Use this skill whenever the user wants to "write a news post / dispatch / news article", "announce a feature on the news page", "add a changelog entry to the site", "post an update about <feature>", "write release notes for the site", or "tell people about <what shipped>" for SUB/WAVE. The skill knows where the markdown lives (web/content/news), the frontmatter schema, the what/how/why structure, and that every draft must be run through the `humanizer` skill before saving. It does NOT publish or deploy; it just writes the .md file, and the /news page picks it up on the next build.
+description: Write a news post for the SUB/WAVE "Dispatches" page, a short human-friendly tutorial about a feature, fix, or release. Use this skill whenever the user wants to "write a news post / dispatch / news article", "announce a feature on the news page", "add a changelog entry to the site", "post an update about <feature>", "write release notes for the site", or "tell people about <what shipped>" for SUB/WAVE. The skill knows where the markdown lives (web/content/news), the frontmatter schema, the what/how/why structure, and that every draft must be run through the `no-ai-slop` skill before saving. It does NOT publish or deploy; it just writes the .md file, and the /news page picks it up on the next build.
 ---
 
 # SUB/WAVE news dispatch
@@ -56,9 +56,11 @@ Use `##` subheads (sentence case) to break those up. Look at the seed articles f
 - Be specific: real paths, real commands, the real button name in admin. Pull the detail from `git log`, the PR, or the relevant manual page under `web/components/manual/`.
 - Straight quotes, sentence-case headings, no decorative emoji.
 
-## Required: humanize before saving
+## Required: de-slop before saving
 
-ALWAYS run the finished draft through the **`humanizer`** skill, apply its edits, then write the `.md` file. This is not optional. It's the step that keeps the wire from reading like AI release notes, and it's where the em-dash and rule-of-three habits get caught.
+ALWAYS run the finished draft through the **`no-ai-slop`** skill in edit mode, apply its edits, then write the `.md` file. This is not optional. It's the step that keeps the wire from reading like AI release notes, and it's where the em-dash, throat-clearing opener, and rule-of-three habits get caught.
+
+Two things to hold onto when you apply its edits: the no-em-dash rule above is absolute here even though `no-ai-slop` allows 1-2 in longer drafts, and the wire's first-person voice ("we traced it to the Opus mount") is a voice signal to preserve, not throat-clearing to cut.
 
 ## Verify
 

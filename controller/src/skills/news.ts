@@ -11,6 +11,7 @@
 // if a richer feed is needed.
 
 import { config } from '../config.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 const ITEM_RE = /<item\b[^>]*>([\s\S]*?)<\/item>/gi;
 const TITLE_RE = /<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i;
@@ -37,7 +38,13 @@ export function hashHeadline(title) {
 export async function fetchHeadlines({ feedUrl, maxItems }: { feedUrl?: string; maxItems?: number } = {}) {
   const url = feedUrl || config.news.feedUrl;
   const cap = maxItems || config.news.maxItems;
-  const res = await fetch(url);
+  // Bounded like the web-search backends. The feed URL is operator-set
+  // (skills/news/SKILL.md `feed:`), so this is not an injection sink — the
+  // deadline is about liveness. It runs inside the segment director on the
+  // autonomous DJ path, where a hung socket would otherwise park the whole
+  // segment on undici's ~300s default and eat the agent's own 45s budget many
+  // times over. 15s is generous for an RSS document.
+  const res = await fetchWithTimeout(url, { timeoutMs: 15_000 });
   if (!res.ok) throw new Error(`News feed HTTP ${res.status}`);
   const xml = await res.text();
   const items: any[] = [];

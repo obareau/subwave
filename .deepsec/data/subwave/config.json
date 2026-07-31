@@ -1,0 +1,22 @@
+{
+  "ignorePaths": [
+    ".env",
+    ".env.*",
+    "**/.env",
+    "**/.env.*",
+    "state/**",
+    "**/state/**",
+    "**/node_modules/**",
+    "**/.next/**",
+    "app/ios/**",
+    "app/android/**"
+  ],
+  "priorityPaths": [
+    "controller/src/routes/",
+    "controller/src/middleware/",
+    "controller/src/util/",
+    "controller/src/llm/",
+    "docker/"
+  ],
+  "promptAppend": "This is a self-hosted single-operator radio station, not a multi-tenant SaaS. There are no user accounts, no cookies and no browser-credentialed sessions — only one admin (HTTP Basic via requireAdmin) and anonymous public listeners. Do not report CSRF, session fixation, or missing per-user authorization; there is no such model. Weigh findings by whether they let an unauthenticated listener reach admin-only settings/secrets, inject into the LLM prompt chain or the on-air voice, escape the state/ directory, or forge Liquidsoap/Icecast control input."
+}

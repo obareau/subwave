@@ -15,6 +15,7 @@ import * as settings from '../settings.js';
 import * as analyzer from '../music/analyzer.js';
 import * as db from '../music/library-db.js';
 import * as mix from '../music/mix.js';
+import * as loudness from '../music/loudness.js';
 import * as stemCache from '../music/stem-cache.js';
 import { readPidfile, isPidAlive } from '../music/tagger-lock.js';
 import { HARD_DEADLINE_SEC } from './drain-policy.js';
@@ -28,6 +29,13 @@ export const CLIP_SEAM_CROSS_SEC = 0.3;
 // incoming grid, so near-locked (or clean half/double) tempos are required
 // for the borrowed groove to read as intentional.
 const BPM_COMPAT_MIN = 0.7;
+
+// The queue hands in its own Track objects; only the identity fields and the
+// loudness inputs are read here (gainDb when the drain has already stamped it).
+export type BlendTrack = loudness.LoudnessTrack & {
+  title?: string | null;
+  gainDb?: number;
+};
 
 export interface BlendPlan {
   clipPath: string;
@@ -56,8 +64,8 @@ function bulkPassRunning(): boolean {
 // seconds; everything else resolves from library.db (bars/outro/lufs are
 // never on the slim track objects).
 export async function maybeRenderBlend(
-  outTrack: { id?: string | null; title?: string | null },
-  inTrack: { id?: string | null; title?: string | null },
+  outTrack: BlendTrack,
+  inTrack: BlendTrack,
   remainingSec: number | null,
   opts: { outCapped?: boolean } = {},
 ): Promise<BlendPlan | null> {
@@ -96,6 +104,24 @@ export async function maybeRenderBlend(
   if (windowMs < 3000) return null; // too late to even try
   const timeoutMs = Math.min(config.analyzer.renderTimeoutMs, windowMs);
 
+  // Level match (#1240). The clip carries no liq_amplify of its own
+  // (subsonic.getClipUri), so the render has to bake in the SAME dB the
+  // station would have applied to each side — resolved through the one
+  // loudness path the drain uses (music/loudness.ts), never re-derived from
+  // the analyzer's leading-window LUFS. That figure ignores ReplayGain tags
+  // (the DEFAULT source), the operator's boost cap and the per-track peak
+  // headroom cap, so a clip normalised from it sat at a different level than
+  // the tracks either side of it.
+  //
+  // The outgoing track was stamped moments ago by the drain's own
+  // applyLoudnessGain; the incoming one is resolved here, which also caches
+  // its ReplayGain answer onto the track object so its own drain pays no
+  // extra Subsonic round-trip.
+  const outGainDb = typeof outTrack.gainDb === 'number'
+    ? outTrack.gainDb
+    : await loudness.resolveGainDb(outTrack);
+  const inGainDb = await loudness.resolveGainDb(inTrack);
+
   const result = await analyzer.renderTransition({
     out: {
       stems_dir: stemCache.dirFor(outTrack.id),
@@ -108,11 +134,15 @@ export async function maybeRenderBlend(
         bars: out.outro.bars,
         lufs: out.outro.lufs ?? null,
       },
+      // gain_db is what the worker uses; lufs stays on the wire so an older
+      // analyzer image (which knows only the lufs/target maths) still renders.
+      gain_db: outGainDb,
       lufs: out.loudnessLufs ?? null,
     },
     in: {
       stems_dir: stemCache.dirFor(inTrack.id),
       bars: inn.bars,
+      gain_db: inGainDb,
       lufs: inn.loudnessLufs ?? null,
     },
     out_dir: transitionsDir(),

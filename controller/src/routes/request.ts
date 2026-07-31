@@ -15,9 +15,11 @@ import * as requestLog from '../broadcast/request-log.js';
 import * as listeners from '../broadcast/listeners.js';
 import { autoVoiceAllowed } from '../broadcast/voice-policy.js';
 import * as webhooks from '../broadcast/webhooks.js';
+import * as settings from '../settings.js';
+import { stripScriptedOpener, cleanRequesterName, stillInFlight, screenAck, guardIntro } from '../util/request-guard.js';
 import {
-  checkRateLimit, clientIp,
-  REQUESTS_DISABLED, REQUEST_TEXT_MAX, REQUEST_NAME_MAX,
+  checkRateLimit, checkGlobalRateLimit, commitRateLimit, commitGlobalRateLimit, clientIp,
+  REQUESTS_DISABLED, REQUEST_TEXT_MAX,
 } from '../middleware/ratelimit.js';
 import { shuffle } from '../util/shuffle.js';
 
@@ -56,10 +58,19 @@ function sanitizeRequestText(raw: string): string {
 const requests = new Map();
 const REQUEST_TTL_MS = 10 * 60 * 1000;
 
+// One request in flight per IP (settings.requests.onePendingPerIp): an IP's
+// previous request must resolve AND leave the upcoming queue (i.e. air) before
+// the next one is accepted. Entries are ledger entries; pruneRequests() below
+// is the shared janitor.
+const lastByIp = new Map<string, any>();
+
 function pruneRequests() {
   const cutoff = Date.now() - REQUEST_TTL_MS;
   for (const [id, entry] of requests) {
     if (entry.createdAt < cutoff) requests.delete(id);
+  }
+  for (const [ip, entry] of lastByIp) {
+    if (entry.createdAt < cutoff) lastByIp.delete(ip);
   }
 }
 
@@ -165,6 +176,8 @@ function recordOutcome(entry) {
       id: String(entry.id).slice(0, 8),
       requester: entry.requester,
       text: entry.text,
+      rawText: entry.rawText ?? null,
+      injection: entry.injection ?? null,
       status: entry.status,
       ms: entry.startedAt ? Date.now() - entry.startedAt : null,
       path: entry.path || null,
@@ -184,10 +197,19 @@ function recordOutcome(entry) {
       ack: entry.ack || null,
       introScript: entry.introScript || null,
       message: entry.message || null,
+      guard: entry.guard ?? null,
     });
   } catch (err) {
     queue.log('error', `request-log record failed: ${err.message}`);
   }
+}
+
+// Record a guard verdict on the entry without clobbering an earlier one — a
+// single request can trip the ack guard and then the intro guard, and the
+// durable log should show both rather than whichever ran last.
+function flagGuard(entry, verdict: string | null | undefined) {
+  if (!verdict) return;
+  entry.guard = entry.guard ? `${entry.guard}+${verdict}` : verdict;
 }
 
 async function resolveRequest(entry) {
@@ -268,7 +290,7 @@ async function resolveRequest(entry) {
     // Station voice off (settings.tts.enabled) → the request is still honoured
     // and the listener still gets their text ack; there's just no spoken intro,
     // and no model call to write one.
-    const introScript = autoVoiceAllowed()
+    let introScript = autoVoiceAllowed()
       ? await dj.generateIntro({
         track: pick,
         context: ctx,
@@ -279,6 +301,21 @@ async function resolveRequest(entry) {
         recentOpeners: queue.getRecentOpeners(),
       })
       : null;
+    // Echo guard (A2): a script that reads the request back is regenerated with
+    // the request text withheld — it can't echo what it never saw.
+    const guardedMlt = await guardIntro(introScript, text, () => dj.generateIntro({
+      track: pick,
+      context: ctx,
+      requestedBy: requester,
+      recap: queue.getDjRecap(),
+      recentTracks: queue.getRecentTracks(),
+      recentOpeners: queue.getRecentOpeners(),
+    }));
+    if (guardedMlt.guard) {
+      flagGuard(entry, guardedMlt.guard);
+      queue.log('request-guard', `more-like-this intro echoed request text — ${guardedMlt.guard}`);
+    }
+    introScript = guardedMlt.script;
     const pos = await queue.push({
       track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
@@ -299,6 +336,9 @@ async function resolveRequest(entry) {
       // honestly instead of airing a second intro over a phantom replay (#619).
       const dupAck = queue.dedupAck(pick.id);
       entry.pickSource = `${entry.pickSource}:already-queued`;
+      // Nothing was queued for THIS listener — don't let the one-pending hold
+      // key on a track they didn't get (stillInFlight).
+      entry.refused = true;
       session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
       return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
     }
@@ -322,6 +362,34 @@ async function resolveRequest(entry) {
   try {
     const agentRes = await djAgent.runRequest(queue, ctx, { requester, text });
     if (agentRes) {
+      // Agent path's echo guard (dj-agent.ts) already logged the ephemeral
+      // djLog entry when it fired; thread the same verdict into the durable
+      // request log so `guard` isn't silently unset for every agent-path
+      // request (the cascade/more-like-this paths set it inline above).
+      if (agentRes.guard) flagGuard(entry, agentRes.guard);
+      if (!agentRes.track) {
+        // Chat escape (C1): the agent answered in persona — nothing to queue.
+        // Only reachable on an EXPLICIT kind:"chat" now (dj-agent.ts); an
+        // omitted id no longer lands here, it falls through to the cascade.
+        queue.log('request', `agent chat-answered (no track)`);
+        entry.path = 'chat';
+        entry.pickSource = 'agent-chat';
+        return resolved({ ack: agentRes.ack, track: null, queuePosition: null });
+      }
+      if (agentRes.refused) {
+        // The agent declined to queue (repeat cooldown, or push() deduped it)
+        // and returned the track only so the ack and the log can name it.
+        // Reporting `queue.upcoming.length` here put "Queued · Position #N" on
+        // the listener's screen over an ack saying the opposite, and recorded a
+        // clean `agent` resolution in the operator log for a play that never
+        // happened. Keep the marker, no position, no one-pending hold.
+        queue.log('request', `agent refused (${agentRes.refused}): ${agentRes.track.title} — ${agentRes.track.artist}`);
+        entry.path = 'agent';
+        entry.pickSource = `agent:${agentRes.refused}`;
+        entry.pick = agentRes.track;
+        entry.refused = true;
+        return resolved({ ack: agentRes.ack, track: agentRes.track, queuePosition: null });
+      }
       queue.log('request', `agent resolved: ${agentRes.track.title} — ${agentRes.track.artist}`);
       entry.path = 'agent';
       entry.pickSource = 'agent';
@@ -353,6 +421,20 @@ async function resolveRequest(entry) {
     language: matched.language,
     searchTerms: matched.search_terms,
   });
+
+  // Conversational message → conversational answer; nothing queued (C1).
+  if ((matched as any).kind === 'chat') {
+    queue.log('request', `cascade chat-answered (no track)`);
+    entry.path = 'chat';
+    entry.pickSource = 'chat';
+    const screened = screenAck(matched.ack, text, 'Heard you loud and clear.');
+    if (screened.guard) {
+      flagGuard(entry, screened.guard);
+      queue.log('request-guard', `cascade chat ack echoed request text — replaced`);
+    }
+    session.appendTurn({ role: 'dj', kind: 'request', text: screened.ack, meta: { requester } });
+    return resolved({ ack: screened.ack, track: null, queuePosition: null });
+  }
 
   // Stash the matcher breakdown for the debug record — this path is the
   // stateless cascade (agent + more-like-this never reach here).
@@ -437,7 +519,11 @@ async function resolveRequest(entry) {
     if (!pick) {
       try {
         const r = await subsonic.search(matched.language, { songCount: 25 });
-        pick = randomFresh(r);
+        // Strict-fresh (C2): with a tiny text-match pool (often 1 track), falling
+        // back to recently-played candidates just dedup-dies downstream — treat
+        // an all-stale pool as a miss and let the cascade continue instead.
+        const fresh = (r || []).filter((s: any) => s?.id && !recentIds.has(s.id));
+        pick = fresh.length ? fresh[Math.floor(Math.random() * fresh.length)] : null;
         if (pick) pickSource = `language-search:${matched.language}`;
       } catch (err) {
         queue.log('error', `language search pick failed: ${err.message}`);
@@ -539,21 +625,44 @@ async function resolveRequest(entry) {
     }
   }
 
+  // Repeat cooldown (B6): a track that just aired can't be re-queued by
+  // request. Checked before intro generation so a cooldown hit never spends a
+  // model call — the listener still gets a friendly, honest ack (`resolved`,
+  // not `failed`).
+  const cdMin = Number((settings.get() as any)?.requests?.repeatCooldownMin ?? 120);
+  if (cdMin > 0 && queue.recentlyPlayedIds(cdMin / 60).has(pick.id)) {
+    entry.pick = pick;
+    entry.pickSource = `${pickSource}:cooldown`;
+    // Refused, not queued — see the more-like-this dedup branch above.
+    entry.refused = true;
+    const cdAck = queue.cooldownAck(pick.id, pick.title);
+    session.appendTurn({ role: 'dj', kind: 'request', text: cdAck, meta: { trackId: pick.id, requester } });
+    return resolved({ ack: cdAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
+  }
+
   queue.log('request', `resolved via ${pickSource}: ${pick.title} — ${pick.artist}`);
 
   // On an artist miss the up-front `ack` (written by matchRequest before the
   // cascade knew it would miss) is a lie — "Got some Katy Perry coming up!"
   // over a Daft Punk track. Replace it with an honest stand-in line.
-  const ack = entry.artistMiss
-    ? `No ${entry.artistMiss} in the crates — here's something that fits the moment instead.`
-    : matched.ack;
+  let ack: string;
+  if (entry.artistMiss) {
+    ack = `No ${entry.artistMiss} in the crates — here's something that fits the moment instead.`;
+  } else {
+    const screened = screenAck(matched.ack, text, 'Coming right up.');
+    if (screened.guard) {
+      flagGuard(entry, screened.guard);
+      queue.log('request-guard', `cascade ack echoed request text — replaced`);
+    }
+    ack = screened.ack;
+  }
 
   // 3. Generate DJ intro that mentions the request. On a miss, pass the
   // requested-but-absent artist so the spoken intro owns the substitution
   // instead of pretending the track is by them.
   // Station voice off → no spoken intro and no model call to write one (see the
   // more_like_this path above). The `ack` below still reaches the listener.
-  const introScript = autoVoiceAllowed()
+  let introScript = autoVoiceAllowed()
     ? await dj.generateIntro({
       track: pick,
       context: ctx,
@@ -565,6 +674,22 @@ async function resolveRequest(entry) {
       recentOpeners: queue.getRecentOpeners(),
     })
     : null;
+  // Echo guard (A2): a script that reads the request back is regenerated with
+  // the request text withheld — it can't echo what it never saw.
+  const guarded = await guardIntro(introScript, text, () => dj.generateIntro({
+    track: pick,
+    context: ctx,
+    requestedBy: requester,
+    artistMiss: entry.artistMiss || null,
+    recap: queue.getDjRecap(),
+    recentTracks: queue.getRecentTracks(),
+    recentOpeners: queue.getRecentOpeners(),
+  }));
+  if (guarded.guard) {
+    flagGuard(entry, guarded.guard);
+    queue.log('request-guard', `intro echoed request text — ${guarded.guard}`);
+  }
+  introScript = guarded.script;
 
   // 4. Add to queue (will trigger Liquidsoap via the queue manager). A
   // concurrent request that already queued this exact track makes push() dedup
@@ -588,6 +713,8 @@ async function resolveRequest(entry) {
   if (pos === -1) {
     const dupAck = queue.dedupAck(pick.id);
     entry.pickSource = `${pickSource}:already-queued`;
+    // Refused, not queued — see the more-like-this dedup branch above.
+    entry.refused = true;
     session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
     return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
   }
@@ -612,13 +739,12 @@ async function resolveRequest(entry) {
 // background. The listener never waits on the LLM.
 // ---------------------------------------------------------------------------
 router.post('/request', async (req, res) => {
-  if (REQUESTS_DISABLED) {
+  const cfg = (settings.get() as any)?.requests || {};
+  if (REQUESTS_DISABLED || cfg.enabled === false) {
     return res.status(503).json({ success: false, message: 'Requests are temporarily closed.' });
   }
 
-  // Zero-listener pause: a request would mean LLM work, so it's gated too.
-  // Force a fresh Icecast read so a listener who just connected isn't turned
-  // away on a stale cached count.
+  // Zero-listener pause (unchanged — see original comment).
   await listeners.refresh();
   if (!listeners.djCallsAllowed()) {
     return res.status(503).json({
@@ -629,13 +755,39 @@ router.post('/request', async (req, res) => {
 
   const rawText = typeof req.body?.text === 'string' ? req.body.text : '';
   const rawName = typeof req.body?.name === 'string' ? req.body.name : '';
-  const text = sanitizeRequestText(rawText).slice(0, REQUEST_TEXT_MAX);
+  // Sanitize (markup-shaped injection), then neutralize the "read this on air"
+  // directive family — the cleaned text is all the session/prompts/air see; the
+  // raw text is preserved on the entry for the operator request log.
+  const stripped = stripScriptedOpener(sanitizeRequestText(rawText));
+  const text = stripped.text.slice(0, REQUEST_TEXT_MAX);
   if (!text) {
-    return res.status(400).json({ error: 'Empty request' });
+    // Distinguish "you typed nothing" from "everything you typed was staging
+    // directions for the DJ, so there is no request left to resolve" — the
+    // second is reachable by an ordinary listener via a false-positive match,
+    // and "Empty request" over a message they can see they wrote reads as a
+    // bug. Never echo the text back in the error.
+    return res.status(400).json({
+      error: stripped.injection
+        ? "Couldn't read a song request in that — try just the artist, title, or a vibe."
+        : 'Empty request',
+    });
   }
-  const requester = (rawName.trim().slice(0, REQUEST_NAME_MAX)) || 'anon';
+  const s = settings.get() as any;
+  const reservedNames = [
+    'dj', 'admin', 'host', 'mod', 'moderator',
+    s?.station || '',
+    ...(Array.isArray(s?.personas) ? s.personas.map((p: any) => p?.name || '') : []),
+  ];
+  const requester = cleanRequesterName(rawName, reservedNames);
 
-  const gate = checkRateLimit(clientIp(req));
+  const ip = clientIp(req);
+  // Run the janitor BEFORE the gates, not after. The one-pending hold below
+  // returns 429 without ever reaching the rest of the handler, so pruning
+  // later meant a request whose resolution never settled held its IP well past
+  // the 10-minute TTL — freed only when some OTHER IP's request got far enough
+  // to prune, which on a single-listener station is "never, until restart".
+  pruneRequests();
+  const gate = checkRateLimit(ip);
   if (!gate.ok) {
     res.setHeader('Retry-After', String(gate.retryAfter));
     return res.status(429).json({
@@ -644,22 +796,60 @@ router.post('/request', async (req, res) => {
       retryAfter: gate.retryAfter,
     });
   }
+  const globalGate = checkGlobalRateLimit();
+  if (!globalGate.ok) {
+    res.setHeader('Retry-After', String(globalGate.retryAfter));
+    return res.status(429).json({
+      success: false,
+      message: 'The request line is busy — try again in a few minutes.',
+      retryAfter: globalGate.retryAfter,
+    });
+  }
+  // Both queue-state refusals below carry the COOLDOWN as Retry-After, which is
+  // a truthful floor rather than a guess: checkRateLimit above already stamped
+  // this IP's cooldown, so the caller genuinely cannot succeed before it
+  // expires, whatever the queue does in the meantime. A client that honours it
+  // stops hammering; one that doesn't just meets the cooldown 429.
+  const retryAfter = Number(cfg.cooldownSec) > 0 ? Number(cfg.cooldownSec) : 60;
+  if (cfg.onePendingPerIp !== false && stillInFlight(lastByIp.get(ip), queue.queuedIds())) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({
+      success: false,
+      message: 'Your last request is still queued — it airs first.',
+      retryAfter,
+    });
+  }
+  const pendingCount = queue.upcoming.filter((i: any) => i.requestedBy).length;
+  if (pendingCount >= (Number(cfg.maxPending) || 6)) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({
+      success: false,
+      message: "The request queue's full — try again in a few minutes.",
+      retryAfter,
+    });
+  }
 
-  pruneRequests();
+  // Every gate passed — the request is being accepted, so now spend the hourly
+  // budgets. Deliberately AFTER the two queue-state gates above: those reject
+  // without queueing anything, and charging an accept-budget for them let a
+  // full queue burn the station-wide cap down to zero on rejections alone (see
+  // middleware/ratelimit.ts). The per-IP cooldown was already spent by
+  // checkRateLimit, which is what keeps those rejections from being free to
+  // hammer.
+  commitRateLimit(ip);
+  commitGlobalRateLimit();
+
   const id = randomUUID();
   const entry: any = {
-    id,
-    status: 'pending',
-    requester,
-    text,
-    ack: null,
-    track: null,
-    queuePosition: null,
-    message: null,
+    id, status: 'pending', requester, text,
+    rawText: sanitizeRequestText(rawText).slice(0, REQUEST_TEXT_MAX),
+    injection: stripped.injection,
+    ack: null, track: null, queuePosition: null, message: null,
     createdAt: Date.now(),
   };
   requests.set(id, entry);
-  queue.log('request', `${requester}: "${text}" (id ${id.slice(0, 8)})`);
+  lastByIp.set(ip, entry);
+  queue.log('request', `${requester}: "${text}" (id ${id.slice(0, 8)})${stripped.injection ? ` [${stripped.injection} stripped]` : ''}`);
   webhooks.notify('request.received', { requestedBy: requester, text });
 
   // Hand the listener a receipt and let go of the connection. The booth does

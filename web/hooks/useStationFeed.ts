@@ -61,14 +61,19 @@ function setIfChanged<T>(setter: Dispatch<SetStateAction<T>>, next: T): void {
 // hidden (with an immediate refetch on return). Single source of truth for
 // "what's on air right now".
 //
-// getListenerLagMs (optional, stable identity): the player's measured
-// seconds-behind-live of THIS tab's audio (usePlayer.getListenerLagMs). When
-// it returns a number, it wins over the advertised stream.bufferSeconds —
-// the flat figure is only correct for a full burst on the MP3 mount, while
-// the measurement is exact for whatever mount/connection is actually playing
-// (issue #1114 follow-up: Opus/FLAC listeners saw the title flip tens of
-// seconds off because the byte-sized burst means a different depth per mount).
-export function useStationFeed(getListenerLagMs?: () => number | null): StationFeed {
+// The listener offset comes from the advertised stream.bufferSeconds. This
+// used to prefer a per-tab measurement (usePlayer.getListenerLagMs, being
+// `buffered.end − currentTime`) on the theory that a byte-sized burst meant a
+// different depth per mount. Two things killed that: the burst is now sized in
+// SECONDS per mount server-side, so every mount already lands on
+// bufferSeconds; and the measurement never described the offset in the first
+// place. `buffered` reports only the window the browser has DEMUXED — Chrome
+// keeps the connect burst in an internal cache it never exposes — so it read
+// ~2.3s while the listener was genuinely ~22s behind, flipping every title
+// about 20s early. Measured against the server's own live-edge stamp with a
+// tone marker: true offset 22.5s, buffered.end − currentTime 2.25s, advertised
+// bufferSeconds 22s.
+export function useStationFeed(): StationFeed {
   const client = useStationClient();
   const [nowPlaying, setNowPlaying] = useState<NowPlayingTrack | null>(null);
   const [context, setContext] = useState<StationContext | null>(null);
@@ -124,12 +129,10 @@ export function useStationFeed(getListenerLagMs?: () => number | null): StationF
         }
         // Shift into listener-time. serverStart is the live edge; the audio
         // reaches this listener leadMs later, so that's when the track is
-        // genuinely "now playing" for them (issue #1114). Prefer the audio
-        // element's own measurement when this tab is playing — it reflects the
-        // actual mount and the burst this connection really got; the flat
-        // advertised depth is the fallback for viewers not listening here.
-        const measuredLagMs = getListenerLagMs?.() ?? null;
-        const leadMs = measuredLagMs ?? leadMsRef.current;
+        // genuinely "now playing" for them (issue #1114). leadMs is the burst
+        // depth the server advertises, which is what every mount now bursts —
+        // see the note above on why the old per-tab measurement was wrong.
+        const leadMs = leadMsRef.current;
         const audibleAt = Number.isFinite(serverStart) ? serverStart + leadMs : Date.now();
 
         if (trackKey !== lastTrackKeyRef.current) {
@@ -197,7 +200,7 @@ export function useStationFeed(getListenerLagMs?: () => number | null): StationF
         promoteTimerRef.current = null;
       }
     };
-  }, [client, getListenerLagMs]);
+  }, [client]);
 
   return { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone, locale };
 }

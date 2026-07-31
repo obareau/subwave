@@ -9,6 +9,7 @@ import {
   rawDebugEnabledViaEnv,
   LLM_DEBUG_LOG,
   LLM_DEBUG_MAX,
+  agentDoneRetryCount,
 } from '../llm/log.js';
 import * as tts from '../audio/tts.js';
 import { ttsCalls } from '../stats.js';
@@ -238,6 +239,10 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     // every autonomous talk moment is standing down — worth seeing here before
     // anyone debugs "why is the DJ quiet".
     voice: (() => { try { return voiceStatus(); } catch (err: any) { return { error: err.message }; } })(),
+    // Done-tool retry churn (D2) — since-boot count of the strategy layer's
+    // two "stopped without calling done" retry sites (agent.ts), the same
+    // symptom the corrective re-pick in dj-agent.ts exists to salvage.
+    agentDoneRetries: agentDoneRetryCount(),
     recentCalls: dj.recentCalls,
     // Raw-request capture status — the admin UI shows the toggle + the file path
     // so operators know where to look. `viaEnv` means LLM_DEBUG_RAW forces it on

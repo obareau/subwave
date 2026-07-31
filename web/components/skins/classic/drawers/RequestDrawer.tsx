@@ -344,7 +344,7 @@ function SuccessCard({ result }: SuccessCardProps) {
           )}
           <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-vermilion" />
         </span>
-        {pending ? 'On the wire' : 'Queued'}
+        {pending ? 'On the wire' : track ? 'Queued' : 'Answered'}
       </div>
 
       {ack && (
@@ -355,43 +355,49 @@ function SuccessCard({ result }: SuccessCardProps) {
 
       {/* layout on the inner block animates the height delta between the
           pending "finding your track…" prose and the resolved track title +
-          artist — the bordered slab eases instead of snapping. */}
-      <m.div layout className="border-y border-soft-border py-4">
-        <div className="mb-1.5 text-[9px] tracking-[0.3em] text-muted uppercase">
-          {pending ? 'The DJ is digging' : 'Now in the booth'}
-        </div>
-        <AnimatePresence mode="wait" initial={false}>
-          <m.div
-            key={pending ? 'pending' : 'resolved'}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.14 }}
-          >
-            {pending ? (
-              <>
-                <div className="sw-pulse [font-family:var(--font-display),Georgia,'Times_New_Roman',serif] text-base leading-snug text-ink italic">
-                  finding your track…
-                </div>
-                {requestText && (
-                  <div className="mt-1 text-[13px] text-muted">
-                    &ldquo;{requestText}&rdquo;
+          artist — the bordered slab eases instead of snapping. Skipped
+          entirely on a resolved-but-no-track outcome (a conversational reply,
+          not a music request): the ack quote above already carries the whole
+          answer, so an empty "Now in the booth" title/artist pair would just
+          read as a broken card. */}
+      {(pending || track) && (
+        <m.div layout className="border-y border-soft-border py-4">
+          <div className="mb-1.5 text-[9px] tracking-[0.3em] text-muted uppercase">
+            {pending ? 'The DJ is digging' : 'Now in the booth'}
+          </div>
+          <AnimatePresence mode="wait" initial={false}>
+            <m.div
+              key={pending ? 'pending' : 'resolved'}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.14 }}
+            >
+              {pending ? (
+                <>
+                  <div className="sw-pulse [font-family:var(--font-display),Georgia,'Times_New_Roman',serif] text-base leading-snug text-ink italic">
+                    finding your track…
                   </div>
-                )}
-              </>
-            ) : (
-              <>
-                <div className="text-[22px] leading-tight font-semibold text-ink">
-                  {track?.title}
-                </div>
-                <div className="mt-0.5 text-[13px] text-muted">
-                  {track?.artist}
-                </div>
-              </>
-            )}
-          </m.div>
-        </AnimatePresence>
-      </m.div>
+                  {requestText && (
+                    <div className="mt-1 text-[13px] text-muted">
+                      &ldquo;{requestText}&rdquo;
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="text-[22px] leading-tight font-semibold text-ink">
+                    {track?.title}
+                  </div>
+                  <div className="mt-0.5 text-[13px] text-muted">
+                    {track?.artist}
+                  </div>
+                </>
+              )}
+            </m.div>
+          </AnimatePresence>
+        </m.div>
+      )}
 
       {!pending && typeof queuePosition === 'number' && queuePosition > 0 && (
         <div className="v3-tab-num mt-[14px] text-[11px] tracking-[0.15em] text-muted uppercase">

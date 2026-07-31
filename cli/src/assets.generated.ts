@@ -421,9 +421,17 @@ export const COMPOSE_BYO_YML = `# SUB/WAVE — production orchestration without 
 # The web UI assumes same-origin routing for /api and /stream.mp3 by default
 # (it's baked into the image at build time). To keep that working, point your
 # proxy at a single hostname and replicate the route table from docker/Caddyfile:
+#   /api/listener-auth → 404 / deny         (see below — do this one first)
 #   /stream.mp3  → host:\${ICECAST_PORT}      (disable buffering for live audio)
 #   /api/*       → host:\${CONTROLLER_PORT}   (strip the /api prefix)
 #   everything   → host:\${WEB_PORT}
+#
+# Block /api/listener-auth at your proxy. It is Icecast's URL-auth callback and
+# answers 200/401 on the shared privacy.password, so exposing it hands the
+# internet a password oracle for the same secret that guards the private player
+# (#478). Icecast reaches the controller directly over the compose network, so
+# it never needs to come through your proxy. The controller slows repeated
+# failures as a backstop, but not routing the path is the real fix.
 #
 # If you need separate hostnames per surface, you'll have to rebuild the web
 # image with NEXT_PUBLIC_API_URL / NEXT_PUBLIC_STREAM_URL set — those are
@@ -1217,6 +1225,19 @@ SITE_URL=
 #
 # Names to resolve instead of hardcoding an address. Unset → \`caddy\`.
 # ICECAST_TRUSTED_PROXY_HOSTS=caddy
+
+# Trust Cloudflare's CF-Connecting-IP header as the listener's real address in
+# the CONTROLLER (the separate, icecast-side setting is above). This is the
+# identity every per-IP limit keys on: the request cooldown and hourly caps,
+# the admin brute-force lockout, the station-password throttle, and like dedup.
+#
+# Leave it unset unless Cloudflare (proxied DNS or a tunnel) is the ONLY way
+# traffic reaches this stack. Unset, the controller uses X-Forwarded-For, which
+# the bundled Caddy only passes through for peers in its trusted_proxies list
+# and otherwise replaces with the real peer — sound on its own. CF-Connecting-IP
+# gets no such filtering, so trusting it when anyone can reach the origin
+# directly lets a single spoofed header defeat every limit listed above.
+# TRUST_CF_CONNECTING_IP=1
 
 # ───────── Overrides for the wizard's fields ─────────
 # These all live in state/settings.json after the wizard runs. Set them here

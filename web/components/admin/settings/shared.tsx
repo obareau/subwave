@@ -213,6 +213,21 @@ export interface PrivacyForm {
   publishPersonaSouls: boolean;
 }
 
+/** Listener-request pipeline gates (request-system hardening). `enabled` is
+ *  the fast pause switch — the one that, during a raid, previously only
+ *  existed as an env var requiring a restart. Every field applies live; the
+ *  controller clamps on save so the UI doesn't need to. Numbers are held as
+ *  strings, parsed on save (the weather lat/lng idiom). */
+export interface RequestsForm {
+  enabled: boolean;
+  maxPending: string;
+  cooldownSec: string;
+  perIpHourlyCap: string;
+  globalHourlyCap: string;
+  repeatCooldownMin: string;
+  onePendingPerIp: boolean;
+}
+
 export interface FormState {
   crossfadeDuration: string;
   maxTrackSeconds: string;
@@ -233,6 +248,7 @@ export interface FormState {
   scrobble: ScrobbleForm;
   privacy: PrivacyForm;
   likes: LikesForm;
+  requests: RequestsForm;
 }
 
 export interface JingleEntry {
@@ -314,6 +330,15 @@ export interface SettingsData {
       listenerAuth?: boolean;
       password?: string;
       publishPersonaSouls?: boolean;
+    };
+    requests?: {
+      enabled?: boolean;
+      maxPending?: number;
+      globalHourlyCap?: number;
+      repeatCooldownMin?: number;
+      cooldownSec?: number;
+      perIpHourlyCap?: number;
+      onePendingPerIp?: boolean;
     };
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;

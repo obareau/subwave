@@ -20,10 +20,14 @@
 	# It is not the default because it is a real trust decision: trusting private
 	# ranges means anything that can reach this Caddy from private address space
 	# can forge X-Forwarded-For, which both fakes rows in admin → Listeners and
-	# defeats the controller's per-IP rate limiting (middleware/ratelimit.ts keys
-	# on the left-most entry). Safe when the tunnel is the only ingress; not safe
-	# when the host port is also reachable from a shared LAN. See
-	# docs/deployment.md for the full recipe.
+	# defeats the controller's per-IP limits — the request caps, the admin
+	# brute-force lockout, the station-password throttle and like dedup all key
+	# on the address middleware/ratelimit.ts resolves, and X-Forwarded-For is
+	# what it reads unless TRUST_CF_CONNECTING_IP is set. Keeping the list to
+	# Cloudflare's ranges is what makes that read sound: for any other peer Caddy
+	# replaces the header with the real connecting address. Safe when the tunnel
+	# is the only ingress; not safe when the host port is also reachable from a
+	# shared LAN. See docs/deployment.md for the full recipe.
 	servers {
 		trusted_proxies static \
  173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 \
@@ -75,6 +79,21 @@
 				dial_timeout 5s
 			}
 		}
+	}
+
+	# -------------------------------------------------------------------------
+	# /api/listener-auth — NOT reachable from the internet
+	# -------------------------------------------------------------------------
+	# The Icecast URL-auth callback (#478). Icecast lives in the broadcast
+	# container and calls the controller DIRECTLY over the compose network
+	# (http://controller:7701/listener-auth — see docker/broadcast-entrypoint.sh),
+	# so it never needs the edge. Exposing it through /api/* handed the internet
+	# an unthrottled password oracle: it answers 200/401 on the shared
+	# privacy.password, while POST /station-auth throttles that SAME password at
+	# 20 tries / 15 min. Must be declared BEFORE the /api/* handler — Caddy sorts
+	# by specificity, but keeping it adjacent makes the pairing obvious.
+	handle /api/listener-auth {
+		respond 404
 	}
 
 	# -------------------------------------------------------------------------

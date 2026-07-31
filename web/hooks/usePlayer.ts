@@ -31,10 +31,31 @@ const RECONNECT_MAX_MS = 60_000;
 const IDLE_TUNE_OUT_MS = 8 * 60 * 60 * 1000;
 const IDLE_CHECK_INTERVAL_MS = 60_000;
 
+// HTMLMediaElement.HAVE_FUTURE_DATA — enough decoded audio buffered to keep
+// playing right now. Read off the constructor rather than the instance so the
+// checks below work on a detached/erroring element too.
+const HAVE_FUTURE_DATA = 3;
+
+// Is the element audibly moving? Not paused, holding future data, and its
+// media clock has advanced past `since`. This is the ground truth for "the
+// listener is hearing sound" — network-level events (`stalled`) say nothing
+// about it, and a wedged element fails it even though `paused` is false.
+function advancingSince(el: HTMLAudioElement, since: number): boolean {
+  return !el.paused && el.readyState >= HAVE_FUTURE_DATA && el.currentTime > since;
+}
+
 export type PlayerStatus = 'idle' | 'connecting' | 'playing';
 
 export interface Player {
   audioRef: RefObject<HTMLAudioElement | null>;
+  /** Ref callback the consumer MUST put on its <audio> element (instead of
+   *  audioRef) — it keeps audioRef pointing at the live node AND tells the
+   *  hook when that node is replaced, so the media listeners re-attach. The
+   *  private-station gate unmounts and remounts the element mid-session, and
+   *  a plain object ref left the fresh node with no listeners at all: status
+   *  stuck on 'connecting' forever and no stall recovery (issue #1232).
+   *  Stable identity. */
+  attachAudio: (el: HTMLAudioElement | null) => void;
   tunedIn: boolean;
   status: PlayerStatus;
   volume: number;
@@ -47,14 +68,6 @@ export interface Player {
   // consumer should explain why and offer a one-tap resume. Cleared on the
   // next tune().
   idleStopped: boolean;
-  /** Measured seconds-behind-the-live-edge of THIS tab's audio, in ms, or
-   *  null when the tab isn't audibly playing the stream. buffered.end is the
-   *  freshest audio the connection has delivered (≈ the live edge, since
-   *  Icecast serves in real time after the connect burst), so end − currentTime
-   *  is exactly how far behind it this listener's ears are — whatever mount
-   *  they're on and however much of the burst they actually got. Stable
-   *  identity; safe in effect deps. */
-  getListenerLagMs: () => number | null;
 }
 
 export interface UsePlayerOptions {
@@ -67,6 +80,14 @@ export interface UsePlayerOptions {
 export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player {
   const { streams } = useStationOrigin();
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // The same node as audioRef.current, mirrored into state so the listener
+  // effect below can depend on it. Refs don't notify on attach, so an element
+  // that mounts later (or is swapped out and back) has to announce itself.
+  const [audioEl, setAudioEl] = useState<HTMLAudioElement | null>(null);
+  const attachAudio = useCallback((el: HTMLAudioElement | null) => {
+    audioRef.current = el;
+    setAudioEl(el);
+  }, []);
   // Resolved at mount via canPlayType. SSR + first render use the MP3 URL so
   // server and client markup agree; the useEffect below upgrades to Opus when
   // the browser confirms it can decode it.
@@ -95,6 +116,9 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   const streamsRef = useRef(streams);
   const volumeRef = useRef(volume);
   const watchdogTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Media clock (currentTime) at the moment the watchdog was armed — the
+  // baseline the fire compares against to decide whether audio kept flowing.
+  const watchdogArmedAt = useRef(0);
   // Consecutive failed reconnects since the last successful 'playing' —
   // drives the exponential backoff in onError.
   const retryCount = useRef(0);
@@ -176,11 +200,13 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   // seconds of silence around a track transition that only a page refresh
   // recovers from, because nothing in here was forcing the dead element back
   // onto the live mount). 'playing' clears the watchdog; 'waiting'/'stalled'
-  // arm a 5s timer that re-sets src if 'playing' hasn't fired by then;
+  // arm a 5s timer that re-sets src if the media clock hasn't moved by then;
   // 'error' reconnects with exponential backoff (500 ms doubling to a 60 s
   // ceiling, reset on the next successful 'playing').
+  //
+  // Re-runs whenever the element itself is replaced — see attachAudio.
   useEffect(() => {
-    const el = audioRef.current;
+    const el = audioEl;
     if (!el) return;
 
     const clearWatchdog = () => {
@@ -194,6 +220,15 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
       clearWatchdog();
       if (!tunedInRef.current || !audioRef.current) return;
       const audio = audioRef.current;
+      // The media clock moved while the watchdog was pending, so the listener
+      // is hearing audio: this was a network hiccup the buffer absorbed, not a
+      // wedged element. Re-setting src here would cut audible sound for
+      // nothing — reconcile the UI instead (issue #1232).
+      if (advancingSince(audio, watchdogArmedAt.current)) {
+        retryCount.current = 0;
+        setStatus('playing');
+        return;
+      }
       const myGen = ++gen.current;
       audio.src = withStreamAuth(`${streamUrlRef.current}?t=${Date.now()}`);
       audio.volume = volumeRef.current;
@@ -211,6 +246,9 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     const armWatchdog = (delay: number) => {
       if (!tunedInRef.current) return;
       clearWatchdog();
+      // Sample the media clock so the fire below can tell "stream died" from
+      // "bytes were late but playback never missed a beat".
+      watchdogArmedAt.current = audioRef.current?.currentTime ?? 0;
       watchdogTimer.current = setTimeout(reconnect, delay);
     };
 
@@ -219,9 +257,30 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
       retryCount.current = 0;
       setStatus('playing');
     };
+    // 'waiting' is a PLAYBACK event: the element ran out of decoded audio and
+    // has actually gone silent, so the UI should say so.
     const onWaiting = () => {
       setStatus(s => (s === 'playing' ? 'connecting' : s));
       armWatchdog(5000);
+    };
+    // 'stalled' is a NETWORK event — no bytes for ~3s — and on a live mount it
+    // fires routinely while the element still has seconds of buffered audio
+    // and keeps playing without a hitch (a proxied stream delivering in bursts
+    // does it every few seconds). Playback never stopped, so no second
+    // 'playing' event is ever coming: pinning the status here left the signal
+    // badge on "Acquiring" for the whole session while audio played fine
+    // (issue #1232). Arm the watchdog — a real dead mount also stalls — but
+    // leave `status` alone and let the clock check at fire time decide.
+    const onStalled = () => {
+      armWatchdog(5000);
+    };
+    // Cheapest honest witness that sound is coming out: timeupdate fires
+    // ~4x/s, but only while the clock actually moves. Reconciles a status left
+    // on 'connecting' by any event sequence the two handlers above don't
+    // model (browsers differ on when they re-emit 'playing').
+    const onTimeUpdate = () => {
+      if (el.paused || el.readyState < HAVE_FUTURE_DATA) return;
+      setStatus(s => (s === 'connecting' ? 'playing' : s));
     };
     const onError = () => {
       setStatus('idle');
@@ -240,16 +299,18 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     };
     el.addEventListener('playing', onPlaying);
     el.addEventListener('waiting', onWaiting);
-    el.addEventListener('stalled', onWaiting);
+    el.addEventListener('stalled', onStalled);
+    el.addEventListener('timeupdate', onTimeUpdate);
     el.addEventListener('error', onError);
     return () => {
       clearWatchdog();
       el.removeEventListener('playing', onPlaying);
       el.removeEventListener('waiting', onWaiting);
-      el.removeEventListener('stalled', onWaiting);
+      el.removeEventListener('stalled', onStalled);
+      el.removeEventListener('timeupdate', onTimeUpdate);
       el.removeEventListener('error', onError);
     };
-  }, []);
+  }, [audioEl]);
 
   // Idle cutoff (issue #343): a tab left tuned in with no listener activity
   // for IDLE_TUNE_OUT_MS gets tuned out, so an abandoned browser doesn't sit
@@ -345,29 +406,5 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     }
   };
 
-  // How far behind the live edge this tab's audio actually is. The flat
-  // stream.bufferSeconds from /now-playing is only the depth Icecast *tries*
-  // to burst on the MP3 mount — the real per-connection lag differs whenever
-  // the mount's byte rate differs (Opus/FLAC/AAC), the ring was short at
-  // connect, or playback paused and drifted. The element knows the truth:
-  // buffered.end − currentTime. Null (→ callers fall back to bufferSeconds)
-  // unless this tab is tuned in and audibly playing, since a paused element's
-  // stale ranges say nothing about what the viewer is hearing elsewhere.
-  const getListenerLagMs = useCallback((): number | null => {
-    const el = audioRef.current;
-    if (!el || !tunedInRef.current || el.paused) return null;
-    try {
-      const n = el.buffered.length;
-      if (n === 0) return null;
-      const lag = el.buffered.end(n - 1) - el.currentTime;
-      if (!Number.isFinite(lag) || lag <= 0) return null;
-      // Cap at 2 minutes: beyond that the ranges describe a wedged element,
-      // not a live listener, and a huge hold would freeze the display.
-      return Math.min(lag, 120) * 1000;
-    } catch {
-      return null;
-    }
-  }, []);
-
-  return { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted: volume === 0, idleStopped, getListenerLagMs };
+  return { audioRef, attachAudio, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted: volume === 0, idleStopped };
 }

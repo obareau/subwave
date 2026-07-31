@@ -19,6 +19,49 @@ settings.server.telnet.port := 1234
 # SUBWAVE_STATE_DIR. Single-station installs and dev runs get the default.
 state_dir = environment.get(default="/var/sub-wave", "SUBWAVE_STATE_DIR")
 
+# Scratch dirs for the atomic marker writes below (#1240). `file.write` with
+# `atomic=true` writes to a temp file and renames it into place; with no
+# `temp_dir` it picks one under $TMPDIR (the container's overlay fs), and a
+# rename from there onto the state mount is cross-device — so EVERY write took
+# the stdlib's `error.file.cross_device` fallback: a warning per write and a
+# NON-atomic copy, which is exactly the half-written-JSON race atomic=true was
+# added to prevent. Handing each writer a temp dir on the state fs makes the
+# rename a real rename.
+#
+# ONE DIR PER WRITER, deliberately: the stdlib names the temp file `atomic.write`
+# inside whatever dir it is given, so a shared dir would let two concurrent
+# writes (the jingle marker is `synchronous=false`) interleave into one file
+# and rename each other's bytes into place.
+#
+# Created here rather than in the entrypoint so the broadcast container and the
+# AIO supervisor can't drift out of lockstep over it.
+#
+# Probe-checked, and null on any failure: `file.mkdir` does NOT raise when it
+# can't create the dir, so an unwritable state mount would leave `temp_dir`
+# pointing at nothing and every marker write would then raise ENOENT from
+# inside `on_metadata` — worse than the cross-device warning this replaces.
+# A null temp_dir is exactly today's behaviour, so the degraded path is the
+# one we already ship.
+def ensure_tmp_dir(p) =
+  file.mkdir(parents=true, p)
+  probe = path.concat(p, "probe")
+  try
+    file.write(data="x", probe)
+    file.remove(probe)
+    p
+  catch err do
+    log(
+      label="subwave",
+      "temp dir #{p} unusable (#{err}); atomic marker writes fall back to $TMPDIR"
+    )
+    null
+  end
+end
+
+np_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/now-playing")
+jingle_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle")
+bed_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/bed")
+
 # ---------------------------------------------------------------------------
 # RUNTIME SETTINGS — written by the controller at startup, read here.
 # Two tiny text files: one int, one float. Falls back to defaults if missing.
@@ -1015,6 +1058,7 @@ music =
           startedAt = time()
         }),
         atomic=true,
+        temp_dir=jingle_tmp_dir,
         "#{state_dir}/jingle-playing.json"
       )
     )
@@ -1418,6 +1462,7 @@ def on_meta(m) =
         startedAt = time()
       }),
       atomic=true,
+      temp_dir=bed_tmp_dir,
       "#{state_dir}/bed-playing.json"
     )
   elsif title != "" or artist != "" then
@@ -1439,7 +1484,9 @@ def on_meta(m) =
     # every 1.5s and per /now-playing request, and its reader treats ANY parse
     # failure as null; an in-place truncate-then-write here made it possible to
     # observe a half-written JSON and blank the now-playing data for a tick.
-    file.write(data=payload, atomic=true, "#{state_dir}/now-playing.json")
+    # temp_dir keeps the rename on the state fs — without it the atomicity was
+    # silently lost to the cross-device copy fallback (#1240).
+    file.write(data=payload, atomic=true, temp_dir=np_tmp_dir, "#{state_dir}/now-playing.json")
     # Push the same metadata onto the Icecast stream so the ICY title
     # tracks the current song instead of lagging a transition behind.
     radio.insert_metadata([

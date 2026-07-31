@@ -343,6 +343,23 @@ then configure the Icecast hop as above.
 > keys on the left-most entry. Fine when the tunnel is the only way in; not fine
 > when the host port is also exposed to a shared LAN.
 
+That's what `TRUST_CF_CONNECTING_IP` is for. It doesn't replace `private_ranges`
+above — the Listeners table still needs that for Icecast's own IP display — but
+it undoes the damage the blockquote describes for the controller's side: set
+`TRUST_CF_CONNECTING_IP=1` in the root `.env` and `clientIp()` — the identity
+every per-IP gate keys on — reads `CF-Connecting-IP` instead of
+`X-Forwarded-For`. Cloudflare sets that header itself from the real edge
+connection; a client can't seed it the way it can seed a chain that a
+private-range peer is now trusted to pass through untouched. **Leave it unset
+(the default) for every other topology on this page** — on the bundled-Caddy
+and BYO setups above, `trusted_proxies` names only Cloudflare's own ranges or
+your proxy's fixed address, so Caddy already replaces a client-supplied
+`X-Forwarded-For` for any peer it doesn't trust, and the left-most entry is
+already genuine; trusting the CF header there too would just add a second
+forgeable one for no reason. Either way, both headers rest on the same
+guarantee: the origin is reachable *only* through the edge that sets the one
+you trust.
+
 *(Thanks to the community member who worked this out and wrote it up on Discord.)*
 
 ### All-in-one image

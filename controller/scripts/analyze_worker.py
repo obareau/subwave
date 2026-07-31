@@ -1043,19 +1043,34 @@ def render_transition(req):
     if n <= sr:  # a sub-second clip means the grids are degenerate
         return {"ok": False, "error": "clip-too-short"}
 
-    # --- Per-source gains toward the station target (before summing, so the
-    # borrowed loop and the new track each land at their own corrected level;
-    # the brick-wall limiter upstream only ever sees sane material) ---------
-    def gain_toward(lufs):
+    # --- Per-source gains (before summing, so the borrowed loop and the new
+    # track each land at their own corrected level; the brick-wall limiter
+    # upstream only ever sees sane material) --------------------------------
+    #
+    # `gain_db` is the station's OWN answer for that track — the same dB the
+    # queue stamps as liq_amplify (controller music/loudness.ts), resolved
+    # through the operator's loudness.source, boost cap and peak headroom cap.
+    # Using it is what keeps a clip at the level of the tracks either side of
+    # it (#1240). The lufs fallback below is the pre-#1240 maths, kept for an
+    # older controller talking to this worker: it normalises from the leading
+    # 40s window alone and ignores ReplayGain tags, so it drifts.
+    def gain_for(spec):
+        gd = spec.get("gain_db")
+        if isinstance(gd, (int, float)):
+            return float(10.0 ** (float(gd) / 20.0))
+        lufs = spec.get("lufs")
         if target_lufs is None or not isinstance(lufs, (int, float)):
             return 1.0
         g = 10.0 ** ((float(target_lufs) - float(lufs)) / 20.0)
         return float(min(4.0, max(0.25, g)))  # ±12 dB sanity clamp
 
-    g_in = gain_toward(in_spec.get("lufs"))
-    g_out = gain_toward(out_spec.get("lufs")) * (10.0 ** (-3.0 / 20.0))  # loop sits under the new track
+    g_in = gain_for(in_spec)
+    g_out = gain_for(out_spec) * (10.0 ** (-3.0 / 20.0))  # loop sits under the new track
 
     # --- Mix ---------------------------------------------------------------
+    # The incoming track's own content and the BORROWED loop are summed into
+    # separate buffers so the peak guard below can duck the thing we added
+    # rather than the thing the listener is about to hear at full level.
     mix_buf = np.zeros((n, 2), dtype=np.float32)
     for name in ("bass", "other", "vocals"):
         mix_buf += to_stereo(head[name], n) * g_in
@@ -1063,6 +1078,7 @@ def render_transition(req):
     head_drums = to_stereo(head["drums"], n) * g_in
     mix_buf[dstart:] += head_drums[dstart:]  # incoming beat drops on the downbeat
 
+    loop_buf = np.zeros((n, 2), dtype=np.float32)
     loop_len = drum_loop.shape[0]
     for k in range(CARRY_BARS):
         b1 = int(in_bars[k] * sr)
@@ -1074,15 +1090,53 @@ def render_transition(req):
         piece = np.tile(drum_loop, (reps, 1))[:m] * g_out  # wrap, never a gap
         if k == CARRY_BARS - 1:  # ride out over the last carry bar
             piece = piece * np.linspace(1.0, 0.0, m, dtype=np.float32)[:, None]
-        mix_buf[b1:b2] += piece
+        loop_buf[b1:b2] += piece
 
-    # Peak safety toward the bus limiter's comfort zone, then 10ms edge
-    # declicks (the clip meets its neighbours through ~0.3s crossfades, but a
-    # hard first/last sample still clicks through them).
-    peak = float(np.max(np.abs(mix_buf)))
-    ceiling = 10.0 ** (-1.0 / 20.0)
-    if peak > ceiling:
-        mix_buf *= ceiling / peak
+    # Peak safety toward the bus limiter's comfort zone. The station caps every
+    # track's boost at this same -1 dBFS headroom, so scaling the WHOLE clip to
+    # fit — what this did before #1240 — silently undid the level match and
+    # dropped the clip several dB under its neighbours. The loop is the element
+    # we added on top, so the loop is what yields: bisect its gain until the sum
+    # fits (exact, on the real sum — not a worst-case bound), floored at -12 dB
+    # under its intended level. Only if the incoming content ALONE clips (it
+    # shouldn't: its gain is headroom-capped upstream) does the whole clip get
+    # scaled, and that is logged rather than silent.
+    ceiling = 10.0 ** (-1.0 / 20.0)  # -1 dBFS, the headroom the station's own per-track gain cap leaves
+    LOOP_DUCK_FLOOR = 0.25           # -12 dB: duck the groove harder than this and the beat carry is gone
+    head_peak = float(np.max(np.abs(mix_buf)))
+    if head_peak > ceiling:
+        log(f"render_transition: incoming stems peak {head_peak:.3f} over ceiling; scaling whole clip")
+        scale = ceiling / head_peak
+        mix_buf *= scale
+        loop_buf *= scale
+
+    def sum_peak(s):
+        return float(np.max(np.abs(mix_buf + loop_buf * s)))
+
+    duck = 1.0
+    if sum_peak(1.0) > ceiling:
+        if sum_peak(LOOP_DUCK_FLOOR) > ceiling:
+            duck = LOOP_DUCK_FLOOR  # can't fit even ducked — the backstop below catches real clipping
+        else:
+            lo, hi = LOOP_DUCK_FLOOR, 1.0
+            for _ in range(12):  # ~0.02% resolution; each step is one array pass
+                midpoint = (lo + hi) / 2.0
+                if sum_peak(midpoint) > ceiling:
+                    hi = midpoint
+                else:
+                    lo = midpoint
+            duck = lo
+    mix_buf += loop_buf * duck
+
+    # Backstop: whatever the duck settled on, never hand the encoder a sample
+    # that clips in 16-bit. Between the ceiling and here is ~1 dB of real
+    # headroom, so this engages only when the duck floor wasn't enough.
+    final_peak = float(np.max(np.abs(mix_buf)))
+    if final_peak > 0.995:
+        mix_buf *= 0.995 / final_peak
+
+    # 10ms edge declicks (the clip meets its neighbours through ~0.3s
+    # crossfades, but a hard first/last sample still clicks through them).
     e = max(1, int(0.01 * sr))
     ramp = np.linspace(0.0, 1.0, e, dtype=np.float32)[:, None]
     mix_buf[:e] *= ramp

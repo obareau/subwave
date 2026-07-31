@@ -24,7 +24,7 @@ import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
 import { publicGuestIds, publicPersonaShape, soulsArePublic } from '../util/public-persona.js';
-import { checkAuthRateLimit, clientIp } from '../middleware/ratelimit.js';
+import { checkAuthRateLimit, clientIp, listenerAuthFailureDelayMs } from '../middleware/ratelimit.js';
 import { STATE_ROOT } from '../config.js';
 import { activeStationId } from '../stations/resolve.js';
 
@@ -45,6 +45,22 @@ const TRANSPARENT_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
   'base64',
 );
+
+// Public handlers must not reflect their internal error text: these endpoints
+// answer unauthenticated callers, and err.message here can carry state-dir
+// paths (a failed settings.load()) or upstream registry URLs (the community
+// proxies) — low-value recon, but free to withhold.
+//
+// The logging half is the load-bearing part. Most of these handlers had no
+// server-side log at all, so the response WAS the only record; genericising
+// without this would have made 500s silent. Routes behind requireAdmin keep
+// reflecting err.message — the recipient there is already trusted and the
+// detail is the point.
+function publicError(res: express.Response, route: string, err: unknown): void {
+  const detail = err instanceof Error ? err.message : String(err);
+  queue.log('error', `${route} failed: ${detail}`);
+  res.status(500).json({ error: 'internal error' });
+}
 
 function mimeForAvatar(filename: string): string {
   if (filename.endsWith('.png')) return 'image/png';
@@ -302,7 +318,7 @@ router.get('/now-playing', async (req, res) => {
       locale: stationSettings.locale,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    publicError(res, '/now-playing', err);
   }
 });
 
@@ -396,7 +412,7 @@ router.get('/dj', async (req, res) => {
       locale: s.locale,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    publicError(res, '/dj', err);
   }
 });
 
@@ -448,8 +464,8 @@ router.get('/schedule', async (req, res) => {
       timezone: getStationTimezone(),
       locale: s.locale,
     });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (err) {
+    publicError(res, '/schedule', err);
   }
 });
 
@@ -476,8 +492,8 @@ router.get('/personas', async (req, res) => {
       // rendering a wall of empty cards.
       soulsPublished: withSouls,
     });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (err) {
+    publicError(res, '/personas', err);
   }
 });
 
@@ -534,6 +550,16 @@ router.get('/state', (req, res) => {
 // always Icecast, so per-IP limiting would throttle every listener through
 // one bucket. The password never gets logged.
 //
+// That "the caller is always Icecast" premise only holds because the edge
+// refuses this path — the bundled Caddyfiles 404 /api/listener-auth, and
+// Icecast reaches the controller directly over the internal network. It was
+// NOT true before that: handle_path /api/* forwarded everything, so the
+// internet could POST here and brute-force the shared privacy.password at full
+// speed, bypassing the 20-per-15-min cap /station-auth puts on the SAME
+// password. byo-proxy operators own their own route table, so failures are
+// also damped in-handler below (successes are never delayed — see
+// listenerAuthFailureDelayMs).
+//
 // This endpoint fails OPEN when listenerAuth is off — see listenerAuthDecision.
 // The web UI must NOT use it for that reason; it has /station-auth below.
 // ---------------------------------------------------------------------------
@@ -554,6 +580,12 @@ router.post(
       res.setHeader('icecast-auth-user', '1');
       res.status(200).send('ok\n');
     } else {
+      // Reaching here means the lock is on and the credential was wrong
+      // (listenerAuthDecision returns true for both listener_remove and the
+      // auth-disabled fail-open path), so slowing this costs a real listener
+      // nothing — the response was going to be 401 either way.
+      const delayMs = listenerAuthFailureDelayMs();
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
       res.setHeader('icecast-auth-message', 'invalid listener credentials');
       res.status(401).send('denied\n');
     }
@@ -621,7 +653,7 @@ router.get('/themes', async (req, res) => {
         : stationDefault;
     res.json({ active, themes });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    publicError(res, '/themes', err);
   }
 });
 
@@ -664,8 +696,7 @@ router.get('/skills/community', async (req, res) => {
     const community = await listCommunitySkills();
     res.json({ community });
   } catch (err) {
-    queue.log('error', `/skills/community failed: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    publicError(res, '/skills/community', err);
   }
 });
 
@@ -683,8 +714,7 @@ router.get('/personas/community', async (req, res) => {
     const community = await listCommunityPersonas();
     res.json({ community });
   } catch (err) {
-    queue.log('error', `/personas/community failed: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    publicError(res, '/personas/community', err);
   }
 });
 
@@ -701,8 +731,7 @@ router.get('/shows/community', async (req, res) => {
     const community = await listCommunityShows();
     res.json({ community });
   } catch (err) {
-    queue.log('error', `/shows/community failed: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    publicError(res, '/shows/community', err);
   }
 });
 

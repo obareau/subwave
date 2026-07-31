@@ -234,6 +234,28 @@ const SETTINGS_PATH = `${STATE_DIR}/settings.json`;
 // upgrade, load() migrates them out of settings.json into here.
 const SCHEDULE_PATH = `${STATE_DIR}/schedule.json`;
 
+// Integer clamp shared by the settings.requests load()/update() coercions
+// below — round, then clamp into [min, max]; a non-finite input (missing,
+// non-numeric, hand-edited junk) falls back to `def` rather than NaN.
+const intIn = (v: unknown, def: number, min: number, max: number) => {
+  // A CLEARED field is absent, not zero. `Number(null)`, `Number('')`,
+  // `Number('  ')`, `Number(false)` and `Number([])` are ALL 0 — finite — so
+  // without this guard an emptied admin input (parseInt('') → NaN → JSON null
+  // on the wire) clamped to `min` and silently committed that field's FLOOR:
+  // clearing the station hourly cap set it to 5/hour and closed the request
+  // line for everyone, with the form redisplaying 5 as though the operator had
+  // typed it. Only a string that actually contains a number, or a real number,
+  // is a value — anything else (including the CLI/API patch surface's own
+  // spellings of "unset") falls back to `def`.
+  if (typeof v === 'string') {
+    if (!v.trim()) return def;
+  } else if (typeof v !== 'number' && typeof v !== 'bigint') {
+    return def;
+  }
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : def;
+};
+
 export async function load() {
   const cached = peek();
   if (cached) return cached;
@@ -507,6 +529,39 @@ export async function load() {
         typeof stored.privacy?.publishPersonaSouls === 'boolean'
           ? stored.privacy.publishPersonaSouls
           : DEFAULTS.privacy.publishPersonaSouls,
+    },
+    // Listener-request pipeline gates. Absent/malformed settings.json (every
+    // install predating this key) coerces field-by-field to DEFAULTS.requests,
+    // never undefined/NaN — later tasks gate on settings.get()?.requests.
+    requests: {
+      enabled:
+        typeof stored.requests?.enabled === 'boolean'
+          ? stored.requests.enabled
+          : DEFAULTS.requests.enabled,
+      maxPending: intIn(stored.requests?.maxPending, DEFAULTS.requests.maxPending, 1, 50),
+      globalHourlyCap: intIn(
+        stored.requests?.globalHourlyCap,
+        DEFAULTS.requests.globalHourlyCap,
+        5,
+        500,
+      ),
+      repeatCooldownMin: intIn(
+        stored.requests?.repeatCooldownMin,
+        DEFAULTS.requests.repeatCooldownMin,
+        0,
+        1440,
+      ),
+      cooldownSec: intIn(stored.requests?.cooldownSec, DEFAULTS.requests.cooldownSec, 5, 600),
+      perIpHourlyCap: intIn(
+        stored.requests?.perIpHourlyCap,
+        DEFAULTS.requests.perIpHourlyCap,
+        1,
+        100,
+      ),
+      onePendingPerIp:
+        typeof stored.requests?.onePendingPerIp === 'boolean'
+          ? stored.requests.onePendingPerIp
+          : DEFAULTS.requests.onePendingPerIp,
     },
     personas,
     activePersonaId,
@@ -1874,6 +1929,19 @@ export async function update(patch) {
     ) {
       throw new Error('set a station password before turning on a privacy lock');
     }
+  }
+  if ('requests' in patch) {
+    const rq = patch.requests || {};
+    const cur = next.requests || DEFAULTS.requests;
+    next.requests = {
+      enabled: typeof rq.enabled === 'boolean' ? rq.enabled : cur.enabled,
+      maxPending: intIn(rq.maxPending, cur.maxPending, 1, 50),
+      globalHourlyCap: intIn(rq.globalHourlyCap, cur.globalHourlyCap, 5, 500),
+      repeatCooldownMin: intIn(rq.repeatCooldownMin, cur.repeatCooldownMin, 0, 1440),
+      cooldownSec: intIn(rq.cooldownSec, cur.cooldownSec, 5, 600),
+      perIpHourlyCap: intIn(rq.perIpHourlyCap, cur.perIpHourlyCap, 1, 100),
+      onePendingPerIp: typeof rq.onePendingPerIp === 'boolean' ? rq.onePendingPerIp : cur.onePendingPerIp,
+    };
   }
   if ('webhooks' in patch) {
     next.webhooks = validateWebhooksStrict(patch.webhooks, next.webhooks || []);

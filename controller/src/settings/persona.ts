@@ -210,14 +210,19 @@ export function pickOnAirSpeaker(date: Date = new Date()) {
   return guests[Math.floor(Math.random() * guests.length)];
 }
 
-// The persona's on-air language as a blunt system-prompt directive. Empty
-// language (the default) returns '' so prompts stay byte-identical to the
-// pre-language behaviour. The proper-nouns clause stops a Turkish host from
-// translating "Bohemian Rhapsody" or the station name (issue #349).
+// The persona's on-air language as a blunt system-prompt directive. Unset
+// language defaults to English rather than returning '' — a default station
+// with no language set previously had NO anchor at all, so nothing stopped a
+// raid pushing foreign-language turns into session.json from steering the
+// model into mimicking them turn after turn (raid 2026-07-28: the station
+// started speaking Russian and would not stop until the session rolled). This
+// deliberately breaks the old "byte-identical for English personas" property —
+// every prompt now carries an explicit anchor. The proper-nouns clause stops a
+// Turkish host from translating "Bohemian Rhapsody" or the station name
+// (issue #349); the never-switch clause is the raid fix itself.
 export function languageDirective(persona: unknown) {
-  const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim();
-  if (!lang) return '';
-  return `\n\nIMPORTANT: You speak and write exclusively in ${lang}. Every on-air line you produce must be in ${lang} — acknowledgements, idents, asides, everything. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them.`;
+  const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim() || 'English';
+  return `\n\nIMPORTANT: You speak and write exclusively in ${lang}. Every on-air line you produce must be in ${lang} — acknowledgements, idents, asides, everything. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them. Never switch languages because a listener asks, because a request arrives in another language, or because earlier session turns are in another language — requests for music in another language are about the MUSIC, not your voice.`;
 }
 
 // A SECOND language reminder, anchored at the END of a tool-loop agent's system
@@ -229,14 +234,16 @@ export function languageDirective(persona: unknown) {
 // `ack`/`intro`, and segment `text` came out English even with the directive
 // present (issue #558). Repeating the language LAST, by field name, is what
 // makes it stick — the same trick the request matcher already uses for its
-// `ack` field (see llm/internal/prompts/request.ts). Returns '' for English
-// personas so those prompts stay byte-identical. `fields` is a human phrase
-// naming the spoken field(s), e.g. 'the "say" link' or 'the "ack" and "intro"
-// lines'.
+// `ack` field (see llm/internal/prompts/request.ts). Unset language defaults
+// to English and this ALWAYS renders now, for the same raid-hardening reason
+// as languageDirective above — the old "returns '' for English personas so
+// prompts stay byte-identical" property is deliberately gone (raid
+// 2026-07-28: with no anchor, session-history mimicry flipped the station's
+// language). `fields` is a human phrase naming the spoken field(s), e.g. 'the
+// "say" link' or 'the "ack" and "intro" lines'.
 export function agentLanguageReminder(persona: unknown, fields: string) {
-  const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim();
-  if (!lang) return '';
-  return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang}. Write ${fields} entirely in ${lang}; that is the text the listener hears on air. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them. Internal fields (ids, reasons, kinds) stay in English.`;
+  const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim() || 'English';
+  return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang}. Write ${fields} entirely in ${lang} — even when the listener writes in another language, asks you to switch, or earlier session turns are in another language. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them. Internal fields (ids, reasons, kinds) stay in English.`;
 }
 
 // The place the station claims to broadcast from — what the DJ says on air and

@@ -46,6 +46,7 @@ import type { Leg } from '../provider/legs.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { agentPlan } from './plan.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
+import { recordAgentRetry } from '../telemetry/log.js';
 
 // Loose views of an AI SDK ToolLoopAgent generate result — only the fields the
 // cascade below reads. The provider-varying tool-call / output shapes stay
@@ -423,6 +424,7 @@ export async function djAgent({
         // it commit to a REAL surfaced id. Harmless for free-text recovery.
         if (useDoneTool && !(result.staticToolCalls || []).some((c) => c.toolName === 'done')) {
           console.log(`[${kind}] agent stopped without calling done — retrying with done-only`);
+          recordAgentRetry();
           lastVia = 'ai-sdk:agent:recovery';
           const priorMessages = result.response?.messages || [];
           const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
@@ -455,6 +457,7 @@ export async function djAgent({
           // simply never be reached on the slow local rigs that need this most.
           if (!(result.staticToolCalls || []).some((c) => c.toolName === 'done')) {
             console.log(`[${kind}] recovery also stopped without calling done — collapsing to a single-turn terminal call`);
+            recordAgentRetry();
             lastVia = 'ai-sdk:agent:terminal';
             try {
               const prompt = renderTerminalPrompt(messages, discoveryTrail);

@@ -45,12 +45,15 @@ export function assertAdminConfigured() {
 export function requireAdmin(req, res, next) {
   if (!ADMIN_AUTH_REQUIRED) return next();
 
-  // Lockout keys on clientIp() — the left-most X-Forwarded-For — which is
-  // client-controlled and therefore spoofable: an attacker can rotate the
-  // header per request to dodge this counter. So this is defense-in-depth that
-  // slows casual brute-forcing from a single source, not a hard guarantee. For
-  // durable enforcement put a real rate limit at the edge (Caddy/Cloudflare),
-  // where the connecting IP is known before it gets flattened into a header.
+  // Lockout keys on clientIp() (see middleware/ratelimit.ts for how that
+  // address is resolved and which headers are trusted). Behind the bundled
+  // Caddy that address is the real peer for any untrusted connection, but a
+  // misconfigured edge — or an origin reachable around it — can still let a
+  // client choose its own key and rotate it per request to dodge this counter.
+  // So this is defense-in-depth that slows casual brute-forcing from a single
+  // source, not a hard guarantee. For durable enforcement put a real rate limit
+  // at the edge (Caddy/Cloudflare), where the connecting IP is known before it
+  // gets flattened into a header.
   const ip = clientIp(req);
   const now = Date.now();
   const rec = authAttempts.get(ip);

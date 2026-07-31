@@ -137,6 +137,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         scrobble: s.scrobble,
         // privacy.password arrives redacted ('set'/'') from getRedacted().
         privacy: s.privacy,
+        requests: s.requests,
       },
       defaults: {
         // The built-in prompt template — the UI shows this when djPrompt is "".

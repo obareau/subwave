@@ -108,6 +108,18 @@ function maybeRotatePicksLog() {
 maybeRotatePicksLog();
 let _picksSinceRotateCheck = 0;
 
+// Done-tool retry churn (D2, request-hardening): counted at the strategy
+// layer's two retry log sites (llm/internal/strategy/agent.ts, "stopped
+// without calling done" / "recovery also stopped without calling done") so
+// /debug can show the rate per model choice — a live station logging ~20 of
+// these in 5h is the same symptom the corrective re-pick (repickFromSeen /
+// repickRequestFromSeen in broadcast/dj-agent.ts) exists to salvage, and this
+// is the counter that tells an operator how often that symptom is firing.
+// Monotonic since-boot count, like lifetimeTokens above — resets on restart.
+let agentDoneRetries = 0;
+export function recordAgentRetry() { agentDoneRetries += 1; }
+export function agentDoneRetryCount() { return agentDoneRetries; }
+
 export function recordPick({ song, reason, source }: { song: any; reason?: string; source?: string }) {
   if (++_picksSinceRotateCheck >= 500) {
     _picksSinceRotateCheck = 0;

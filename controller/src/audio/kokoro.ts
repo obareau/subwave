@@ -102,10 +102,36 @@ class KokoroWorker {
     else pending.reject(new Error(msg.error || 'kokoro request failed'));
   }
 
+  // SIGTERM the child and drop the handle. Idempotent, and safe to call on a
+  // process that has already exited (kill() on a reaped child is a no-op, but
+  // guard anyway so a race can't throw out of an exit handler).
+  reap() {
+    const p = this.proc;
+    this.proc = null;
+    if (!p || p.exitCode !== null || p.signalCode !== null) return;
+    try {
+      p.kill('SIGTERM');
+    } catch {
+      /* already gone */
+    }
+  }
+
   failReady(err: Error) {
     if (this.ready) return;
     if (this.readyTimer) clearTimeout(this.readyTimer);
     this.readyReject?.(err);
+    // Giving up on the boot has to kill the child too. Without this the ready
+    // timeout only rejected the promise: the Python process stayed alive,
+    // blocked forever on `for line in sys.stdin` (kokoro_worker.py) with the
+    // ONNX model resident, and since Node holds its stdin pipe open it never
+    // exited on its own. A later speak() would then replace `worker` and
+    // orphan it, leaking a few hundred MB per cycle.
+    //
+    // Model load is 2-5s (60s ceiling), so a worker that misses it is stuck,
+    // not merely slow — REQUEST_TIMEOUT_MS is the knob for slow *inference* on
+    // Rosetta, not this one. tts.ts falls back to Piper either way, so killing
+    // costs a caller nothing that the rejection above hadn't already cost.
+    this.reap();
   }
 
   onExit(code: number | null, signal: NodeJS.Signals | null) {
@@ -135,6 +161,14 @@ class KokoroWorker {
 async function ensureWorker(): Promise<KokoroWorker> {
   if (worker && worker.ready) return worker;
   if (bootingPromise) return bootingPromise;
+  // Belt-and-braces for the orphan above: bootingPromise is nulled in the
+  // finally below as soon as the first boot settles, so a failed boot leaves a
+  // non-ready `worker` that the next call would otherwise overwrite silently.
+  // Reap before replacing so at most one Python child is ever resident.
+  if (worker && !worker.ready) {
+    worker.reap();
+    worker = null;
+  }
   bootingPromise = (async () => {
     const w = new KokoroWorker();
     worker = w;
@@ -156,7 +190,7 @@ async function ensureWorker(): Promise<KokoroWorker> {
 export function stop(): void {
   const w = worker;
   worker = null;
-  w?.proc?.kill('SIGTERM');
+  w?.reap();
 }
 
 export async function speak(

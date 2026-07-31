@@ -58,7 +58,7 @@ function targetInsideDialog(e?: KeyboardEvent): boolean {
 }
 
 function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boolean }) {
-  const { audioRef } = usePlayerAudio();
+  const { attachAudio } = usePlayerAudio();
   const { state } = usePlayerFeed();
   const stationSkinRaw = typeof state.ui?.skin === 'string' && state.ui.skin ? state.ui.skin : null;
 
@@ -176,7 +176,7 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
           <StationPasswordGate phase={auth.phase} unlock={auth.unlock} solid />
         ) : (
           <>
-            <audio ref={audioRef} crossOrigin="anonymous" preload="auto" />
+            <audio ref={attachAudio} crossOrigin="anonymous" preload="auto" />
             {/* Skins are next/dynamic chunks with no boundary of their own, so
                 a face this build hasn't fetched yet SUSPENDS on first render.
                 Without this boundary the suspension escapes to the nearest one

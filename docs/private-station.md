@@ -39,6 +39,17 @@ every listener connect, so:
 - **If the controller is down, new listeners can't connect** (fail closed);
   already-connected listeners keep playing.
 
+> **Running your own reverse proxy?** `POST /listener-auth` answers 200 or 401
+> depending on whether the submitted password is right, which makes it a
+> password oracle for anyone who can reach it — and it's the *same* password
+> that guards the private player. Icecast always calls the controller directly
+> over the internal network, so the endpoint never needs to be reachable from
+> the internet. The bundled Caddy config returns 404 for
+> `/api/listener-auth`; if you use `docker-compose.byo.yml` with your own
+> Traefik/nginx/Caddy, block that path too. The controller slows repeated
+> failed attempts as a backstop (correct passwords are never delayed), but
+> not exposing the path at all is the real protection.
+
 ### Tuning in with a password
 
 - **Web player** — asks for the password once and remembers it in the

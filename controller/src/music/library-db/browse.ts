@@ -68,15 +68,25 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     `(SELECT AVG(json_extract(je.value,'$.value')) FROM json_each(tracks.pace_json) je)`;
   // Acoustic sorts surface analysed tracks first (NULLs sink to the bottom) and
   // tie-break by artist for a stable order across un-analysed rows.
-  const orderSql = ({
-    artist: `ORDER BY LOWER(COALESCE(artist,'')) , LOWER(COALESCE(album,'')) , LOWER(COALESCE(title,''))`,
+  const DEFAULT_ORDER =
+    `ORDER BY LOWER(COALESCE(artist,'')) , LOWER(COALESCE(album,'')) , LOWER(COALESCE(title,''))`;
+  // Null-prototype so an unknown `sort` can only ever miss. `sort` reaches here
+  // from req.query.sort cast straight to a string union with no runtime check
+  // (routes/library.ts), and a plain object literal would resolve the reserved
+  // names — `sort=constructor`, `__proto__`, `toString` — to something truthy
+  // off Object.prototype, skipping the `??` fallback and interpolating it into
+  // the SQL below. Today that only yields invalid SQL and a 500 on an
+  // admin-gated read, but it is one refactor away from being a real sink.
+  const ORDER_BY: Record<string, string> = Object.assign(Object.create(null), {
+    artist: DEFAULT_ORDER,
     title: `ORDER BY LOWER(COALESCE(title,'')) , LOWER(COALESCE(artist,''))`,
     year: `ORDER BY year DESC, LOWER(COALESCE(artist,''))`,
     taggedAt: 'ORDER BY tagged_at DESC',
     bpm: `ORDER BY (bpm IS NULL), bpm ASC, LOWER(COALESCE(artist,''))`,
     loudness: `ORDER BY (loudness_lufs IS NULL), loudness_lufs DESC, LOWER(COALESCE(artist,''))`,
     pace: `ORDER BY (${PACE_MEAN_SQL}) IS NULL, (${PACE_MEAN_SQL}) DESC, LOWER(COALESCE(artist,''))`,
-  } as Record<string, string>)[sort] ?? `ORDER BY LOWER(COALESCE(artist,'')) , LOWER(COALESCE(album,'')) , LOWER(COALESCE(title,''))`;
+  });
+  const orderSql = ORDER_BY[sort] ?? DEFAULT_ORDER;
 
   const d = requireDb();
   const total = (

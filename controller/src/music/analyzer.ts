@@ -708,16 +708,22 @@ export async function embedTexts(
 
 // What the render op needs to align and mix — straight from library.db, the
 // worker never re-detects. Wire-shaped (snake keys pass through verbatim).
+// `gain_db` is the dB the station itself would apply to that side (the same
+// figure the drain stamps as liq_amplify — music/loudness.ts) and is what the
+// worker mixes with. `lufs` is the pre-#1240 input, kept on the wire so an
+// older analyzer image still renders from its own maths.
 export interface RenderTransitionPayload {
   out: {
     stems_dir: string;
     duration_s: number; // tagged duration, advisory — tail alignment comes from the stems' tail-meta.json
     outro: { start_ms: number; bars: number[]; lufs?: number | null };
+    gain_db?: number | null;
     lufs?: number | null;
   };
   in: {
     stems_dir: string;
     bars: number[];
+    gain_db?: number | null;
     lufs?: number | null;
   };
   out_dir: string;

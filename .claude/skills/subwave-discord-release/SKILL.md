@@ -102,9 +102,11 @@ The thank-you sentence follows the same rule: tie it to what actually happened t
 - Straight quotes. Emoji are welcome here (unlike the news dispatch) because it's Discord, but each should carry meaning, not decorate.
 - Keep it scannable: short intro, bulleted features, compact fixes, link, sign-off. Discord readers skim.
 
-## Required: humanize before delivering
+## Required: de-slop before delivering
 
-Run the finished draft through the **`humanizer`** skill and apply its edits before you hand it over. This is where lingering AI tells, any stray em-dash, and rule-of-three habits get caught. It's the same discipline the news dispatch uses, and it's what keeps the post from reading like generated release notes.
+Run the finished draft through the **`no-ai-slop`** skill in edit mode and apply its edits before you hand it over. This is where lingering AI tells, any stray em-dash, and rule-of-three habits get caught. It's the same discipline the news dispatch uses, and it's what keeps the post from reading like generated release notes.
+
+Hold the house voice against it: the no-em-dash rule above is absolute here, and the warm first-person plural and the emoji that carry meaning are voice signals to preserve, not slop to strip.
 
 ## Delivering
 
