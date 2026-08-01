@@ -67,6 +67,17 @@ export default function TuneInOverlay({ onTune, nowPlaying }: TuneInOverlayProps
           </span>
         )}
       </span>
+
+      {/* Transparence IA — art. 50 du règlement (UE) 2024/1689, applicable au
+          2 août 2026. Le §5 exige l'information « au plus tard au moment de la
+          première exposition » : cet écran est le seul endroit traversé par
+          tout auditeur avant la première note, donc c'est ici que ça va.
+          Texte brut et non lien : l'overlay entier est un <button>, un <a>
+          imbriqué serait invalide et déclencherait la lecture au clic. */}
+      <span className="v3-caption mt-2 flex max-w-[44ch] flex-col items-center gap-1 text-[11px] leading-relaxed text-muted opacity-70">
+        <span>every track, voice and word on this station is AI-generated</span>
+        <span className="opacity-80">robotariis.com/transparence</span>
+      </span>
     </m.button>
   );
 }

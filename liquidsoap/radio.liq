@@ -1587,7 +1587,7 @@ def make_stream_outputs() =
     password=environment.get("ICECAST_SOURCE_PASSWORD"),
     mount="/stream.mp3",
     name=station_name(),
-    description="Personal frequency from the homelab",
+    description="Station entierement generee par IA - musique, voix et textes de synthese - robotariis.com/transparence",
     genre="Various",
     url="http://localhost:7700",
     radio
@@ -1634,7 +1634,7 @@ def make_stream_outputs() =
         password=environment.get("ICECAST_SOURCE_PASSWORD"),
         mount="/stream.opus",
         name=station_name(),
-        description="Personal frequency from the homelab",
+        description="Station entierement generee par IA - musique, voix et textes de synthese - robotariis.com/transparence",
         genre="Various",
         url="http://localhost:7700",
         radio
@@ -1671,7 +1671,7 @@ def make_stream_outputs() =
         password=environment.get("ICECAST_SOURCE_PASSWORD"),
         mount="/stream.flac",
         name=station_name(),
-        description="Personal frequency from the homelab — lossless",
+        description="Station entierement generee par IA - musique, voix et textes de synthese - robotariis.com/transparence (lossless)",
         genre="Various",
         url="http://localhost:7700",
         radio
@@ -1707,7 +1707,7 @@ def make_stream_outputs() =
         password=environment.get("ICECAST_SOURCE_PASSWORD"),
         mount="/stream.aac",
         name=station_name(),
-        description="Personal frequency from the homelab",
+        description="Station entierement generee par IA - musique, voix et textes de synthese - robotariis.com/transparence",
         genre="Various",
         url="http://localhost:7700",
         radio
