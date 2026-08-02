@@ -597,15 +597,25 @@ export async function runBanter() {
 const BANTER_MIN_GAP_MS = 5 * 60_000;
 
 async function banterTick() {
+  // Chaque garde journalise sa raison : sans ça, un banter absent est
+  // indiscernable d'un banter jamais tenté, et cinq sorties muettes se
+  // diagnostiquent à l'aveugle (vécu le 2026-08-02, 4 h du matin).
   const { show, guests } = settings.getOnAirRoster();
-  if (!show?.banter || !guests.length) return;  // solo show, or banter not opted in
-  if (!shouldFire('banter')) return;
-  if (!djCallsAllowed()) return;  // nobody listening — save the tokens and the breath
-  if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
+  if (!show?.banter || !guests.length) {
+    queue.log('scheduler', `Banter ignoré : show=${show?.name ?? 'aucun'} banter=${!!show?.banter} invités=${guests.length}`);
+    return;
+  }
+  if (!shouldFire('banter')) { queue.log('scheduler', 'Banter ignoré : hors créneau (shouldFire)'); return; }
+  if (!djCallsAllowed()) { queue.log('scheduler', 'Banter ignoré : appels DJ suspendus (salle vide ou flux au repos)'); return; }
+  if (!optionalSegmentsAllowed()) { queue.log('scheduler', 'Banter ignoré : plafond de jetons atteint'); return; }
   // Every standalone talk break counts — idents, hourly, handoff, banter AND
   // the segment-director spots (weather/news/…). Track-tied links don't, or a
   // chatty DJ-mode station would never banter.
-  if (Date.now() - queue.getLastTalkBreakAt() < BANTER_MIN_GAP_MS) return;
+  const depuis = Date.now() - queue.getLastTalkBreakAt();
+  if (depuis < BANTER_MIN_GAP_MS) {
+    queue.log('scheduler', `Banter ignoré : ${Math.round(depuis / 1000)}s depuis la dernière prise de parole (minimum ${BANTER_MIN_GAP_MS / 1000}s)`);
+    return;
+  }
   try {
     await runBanter();
   } catch (err) {
