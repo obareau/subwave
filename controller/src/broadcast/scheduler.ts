@@ -33,13 +33,13 @@ import * as stemCacheStore from '../music/stem-cache.js';
 import * as stemBlendStore from './stem-blend.js';
 import * as doctor from '../doctor.js';
 
-const TARGET_POOL = 30;
+const TARGET_POOL = 120;                // divergence locale 2026-08-02 : 30 ne tient pas un show de 4 h
 const MOOD_WEIGHT = 12;          // up to this many mood-tagged tracks per pool
 const PLAYLIST_WEIGHT = 6;       // mood-matched Navidrome playlists
 const RECENT_WEIGHT = 4;         // recently-added albums
 const FREQUENT_WEIGHT = 4;       // frequent / scrobble-favourite albums
 const STARRED_WEIGHT = 6;        // hand-starred tracks
-const AUTO_MAX_PER_ARTIST = 2;   // cap any one artist's share of the fallback pool
+const AUTO_MAX_PER_ARTIST = Number.MAX_SAFE_INTEGER; // divergence locale 2026-08-02 : plafond retiré. La bibliothèque est faite de morceaux générés dont l'artiste est fictif et souvent partagé (53 titres pour Kowax-Tora Wax) — un plafond par artiste y est un contresens, et le garder obligerait à repasser dans Nemesis pour inventer des noms.
 // When a scheduled show pins a genre/era, a dedicated Navidrome-genre source
 // becomes the dominant pool contributor and the off-genre sources shrink by
 // SHOW_NARROW_FACTOR so the show's genre/era actually fills the fallback (#629).
@@ -48,7 +48,7 @@ const SHOW_GENRE_STRICT_WEIGHT = 24; // strict: this source carries most of the 
 // A show anchored to Navidrome playlist(s): the union becomes the dominant
 // fallback source (soft) or — after the strict end-filter — the whole pool.
 const SHOW_PLAYLIST_WEIGHT = 14;        // dedicated show-playlist source (soft)
-const SHOW_PLAYLIST_STRICT_WEIGHT = 24; // strict: this source carries the pool
+const SHOW_PLAYLIST_STRICT_WEIGHT = 120; // strict: this source carries the pool — 24 étranglait une playlist de 244
 const SHOW_NARROW_FACTOR = 0.5;      // shrink mood/playlist/recent/etc. for shows
 
 async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {

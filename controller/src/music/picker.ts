@@ -77,7 +77,7 @@ const CAP_SHOW_GENRE_STRICT = 24;
 // (soft) or — after the strict end-filter below — the show's entire universe.
 // Mirrors the show-genre caps so playlist tracks fill most of the final pool.
 const CAP_SHOW_PLAYLIST = 12;
-const CAP_SHOW_PLAYLIST_STRICT = 24;
+const CAP_SHOW_PLAYLIST_STRICT = 150;  // divergence locale 2026-08-02 : 24 étranglait une playlist de 244 (Scories, 4 h)
 const SHOW_NARROW_FACTOR = 0.5;
 
 // TTL cache for sources that don't change between picks. Without this, every
