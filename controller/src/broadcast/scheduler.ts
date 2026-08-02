@@ -854,7 +854,7 @@ export function startScheduler() {
   // Guest-show banter at :20/:50 — minutes no other wall-clock talker owns
   // (same issue-#310 reasoning as the ident slots). The handler gates on the
   // show's banter toggle, the live roster, frequency, listeners and budget.
-  cron.schedule('20,50 * * * *', banterTick);
+  cron.schedule('5,20,35,50 * * * *', banterTick); // divergence locale 2026-08-02 : 2 banters/h laissaient un show de 4 h presque muet
 
   // Programme beats: feature mid-hour, outro in the final minutes of the
   // show's last hour — dispatched on STATION-zone minute windows (see

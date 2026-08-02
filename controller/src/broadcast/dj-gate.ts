@@ -58,7 +58,7 @@ export function shouldFire(kind, now = new Date()) {
     // most one an hour; chatty and aggressive get both slots.
     if (f === 'quiet')    return false;
     if (f === 'moderate') return m === 20;
-    return m === 20 || m === 50;
+    return m === 5 || m === 20 || m === 35 || m === 50;
   }
 
   return true;
