@@ -1,8 +1,7 @@
 'use client';
 
-// Small helpers shared by skin implementations — pure derivations over the
-// core-context data so each skin renders the same station facts its own way.
-// Keep this file free of JSX and styling: anything visual belongs to a skin.
+// Pure derivations over the core-context data, shared by every skin. Keep this
+// file free of JSX and styling: anything visual belongs to a skin.
 
 import {
   eventTurnSummary,
@@ -32,11 +31,9 @@ export interface StationIdentity {
   showName: string;
 }
 
-/** The three masthead facts every skin derives — centralised here so they
- *  can't drift between skins. DJ name prefers the on-air show's persona (a
- *  scheduled show can hand the hour to a guest); show name falls back to the
- *  time-of-day period; both fall back to sensible defaults so a fresh install
- *  still reads cleanly. */
+/** Centralised so the masthead facts can't drift between skins. DJ name
+ *  prefers the on-air show's persona (a scheduled show can hand the hour to a
+ *  guest); show name falls back to the time-of-day period. */
 export function stationIdentity(
   dj: DjState | null,
   activeShow: ActiveShow | null,
@@ -77,7 +74,7 @@ export function boothLines(messages: SessionTurn[], limit: number): BoothLine[] 
   return out.reverse();
 }
 
-/** The DJ's most recent spoken line — the voice of the station. */
+/** The DJ's most recent spoken line. */
 export function lastVoiceLine(messages: SessionTurn[]): BoothLine | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const turn = messages[i];
@@ -114,8 +111,7 @@ export function turnClock(
 }
 
 /** The station-context strapline: "drive home · 16° cloudy". Pieces are
- *  omitted when absent so a fresh install renders nothing rather than
- *  placeholder noise. */
+ *  omitted when absent, so a fresh install renders nothing at all. */
 export function contextLine(context: StationContext | null): string {
   const parts: string[] = [];
   const vibe = context?.time?.vibe || context?.time?.show;
@@ -128,8 +124,8 @@ export function contextLine(context: StationContext | null): string {
   return parts.join(' · ');
 }
 
-/** Nerd-metadata tokens for the current track: genre, BPM, key — and the
- *  accent-worthy mood/energy cluster separately. */
+/** Genre, BPM and key, with the mood/energy cluster returned separately so a
+ *  skin can accent it. */
 export function trackMeta(t: {
   genre?: string | null; bpm?: number | null; musicalKey?: string | null;
   moods?: string[]; energy?: string | null;

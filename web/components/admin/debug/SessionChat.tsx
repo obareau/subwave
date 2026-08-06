@@ -1,9 +1,5 @@
 'use client';
 
-// The live DJ session rendered as the chat history it actually is.
-//
-// Part of the debug/ split - see ../DebugPanel.tsx.
-
 import { cn } from '../../../lib/cn';
 import { Conversation, ConversationContent } from '../../ai-elements/conversation';
 import { Message, MessageContent } from '../../ai-elements/message';
@@ -13,10 +9,8 @@ import { mapChatRole } from './TtsPanels';
 export function SessionChat({ session }: { session: DebugSession }) {
   const msgs = session.messages || [];
   return (
-    // StickToBottom's inner scroll element is height:100%, so it needs a
-    // definite outer height to scroll — but a fixed 360px box around two
-    // turns is dead space. Short sessions size to content; long ones get the
-    // fixed, latest-turn-pinned scroll region.
+    // StickToBottom's inner scroll element is height:100%, so it needs a definite
+    // outer height to scroll. Short sessions size to content instead.
     <Conversation className={cn('w-full', msgs.length > 6 ? 'h-[360px]' : 'h-auto')}>
       <ConversationContent className="gap-1.5 p-0">
         {session.handoff && (
@@ -47,8 +41,7 @@ export function SessionChat({ session }: { session: DebugSession }) {
               </span>
             </span>
             <MessageContent className="rounded-none text-[12px] group-[.is-user]:rounded-none group-[.is-user]:bg-[var(--overlay)] group-[.is-user]:px-2.5 group-[.is-user]:py-1.5 group-[.is-user]:text-ink">
-              {/* Speech scripts — plain text, never markdown (MessageResponse
-                  would eat asterisks and underscores). */}
+              {/* Never markdown: MessageResponse would eat asterisks and underscores. */}
               <div className="break-words whitespace-pre-wrap">{m.text}</div>
             </MessageContent>
           </Message>

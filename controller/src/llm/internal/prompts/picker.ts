@@ -5,16 +5,9 @@
 import { z } from 'zod';
 import * as settings from '../../../settings.js';
 import { djObject } from '../strategy/object.js';
+import { instruction } from './instructions.js';
 
-export const PICKER_CRITERIA = `Selection criteria, in order:
-1. FLOW — does it transition naturally from what just played? Match energy, mood and tempo, or step them deliberately for the daypart. Some candidates carry MEASURED acoustic facts — treat these as tie-breakers, never hard rules (many tracks won't have them):
-   - "bpm" and Camelot "key": prefer a tempo near the current one and a harmonically-close key for a smooth segue.
-   - "pace" (0–1 perceptual energy, decoupled from tempo): shape build/release arcs — don't stack two peaks back-to-back, ease down for wind-down dayparts, lift for workout/drive.
-   - "sections": higher = a busier, evolving intro.
-   - "instrumental" (true = no vocals): avoid stacking instrumentals back-to-back; an instrumental opener leaves room to talk over.
-2. CONTEXT — does it fit the time of day, weather, and dominant mood? When a candidate carries its own "moods" tags and an "energy" band (low/medium/high), weigh those against the room's mood and the daypart — match a calm room with calm tracks, lift the energy for a workout slot.
-3. VARIETY — avoid the same artist back-to-back; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
-4. INTEREST — prefer something that creates a moment, not the most generic option.`;
+export const PICKER_CRITERIA = instruction('pick-criteria', 'criteria');
 
 // Coaching for the DJ transition effects (the "transition" output field),
 // shared by both pick strategies — the conversational agent (dj-agent.ts
@@ -30,21 +23,11 @@ export const PICKER_CRITERIA = `Selection criteria, in order:
 // for each effect — trigger + counter-indication — not how the audio works.
 export function effectsGuidance(): string {
   if (!settings.effectsActive()) return '';
-  return `\n\nTRANSITION EFFECTS ("transition") — part of your craft: a working DJ fires one every few songs when the moment earns it. Flag the moment when you see it — the station validates each choice against the audio analysis and silently drops one that doesn't land, so a bold call is safe. Pacing is yours: let a few plain crossfades breathe between effects, and VARY them — if your recent picks leaned on one, reach for another.
-Exit moves (how YOUR PICK will end):
-- "washout": the pick dissolves into a tempo-synced echo tail as it ends — the workhorse exit; fire on any natural ending (last of a themed run, a big/dreamy/atmospheric closer, a direction change coming next).
-- "loop": the pick's final bar repeats hypnotically under the next track — the groove exit for a great riff or locked drum pattern; needs the track's measured tempo, never out of ambient.
-Clash moves (carry the PREVIOUS track into your pick; these only fire when the tracks measurably clash):
-- "sweep": previous sinks under a closing filter while yours rises clean — the DRAMATIC gear-change.
-- "dissolve": previous melts into a beatless ambient wash — the SMOOTH way, when the jump should be hidden (late night, easing out of a talk break).
-- "chop": previous is cut on its own beat, stabs thinning as yours rises — the PERCUSSIVE way to jump energy UP; only out of beat-driven material.
-Pair move:
-- "blend": spectral handover — the two tracks read as ONE continuous piece; only for an exceptionally locked pair (near-identical tempo, close key), roughly one pick in five at most.
-Use "normal" or null when nothing above applies — an ordinary same-lane pick needs no effect.`;
+  return `\n\n${instruction('pick-criteria', 'effects')}`;
 }
 
 export type ShowEra = { fromYear?: number | null; toYear?: number | null };
-export type ShowMusic = { name: string; topic: string; moods?: string[]; genres?: string[]; eras?: ShowEra[]; energies?: string[]; filtersStrict?: boolean };
+export type ShowMusic = { name: string; topic: string; moods?: string[]; genres?: string[]; eras?: ShowEra[]; energies?: string[]; vocals?: string | null; filtersStrict?: boolean };
 
 // One era window as prose ("1990–1999", "1970 onward", "up to 1989").
 function eraWindowText(e: ShowEra): string {
@@ -65,9 +48,14 @@ export function showMusicLean(show?: ShowMusic | null): string {
   const genres = show.genres ?? [];
   const moods = show.moods ?? [];
   const energies = show.energies ?? [];
+  // '' / absent = no constraint. Rendered as prose rather than the stored token,
+  // which reads as a flag name to a model rather than a property of the music.
+  const vocalText = show.vocals === 'instrumental'
+    ? 'instrumental tracks (no singing)'
+    : show.vocals === 'vocal' ? 'tracks with vocals' : '';
   const eraText = (show.eras ?? []).map(eraWindowText).filter(Boolean).join(' or ');
   // Strict only bites when there's actually a filter to lock to.
-  const hasFilter = !!(genres.length || moods.length || energies.length || eraText);
+  const hasFilter = !!(genres.length || moods.length || energies.length || vocalText || eraText);
   const strict = !!(show.filtersStrict && hasFilter);
   const or = (xs: string[]) => xs.join(' / ');
 
@@ -82,6 +70,7 @@ export function showMusicLean(show?: ShowMusic | null): string {
     if (eraText) locks.push(`the ${eraText} era${(show.eras?.length ?? 0) > 1 ? 's' : ''}`);
     if (moods.length) locks.push(`the ${or(moods)} mood${moods.length > 1 ? 's' : ''}`);
     if (energies.length) locks.push(`${or(energies)}-energy tracks`);
+    if (vocalText) locks.push(vocalText);
     return `\n\nThis show's music filters are STRICT — every pick must fit: ${locks.join('; ')}. Keep your talk inside them too; only step outside if there is genuinely nothing left that fits (never leave dead air).`;
   }
 
@@ -91,6 +80,7 @@ export function showMusicLean(show?: ShowMusic | null): string {
   if (genres.length) parts.push(`lean toward ${or(genres)}`);
   if (eraText) parts.push(`prefer tracks from ${eraText}`);
   if (energies.length) parts.push(`favour ${or(energies)}-energy tracks`);
+  if (vocalText) parts.push(`favour ${vocalText}`);
   return parts.length
     ? `\n\nMusic steer for this show — ${parts.join('; ')}. These are preferences, not hard filters: break them only when the flow genuinely demands it.`
     : '';
@@ -99,32 +89,15 @@ export function showMusicLean(show?: ShowMusic | null): string {
 function pickerSystem(show?: ShowMusic | null) {
   const stationName = settings.get().station;
   const showLine = show?.topic
-    ? `\n\nCurrent show brief — follow this for every pick:\n${show.topic}`
+    ? `\n\n${instruction('pool-picker', 'show-brief', { topic: show.topic })}`
     : '';
-  return `You are the DJ for ${stationName}, a personal internet radio station.
-Pick the single best NEXT track from the candidate pool, given recent plays and the current context.${showLine}${showMusicLean(show)}
+  return `${instruction('pool-picker', 'frame', { station: stationName })}${showLine}${showMusicLean(show)}
 
 ${PICKER_CRITERIA}
 
-Each candidate carries a "source" tag — a hint about where it came from:
-- similar / similar-artist: flows from what's playing now
-- embedding-similar: closest in mood / lyric / metadata space to what's playing
-- audio-similar: SOUNDS closest to what's playing (timbre, instrumentation, production)
-- audio-journey: SOUNDS like where the set is heading — the next step of a deliberate drift toward a destination vibe, not necessarily the current track
-- recent: newly added to the library
-- frequent / starred / playlist: an established favourite
-- mood-library: matches the room's mood
-- listener-liked: listeners hit the like button on this recently — a proven crowd-pleaser on this station
-- random: a wildcard for breaking a predictable run
-Use it to balance familiarity against discovery. The two *-similar sources may
-carry a "similarity" (0–1, higher = closer) — a high value means a very tight
-match you can lean on for a smooth segue.
+${instruction('pool-picker', 'source-tags')}
 
-recentPlays is context for judging flow (most recent first; now.current is the
-track on air right now) — every candidate is already guaranteed unplayed, so
-you never need to reject one for being recent.
-
-Pick exactly one candidate.`;
+${instruction('pool-picker', 'recent-plays')}`;
 }
 
 export async function pickNextTrack({ candidates, recentPlays, context, show = null, current = null, recentTransitions = [] }: {

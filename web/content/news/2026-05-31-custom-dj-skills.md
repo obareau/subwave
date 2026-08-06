@@ -15,7 +15,7 @@ A skill is one between-track line. The DJ glances at something, then either says
 
 ## How to use it
 
-Each skill is a folder with a `SKILL.md` inside. The frontmatter sets the name and how often it can fire; the markdown body is the brief the DJ actually follows: what to say, the tone, when to keep mum.
+Each skill is a folder with a `SKILL.md` inside. The frontmatter sets the name and how often it can fire; the markdown body is the brief the DJ actually follows: what to say, the tone, when to keep mum. The full frontmatter reference is in the manual's [Custom Skills](/manual/skills) page.
 
 ```
 state/skills/
@@ -36,4 +36,4 @@ The skills that come in the box are files now, same as your own. On first boot t
 
 ## Why it bothers
 
-Your station starts to sound like yours. The bits between tracks stop being generic and start being the things you actually care about, in the voice you picked.
+Your station starts to sound like yours. The bits between tracks stop being generic and start being the things you actually care about, in the voice you picked. And a brief that lands doesn't have to stay home: skills can [travel between stations](/news/pass-a-skill-along), and the public catalog at [/skills](/skills) shows what other operators run.

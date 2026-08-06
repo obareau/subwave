@@ -1,10 +1,5 @@
 'use client';
 
-// The context the DJ is currently reasoning over: time, weather, festival and
-// the dominant mood those resolve to.
-//
-// Part of the debug/ split - see ../DebugPanel.tsx.
-
 import { Pill } from '../ui';
 import type { DebugContext } from './types';
 import { titleize } from './MountsTable';

@@ -1,8 +1,7 @@
 'use client';
 
-// Small shared atoms for the schedule page — the design-system patterns the
-// Rundown repeats everywhere: colour chips, the underlined "slot" dropdown
-// (an inline editable value in a sentence), and the M T W T F S S day pills.
+// Small shared atoms for the schedule page: colour chips, the underlined "slot"
+// dropdown, and the M T W T F S S day pills.
 
 import type { ReactNode } from 'react';
 import { useRef } from 'react';
@@ -41,8 +40,7 @@ export interface SlotOption {
   chipColor?: string | null;
 }
 
-/** The sentence-editor "slot": an underlined bold-mono value with a ▾ caret
- *  that opens a menu of options. Reads as a word in the sentence. */
+/** The sentence-editor "slot": an underlined value with a ▾ caret opening a menu. */
 export function SlotMenu({
   label,
   chipColor,
@@ -114,8 +112,8 @@ export function DayPills({
             title={d.name}
             onClick={() => onToggle(d.key)}
             className={cn(
-              // Comfortable squares on a phone (7 × 32px + gaps still fits a
-              // 390px screen); back to the dense 17px chip from sm up.
+              // 7 × 32px + gaps still fits a 390px screen; back to the dense 17px
+              // chip from sm up.
               'flex size-8 cursor-pointer items-center justify-center border font-mono text-[10px] font-bold sm:size-[17px] sm:text-[8px]',
               on
                 ? 'border-ink bg-ink text-bg'
@@ -131,10 +129,8 @@ export function DayPills({
 }
 
 /** Weekday / weekend / whole-week presets for the sentence editor's day set.
- *  The pills below already write several days at once — this names the three
- *  sets an operator actually reaches for, so the bulk path stops reading as
- *  seven separate toggles. `selected` is compared as a set, so the matching
- *  preset lights up however the days were chosen. */
+ *  `selected` is compared as a set, so the matching preset lights up however the
+ *  days were chosen. */
 export function DayPresets({
   selected,
   onSelect,
@@ -175,7 +171,7 @@ export function DayPresets({
   );
 }
 
-/** Muted mono micro-label (the spMu pattern). */
+/** Muted mono micro-label. */
 export function Mu({ children, className }: { children?: ReactNode; className?: string }) {
   return (
     <span

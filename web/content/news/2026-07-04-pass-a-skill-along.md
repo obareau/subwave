@@ -7,7 +7,7 @@ author: The SUB/WAVE desk
 excerpt: Skills can move between stations now. Browse the community catalog in admin, share your own with one button, or hand a zip straight to another operator.
 ---
 
-You spent three evenings getting a skill's brief just right, and now the DJ lands the line every time. Until now, the only way to give that to a friend's station was to paste the file into a chat and hope they dropped it in the right folder. Skills travel properly now, three ways.
+You spent three evenings getting a [skill's brief](/news/custom-dj-skills) just right, and now the DJ lands the line every time. Until now, the only way to give that to a friend's station was to paste the file into a chat and hope they dropped it in the right folder. Skills travel properly now, three ways.
 
 ## Take one from the catalog
 
@@ -25,4 +25,6 @@ For a direct handoff, hit Export on the edit sheet and you get a `.zip` of the w
 
 ## Why it bothers
 
-The bits between tracks are where a station gets its personality, and a good brief takes real fiddling to get right. Two community skills are in the catalog already: a two-line micro-poem sparked by the moment, and a warm aside about taping songs off the radio. There's room next to them.
+The bits between tracks are where a station gets its personality, and a good brief takes real fiddling to get right. Two community skills are in the catalog already: a two-line micro-poem sparked by the moment, and a warm aside about taping songs off the radio. There's room next to them, and the catalog has a public face at [/skills](/skills).
+
+*Update: the catalog no longer ships inside the controller image. Stations now [read it live](/news/install-from-the-community), so a newly merged skill is installable the same day, no software update needed.*

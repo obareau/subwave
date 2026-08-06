@@ -20,8 +20,7 @@ export interface ScheduleDrawerProps {
   /** What's on right now, fed from `useStationFeed` so the on-now card stays
    *  fresh without re-fetching `/schedule`. */
   activeShow: ActiveShow | null;
-  /** Station context from `/now-playing` — used for the operator-configured
-   *  location label shown above the schedule. */
+  /** Station context from `/now-playing`, for the location label. */
   context: StationContext | null;
 }
 
@@ -84,10 +83,8 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
-  // Defaults to today; tapping a day tab flips this without refetching.
   const [viewDay, setViewDay] = useState<number>(() => new Date().getDay());
-  // Once set, stop auto-syncing viewDay to the station's today so a manual day
-  // pick sticks across re-renders/ticks.
+  // Stops the auto-sync below so a manual day pick sticks across ticks.
   const [userPickedDay, setUserPickedDay] = useState(false);
 
   useEffect(() => {
@@ -105,28 +102,24 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
     };
   }, [client]);
 
-  // Drives both the on-now indicator (grid resolution is 1 h, so 60 s would
-  // be enough on its own) and the station-time clock at the top of the drawer
-  // (HH:MM, needs sub-minute ticks to feel live). 1 s is cheap and only runs
-  // while the drawer is open.
+  // 1s rather than 60s because the station clock at the top needs sub-minute
+  // ticks; only runs while the drawer is open.
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 1_000);
     return () => window.clearInterval(id);
   }, []);
 
-  // The initial viewDay seeds from the browser's day; once the schedule loads
-  // (and its station timezone with it), snap the default selection to the
-  // station's today — unless the listener has already tapped a day tab.
+  // viewDay seeds from the browser's day; snap to the station's today once the
+  // schedule (and its timezone) lands, unless the listener picked a day.
   useEffect(() => {
     if (!data || userPickedDay) return;
     setViewDay(zonedDayHour(new Date(), data.timezone ?? null).dow);
   }, [data, userPickedDay]);
 
-  // Resolve "now" in the *station's* timezone, not the viewer's browser zone —
-  // the controller resolves the active show with the same wall clock, so this
-  // keeps the on-now card naming the same show that's actually on air (#418).
-  // Safe before `data` loads: zonedDayHour falls back to local time when tz is
-  // nullish, and every consumer below is guarded on `data`.
+  // Station timezone, not the viewer's: the controller resolves the active
+  // show off the same wall clock, so the on-now card names the show that is
+  // actually on air (#418). Safe before `data` loads — zonedDayHour falls back
+  // to local time on a nullish tz.
   const { dow: today, hour: currentHour } = zonedDayHour(now, data?.timezone ?? null);
 
   const daySlots = useMemo(() => {
@@ -134,9 +127,7 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
     return collapseSlots(data.schedule[viewDay] ?? Array(24).fill(null), data.shows, data.personas);
   }, [data, viewDay]);
 
-  // For "Coming up today", drop everything before the *next* slot. If we're
-  // mid-block, advance past this block; if today is a future day, show the
-  // full day from the top.
+  // Drop everything before the next slot; mid-block, advance past this block.
   const upcomingSlots = useMemo(() => {
     if (!data || viewDay !== today) return daySlots;
     const blockEnd = endHourForCurrentBlock(data.schedule, today, currentHour);
@@ -170,9 +161,6 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
   const hasAnyShow = data.shows.length > 0;
   const locale = normalizeStationLocale(data.locale);
   if (!hasAnyShow) {
-    // Autonomous mode (no scheduled shows) is the common state for a personal
-    // station, so still surface the station time + location here — that's
-    // exactly the context an always-on autonomous station benefits from.
     return (
       <div className="grid gap-6">
         <StationHeader
@@ -245,9 +233,7 @@ function StationHeader({
   locale: StationLocale;
   location: string | null;
 }) {
-  // If the operator's TZ isn't on the schedule payload we fall back to the
-  // viewer's local TZ — close enough for a personal station where operator
-  // and listener usually overlap.
+  // Falls back to the viewer's local TZ when the payload carries none.
   const time = fmtClockMinute(now, timezone, locale);
   return (
     <section className="flex items-end justify-between gap-4 border-b border-separator-soft pb-3">
@@ -276,11 +262,10 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 function AvatarThumb({ avatar, name, tier }: { avatar: string; name: string; tier: 'lg' | 'sm' }) {
-  // `avatar` is always a URL (the public endpoint serves a placeholder when no
-  // image is set), so this is safe to render unconditionally. Initials sit
-  // underneath as a fallback while the network image loads. Two fixed sizes
-  // — large for the On-now card, small for schedule rows — keeps Tailwind's
-  // class generator happy without a `style={…}` escape hatch.
+  // `avatar` is always a URL (the public endpoint serves a placeholder), so
+  // this renders unconditionally with initials underneath while it loads. Two
+  // fixed sizes rather than a dynamic one, so Tailwind can generate the classes
+  // without a `style={…}` escape hatch.
   const initials = name
     .trim()
     .split(/\s+/)
@@ -340,12 +325,12 @@ function OnNowCard(props: {
     );
   }
   const personaName = onNow.persona?.name || activeShow?.persona?.name || 'Host';
-  // Controller emits avatar paths without the `/api` prefix so each surface
-  // can prepend its own origin; client.resolve does exactly that, and empty
-  // input stays empty so <img> falls back to the initials placeholder.
+  // The controller emits avatar paths without the `/api` prefix so each
+  // surface prepends its own origin; empty input stays empty so <img> falls
+  // back to the initials placeholder.
   const avatar = client.resolve(onNow.persona?.avatar || activeShow?.persona?.avatar || '');
-  // Guest co-hosts in the studio this hour (only known for the LIVE show —
-  // /state doesn't expose future rosters, so upcoming slots stay host-only).
+  // Only known for the LIVE show — /state exposes no future rosters, so
+  // upcoming slots stay host-only.
   const guestNames = (activeShow?.guests || []).map(g => g?.name).filter(Boolean);
   return (
     <section>

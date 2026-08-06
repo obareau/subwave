@@ -1,23 +1,11 @@
 'use client';
 
-// The Rundown — /admin/shows/schedule. The dedicated full-screen show-plan
-// view: a live header, the On air / Up next / After that band, the full-width
-// board (7 × 24 kanban), and the order desk beneath it with the sentence-based
-// order editor.
+// The Rundown — /admin/shows/schedule. Renders the controller's 7×24 `schedule`
+// grid from GET /settings; every edit is local until PUT /schedule saves the week.
 //
-// The data model is unchanged: the controller's 7×24 `schedule` grid from
-// GET /settings, persisted with PUT /schedule ("Save the week"). Every edit
-// on this screen — sentence editor, board clicks (silent slot books a show,
-// a card's × takes one off the air), drag-and-drop, suggestions — is a local
-// range write until the week is saved.
-//
-// Takeovers (#930) are NOT part of this screen — pinning, cancelling and the
-// countdown all live on the dash (components/admin/dash/TakeoverCard): putting
-// a show on the air right now is a live on-air action, not a way of
-// programming the week, and its old strip here cost a row of chrome above a
-// 24-hour board on every load. The one thing that stays is the READ of the
-// pin in force: it outranks the grid in the controller's resolveActiveShow, so
-// the On air cell would otherwise name a show that is not on the air.
+// Takeovers (#930) live on the dash, not here. This screen only READS the pin in
+// force: it outranks the grid in the controller's resolveActiveShow, so the On air
+// cell would otherwise name a show that is not on the air.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -73,8 +61,8 @@ interface ScheduleOverride {
   expiresAt: number;
 }
 
-// The slice of a persisted show this screen needs; legacy singular fields
-// still hydrate as one-element lists (same coercion as ShowsPanel).
+// Legacy singular fields still hydrate as one-element lists (same coercion as
+// ShowsPanel).
 function hydrateShow(raw: Record<string, unknown>): ScheduleShow | null {
   const id = typeof raw.id === 'string' ? raw.id : '';
   if (!id) return null;
@@ -107,32 +95,25 @@ export default function SchedulePanel() {
 
   // Board columns collapsed to rails, keyed by storage day (0=Sun..6=Sat).
   const [folded, setFolded] = useState<Record<number, boolean>>({});
-  // The line editor above the board — scrolled into view when a pick from
-  // deep in the board loads it, since it can sit above the fold.
+  // The line editor sits above the fold, so a pick from deep in the board has to
+  // scroll it into view.
   const bandRef = useRef<HTMLDivElement>(null);
 
-  // The sentence editor — the line being edited plus the show the sentence
-  // would place and the day set it applies to.
   const [line, setLine] = useState<EditorLine>({ day: 6, start: 16, end: 18 });
   const [lineShowId, setLineShowId] = useState<string | null>(null);
   const [lineDays, setLineDays] = useState<number[]>([6]);
 
-  // The armed show — the shelf chip acting as a brush (#1204). Deliberately
-  // its own state rather than reusing `lineShowId`: that one is set by every
-  // card click and load, so hanging the day/hour bulk fills off it would let a
-  // stray click on a day header rewrite 24 hours. Arming is an explicit mode
-  // the operator enters and can leave with Escape.
+  // The armed show — the shelf chip acting as a brush (#1204). Its own state, not
+  // `lineShowId`: that is set by every card click, so hanging the day/hour bulk
+  // fills off it would let a stray day-header click rewrite 24 hours.
   const [armedShowId, setArmedShowId] = useState<string | null>(null);
   const [density, setDensity] = useBoardDensity();
 
   const [dismissed, setDismissed] = useState<string[]>([]);
   const [reviewOpen, setReviewOpen] = useState(false);
-  // The in-app destination an unsaved-edits click was held back from (see the
-  // leave guard below); null when nothing is pending.
   const [pendingHref, setPendingHref] = useState<string | null>(null);
 
-  // The live takeover (#930), for the Now band's read of what is actually on
-  // air. Pinning and cancelling happen on the dash.
+  // The live takeover (#930), read-only here — pinning and cancelling live on the dash.
   const [override, setOverride] = useState<ScheduleOverride | null>(null);
 
   useEffect(() => {
@@ -161,7 +142,6 @@ export default function SchedulePanel() {
       setSchedule(week);
       setServerSchedule(cloneWeek(week));
       setErr(null);
-      // Open the editor on the block on air right now, station time.
       const { dow, hour } = zonedDayHour(new Date(), j.values?.timezone || j.serverTimezone);
       const b = blockAt(week, dow, hour);
       setLine({ day: b.day, start: b.start, end: b.start + b.span });
@@ -177,7 +157,6 @@ export default function SchedulePanel() {
     load();
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The live takeover, if any (GET /schedule; expired/absent → null).
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     let cancelled = false;
@@ -192,7 +171,6 @@ export default function SchedulePanel() {
     return () => { cancelled = true; };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── derived ──────────────────────────────────────────────────────────────
   const { dow: nowDay, hour: nowHour } = zonedDayHour(now, tz);
   const stationMinute = useMemo(() => {
     try {
@@ -225,37 +203,32 @@ export default function SchedulePanel() {
   const liveOverride = override && override.expiresAt > now.getTime() ? override : null;
   const pinnedShow = liveOverride ? showById(liveOverride.showId) : null;
 
-  // ── the brush ────────────────────────────────────────────────────────────
-  // Resolve through the roster rather than trusting the id: a show deleted on
-  // the Shows page in another tab would otherwise leave a dangling brush that
-  // writes an id no order can render.
+  // Resolve through the roster rather than trusting the id: a show deleted in
+  // another tab would leave a dangling brush that writes an unrenderable id.
   const armedShow = armedShowId ? showById(armedShowId) : null;
   const armedId = armedShow?.id ?? null;
 
-  /** Shelf-chip click: arm the show, or put the brush down if it is already
-   *  armed. Either way the sentence editor follows, so the two editing paths
-   *  never disagree about which show is in hand. */
+  /** The sentence editor follows the brush, so the two editing paths never
+   *  disagree about which show is in hand. */
   const armShow = (id: string) => {
     setArmedShowId(cur => (cur === id ? null : id));
     setLineShowId(id);
   };
 
-  // Escape puts the brush down — the standard way out of a modal tool, and the
-  // only way out that doesn't require finding the armed chip again.
   useEffect(() => {
     if (!armedId) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      // A Radix layer that consumed this Escape (the review modal, a slot
-      // menu) preventDefaults it from a document-capture listener before this
-      // bubble listener runs — closing an overlay must not also drop the brush.
+      // A Radix layer that consumed this Escape preventDefaults it from a
+      // document-capture listener before this bubble listener runs — closing an
+      // overlay must not also drop the brush.
       if (e.key === 'Escape' && !e.defaultPrevented) setArmedShowId(null);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [armedId]);
 
-  /** A day header with a show armed: put it on all 24 hours — or clear the day
-   *  when it already runs nothing else, so a second click undoes the first. */
+  /** Day header with a show armed: all 24 hours, or clear when the day already
+   *  runs nothing else, so a second click undoes the first. */
   const fillDay = (day: number) => {
     if (!schedule || !armedShow) return;
     const next = fillDayToggle(schedule, day, armedShow.id);
@@ -266,8 +239,7 @@ export default function SchedulePanel() {
       : `“${armedShow.name}” across ${dayName(day)} — unsaved until you save the week.`);
   };
 
-  /** An hour in the gutter with a show armed: put it on that hour every day,
-   *  with the same toggle-off rule. */
+  /** Gutter hour with a show armed: that hour every day, same toggle-off rule. */
   const fillHour = (hour: number) => {
     if (!schedule || !armedShow) return;
     const next = fillHourToggle(schedule, hour, armedShow.id);
@@ -278,13 +250,11 @@ export default function SchedulePanel() {
       : `“${armedShow.name}” at ${hhmm(hour)} every day — unsaved until you save the week.`);
   };
 
-  // ── editor actions ───────────────────────────────────────────────────────
   const pick = (b: Block) => {
     setLine({ day: b.day, start: b.start, end: b.start + b.span });
     setLineDays([b.day]);
     setLineShowId(b.showId ?? lineShowId ?? shows[0]?.id ?? null);
-    // Bring the order desk into view when picking from the board or a
-    // suggestion — no-op when it is already visible (block: 'nearest').
+    // block: 'nearest' makes this a no-op when the order desk is already visible.
     bandRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   };
 
@@ -302,10 +272,8 @@ export default function SchedulePanel() {
     setLineShowId(showId);
   };
 
-  // A board card's edge dragged to new hours. The vacated hours fall silent
-  // and the gained ones are written over whatever was there — the same
-  // overwrite a drop or the order desk performs, so a run grown into its
-  // neighbour takes those hours rather than stopping short of them.
+  // Vacated hours fall silent; gained ones overwrite whatever was there, so a run
+  // grown into its neighbour takes those hours rather than stopping short.
   const resizeRun = (b: Block, start: number, end: number) => {
     if (!schedule || !b.showId) return;
     setSchedule(resizeBlock(schedule, b, start, end));
@@ -317,8 +285,7 @@ export default function SchedulePanel() {
     );
   };
 
-  // The × on a board card: take the run off the air (a local edit). The
-  // removed line lands in the order desk with the show preselected, so a
+  // The removed line lands in the order desk with the show preselected, so a
   // mis-click is one "Add to schedule" away from restored.
   const removeRun = (b: Block) => {
     if (!schedule || !b.showId) return;
@@ -340,7 +307,6 @@ export default function SchedulePanel() {
     ).length + 1;
   }, [orders, line]);
 
-  // ── persistence ──────────────────────────────────────────────────────────
   const saveWeek = async (): Promise<boolean> => {
     if (!schedule) return false;
     setBusy(true);
@@ -363,14 +329,12 @@ export default function SchedulePanel() {
     } finally { setBusy(false); }
   };
 
-  /** Drop every local edit back to the week the controller is running. */
   const discardEdits = () => {
     if (serverSchedule) setSchedule(cloneWeek(serverSchedule));
   };
 
-  // ⌘S / Ctrl+S saves, the way every desktop editor does. Held in a ref so the
-  // listener registers once yet always sees the current week; a modifier chord
-  // is safe to honour with a field focused (it never eats a bare keystroke).
+  // ⌘S / Ctrl+S saves. Held in a ref so the listener registers once yet always
+  // sees the current week.
   const chordSaveRef = useRef<() => boolean>(() => false);
   chordSaveRef.current = () => {
     if (dirty === 0 || busy) return false;
@@ -380,16 +344,13 @@ export default function SchedulePanel() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.repeat || !(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 's') return;
-      // Swallow the browser's own Save-page chord only when a week actually
-      // went out with it.
+      // Swallow the browser's Save-page chord only when a week went out with it.
       if (chordSaveRef.current()) e.preventDefault();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  // Leaving with edits pending used to lose them silently — the whole reason
-  // the save is easy to miss. Hold the click, ask, then navigate.
   useUnsavedGuard(dirty > 0, setPendingHref);
 
   const leaveTo = (href: string) => {
@@ -397,12 +358,10 @@ export default function SchedulePanel() {
     router.push(href);
   };
 
-  // ── suggestions ──────────────────────────────────────────────────────────
   const suggestions: Suggestion[] = useMemo(() => {
     if (!schedule) return [];
     const out: Suggestion[] = [];
-    // Gap: a silent block some show already covers at the same hours on most
-    // other days — offer to extend it over the gap.
+    // Gap: a silent block some show already covers at the same hours on ≥4 other days.
     for (const d of DAYS) {
       for (const b of dayBlocks(schedule, d.key).filter(x => !x.showId)) {
         let best: { show: ScheduleShow; count: number } | null = null;
@@ -451,7 +410,6 @@ export default function SchedulePanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedule, shows, dismissed]);
 
-  // ── airtime bars ─────────────────────────────────────────────────────────
   const airtime = useMemo(() => {
     if (!schedule) return { rows: [], tickPct: 0 };
     const withHours = shows.map(s => ({ s, hours: showHours(schedule, s.id) }));
@@ -473,7 +431,6 @@ export default function SchedulePanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedule, shows]);
 
-  // ── shells ───────────────────────────────────────────────────────────────
   if (err) {
     return (
       <div className="p-5">
@@ -493,7 +450,6 @@ export default function SchedulePanel() {
     );
   }
 
-  // ── now band derivations ─────────────────────────────────────────────────
   const curBlock = blockAt(schedule, nowDay, nowHour);
   const nextBlock = blockAhead(schedule, nowDay, nowHour, 1);
   const laterBlock = blockAhead(schedule, nowDay, nowHour, 2);
@@ -518,10 +474,7 @@ export default function SchedulePanel() {
 
   return (
     <div className="flex min-h-full min-w-0 flex-1 flex-col bg-[var(--card-bg)]">
-      {/* ── Header ─────────────────────────────────────────────────────── */}
       <div className="border-b border-ink px-5 pt-4 pb-3.5 sm:px-[30px]">
-        {/* The action cluster is `w-full` on a phone so it wraps under the
-            title instead of being pushed off the right edge. */}
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2.5">
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
             <span className="eyebrow whitespace-nowrap text-vermilion">Show plan · The Rundown</span>
@@ -529,15 +482,8 @@ export default function SchedulePanel() {
             <span className="font-mono text-[11.5px] font-bold tracking-[0.06em] text-ink">{clockLabel}</span>
             <Mu className="text-[9px]">{zoneLabel}</Mu>
           </div>
-          {/* Phones get the status and Save from `SaveBar` alone. It is sticky
-              for exactly as long as the week is dirty, carries Review and
-              Discard beside the same button, and follows the operator down
-              into the board where the edits actually happen — so repeating all
-              of it here just spent a row of a 24-hour screen saying it twice.
-              With nothing to save there is nothing to show either. */}
-          {/* No `w-full` on a phone any more: with the status and Save gone,
-              the lone New-show link sizes to its content and sits beside the
-              clock wherever there is room instead of claiming a row. */}
+          {/* Phones get the status and Save from the sticky `SaveBar` alone —
+              repeating them here costs a row of a 24-hour screen. */}
           <div className="ml-auto flex flex-none flex-wrap items-center gap-3 sm:flex-nowrap">
             <span className="hidden flex-none items-center gap-2 sm:flex">
               {dirty > 0 && <span aria-hidden="true" className="size-1.5 bg-[var(--accent)]" />}
@@ -568,17 +514,14 @@ export default function SchedulePanel() {
             </Button>
           </div>
         </div>
-        {/* The board is 24 hours tall, so every row of chrome above it costs a
-            row of the week. The display headline went (the eyebrow and the
-            breadcrumb both already name this page); its standing note stays as
-            the accessible h1. */}
+        {/* Headline is sr-only: every row of chrome above the 24-hour board costs
+            a row of the week, and the eyebrow already names the page. */}
         <h1 className="sr-only">The Rundown — programme the week, one hour at a time</h1>
         <Mu className="mt-1.5 block text-[9px] tracking-[0.1em]">
           Empty hours run autonomously · every change goes live on save
         </Mu>
       </div>
 
-      {/* ── Now band ───────────────────────────────────────────────────── */}
       <div className="border-b border-ink bg-[var(--page-bg)]">
         <div className="grid grid-cols-1 sm:grid-cols-3">
           <NowCell
@@ -599,8 +542,8 @@ export default function SchedulePanel() {
             name={showById(nextBlock.showId)?.name ?? 'Nobody in the chair'}
             color={nextBlock.showId ? colorOf(nextBlock.showId) : null}
             meta={metaOf(nextBlock.showId)}
-            // Hiding "After that" makes this the last cell a phone shows, so
-            // its own rule would double up against the band's own bottom edge.
+            // With "After that" hidden this is a phone's last cell, so its own
+            // rule would double up against the band's bottom edge.
             className="max-sm:border-b-0"
           />
           <NowCell
@@ -610,17 +553,14 @@ export default function SchedulePanel() {
             color={laterBlock.showId ? colorOf(laterBlock.showId) : null}
             meta={metaOf(laterBlock.showId)}
             last
-            // Three stacked cells is ~190px of a phone screen spent on what is
-            // playing before any of the week is visible. On air and Up next
-            // are the two an operator acts on; the hour after that is already
-            // in the board they are scrolling to.
+            // Three stacked cells cost ~190px of a phone screen before any of the
+            // week is visible, and this hour is already in the board below.
             className="hidden sm:block"
           />
         </div>
 
       </div>
 
-      {/* ── Main: line editor, edge-to-edge board, order desk beneath ──── */}
       <div className="min-w-0 px-5 pt-[22px] sm:px-[30px]">
         <div ref={bandRef} className="mb-5 scroll-mt-4">
           <LineEditor
@@ -640,8 +580,8 @@ export default function SchedulePanel() {
                 ? (d === line.day ? cur : cur.filter(x => x !== d))
                 : [...cur, d],
             )}
-            // A preset replaces the set outright, so the sentence's own day has
-            // to move into it — otherwise `applyLine` re-adds the old one and
+            // A preset replaces the set outright, so the sentence's own day has to
+            // move into it — otherwise `applyLine` re-adds the old one and
             // "Weekdays" quietly writes Saturday too.
             onSetLineDays={days => {
               setLineDays(days);
@@ -690,7 +630,6 @@ export default function SchedulePanel() {
         />
       </div>
 
-      {/* The save follows the operator down the page — see SaveBar. */}
       <SaveBar
         dirty={dirty}
         busy={busy}
@@ -699,7 +638,6 @@ export default function SchedulePanel() {
         onSave={saveWeek}
       />
 
-      {/* Review — the unsaved edits behind the header count */}
       <Modal
         open={reviewOpen}
         onOpenChange={setReviewOpen}
@@ -753,8 +691,6 @@ export default function SchedulePanel() {
         </div>
       </Modal>
 
-      {/* Leave guard — a link was clicked with the week still unsaved. Three
-          ways out, and the default (accent) one keeps the work. */}
       <Modal
         open={pendingHref !== null}
         onOpenChange={open => { if (!open) setPendingHref(null); }}
@@ -781,8 +717,7 @@ export default function SchedulePanel() {
                 disabled={busy}
                 onClick={async () => {
                   const href = pendingHref;
-                  // Only leave once the week is actually on the controller —
-                  // a failed save keeps the operator here with the edits.
+                  // A failed save keeps the operator here with the edits.
                   if (href && await saveWeek()) leaveTo(href);
                 }}
               >
@@ -819,7 +754,6 @@ function NowCell({
   meta: string;
   pct?: number;
   last?: boolean;
-  /** Responsive overrides from the caller (which cells a phone shows). */
   className?: string;
 }) {
   const barRef = useRef<HTMLDivElement>(null);
@@ -828,8 +762,8 @@ function NowCell({
     <div
       className={cn(
         'min-w-0 px-5 py-2 sm:px-[22px]',
-        // Stacked on a phone (grid-cols-1), so the divider runs along the
-        // bottom; the column rule comes back with the 3-up grid at sm.
+        // Stacked at grid-cols-1, so the divider runs along the bottom; the column
+        // rule comes back with the 3-up grid at sm.
         !last && 'border-b border-separator-strong sm:border-r sm:border-b-0',
         className,
       )}

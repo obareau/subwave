@@ -6,9 +6,6 @@ import { Snippet, SnippetAddon, SnippetCopyButton, SnippetInput } from '../../ai
 import type { Catalog } from './types';
 import type { BundledLanguage } from 'shiki';
 
-// Shared shell/json block: shiki-highlighted with a floating copy button,
-// squared off to sit inside the newsprint Cards (same treatment as the
-// Debug panel's JsonBlock).
 function CommandBlock({ code, language }: { code: string; language: BundledLanguage }) {
   return (
     <CodeBlock
@@ -26,8 +23,6 @@ interface Props {
 }
 
 export default function McpTab({ catalog }: Props) {
-  // The built-in HTTP endpoint — the recommended path. `${apiBase}${mcpHttpPath}`
-  // is the real, reachable URL for this station.
   const mcpUrl = `${catalog.apiBase}${catalog.mcpHttpPath}`;
 
   const httpCmd = [
@@ -50,7 +45,6 @@ export default function McpTab({ catalog }: Props) {
     2,
   );
 
-  // Local-only alternative: the standalone stdio server, run from a clone.
   const stdioCmd = [
     'claude mcp add subwave \\',
     '  --env SUBWAVE_API_URL=http://localhost:7701 \\',

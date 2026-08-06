@@ -10,7 +10,7 @@ DJ mode used to change what the DJ said. It teased the next track and called bac
 
 ## What's new
 
-When a persona is in DJ mode, the crossfade stops being one fixed length. It shapes each join to the two tracks:
+When a persona is in [DJ mode](/manual/dj), the crossfade stops being one fixed length. It shapes each join to the two tracks:
 
 - Tracks that **share a tempo and key** lock into a short, tight blend.
 - A **clash** gets a longer wash that hides the seam.
@@ -20,7 +20,7 @@ It also times its between-track line to finish before the vocals come in, and it
 
 ## How to use it
 
-First, analyse your library so the station knows each track's tempo, key, and intro length:
+First, [analyse your library](/manual/analysis) so the station knows each track's tempo, key, and intro length:
 
 ```
 cd controller && npm run analyze
@@ -36,4 +36,4 @@ For the riser flourishes, open Settings, go to the Sound FX tab, and leave "Enab
 
 ## Why it helps
 
-A fixed ten second fade treats every pair of songs the same. This reads the tempo and key and shapes each join to fit. Compatible tracks slide together. A clash gets a longer wash, and the DJ talks over the intro instead of the vocals. The station starts to sound like a set instead of a shuffle.
+A fixed ten second fade treats every pair of songs the same. This reads the tempo and key and shapes each join to fit. Compatible tracks slide together. A clash gets a longer wash, and the DJ talks over the intro instead of the vocals. The station starts to sound like a set instead of a shuffle. The named transition moves the DJ picks between got [a dispatch of their own](/news/four-ways-to-leave-a-track).

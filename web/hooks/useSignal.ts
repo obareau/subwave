@@ -33,9 +33,8 @@ export interface UseSignalOptions {
   offline: boolean;
 }
 
-// Times a cheap GET to /health every few seconds while tuned in, surfacing a
-// measured latency + a derived quality band for the footer's signal meter.
-// Probes only while tuned in and on air, so the landing page makes no requests.
+// Times a cheap GET to /health for the footer's signal meter. Probes only while
+// tuned in and on air, so the landing page makes no requests.
 export function useSignal({ tunedIn, status, offline }: UseSignalOptions): Signal {
   const client = useStationClient();
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
@@ -60,8 +59,8 @@ export function useSignal({ tunedIn, status, offline }: UseSignalOptions): Signa
         setLatencyMs(Math.round(performance.now() - t0));
         setFailed(false);
       } catch {
-        // Timeout or network error — treat as a degraded signal rather than
-        // surfacing an error; the watchdog in usePlayer owns actual recovery.
+        // Timeout or network error reads as a degraded signal, not an error;
+        // usePlayer's watchdog owns actual recovery.
         if (!cancelled) {
           setLatencyMs(null);
           setFailed(true);
@@ -71,8 +70,7 @@ export function useSignal({ tunedIn, status, offline }: UseSignalOptions): Signa
       }
     };
 
-    // Probes pause while the tab is hidden — a backgrounded player doesn't
-    // need a live needle — and fire again immediately on return.
+    // Probes pause while the tab is hidden and fire again on return.
     const stopPolling = pollWhileVisible(() => { void probe(); }, PROBE_INTERVAL_MS);
     return () => {
       cancelled = true;

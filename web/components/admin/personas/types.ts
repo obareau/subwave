@@ -1,5 +1,4 @@
-// Shared types for the personas editor (/admin/personas). Split out of
-// PersonasPanel so the presentational sub-components can share one shape.
+// Shared types for the personas editor (/admin/personas).
 
 import type { EngineAvailability } from '../tts/engineMeta';
 export type { EngineAvailability };
@@ -8,12 +7,10 @@ export interface PersonaTts {
   engine: 'piper' | 'kokoro' | 'chatterbox' | 'pocket-tts' | 'cloud' | 'remote' | string;
   cloudProvider: string;
   voice: string;
-  // Per-persona voice-level trim in dB (−12..+12, default 0 = no change). Stacks
-  // on top of the per-engine gain. See controller settings.ts:clampTtsGain.
+  // −12..+12, 0 = no change. Stacks on the per-engine gain (settings.ts:clampTtsGain).
   gainDb: number;
-  // Per-persona speech-rate multiplier (0.5..2.0×, default 1.0 = no change).
-  // Composes with the per-engine speed + daypart energy. Honoured by
-  // Piper/Kokoro/cloud only. See controller settings.ts:clampTtsSpeed.
+  // 0.5..2.0×, 1.0 = no change. Composes with the per-engine speed + daypart
+  // energy; Piper/Kokoro/cloud only (settings.ts:clampTtsSpeed).
   speed: number;
 }
 
@@ -23,9 +20,8 @@ export interface Persona {
   tagline: string;
   frequency: string;
   scriptLength: string;
-  // When true the persona behaves like a working DJ — back-announces AND teases
-  // what's next, runs callbacks across the session, and is more present. Off =
-  // the historical tasteful-narrator behaviour.
+  // Back-announces AND teases what's next, and runs callbacks across the session.
+  // Off = the tasteful-narrator behaviour.
   djMode: boolean;
   // Tone dials, 0–10, default 5 (neutral). Map to prompt bands server-side.
   humour: number;
@@ -35,16 +31,14 @@ export interface Persona {
   // Free-text on-air language ("Turkish", "Türkçe"). Empty = English (no
   // directive injected server-side).
   language: string;
-  // Stored basename like `p_abc123.png` — empty when no avatar is uploaded.
-  // The actual image is served via /api/persona-avatar/<id>; we keep the
-  // basename in state only so the form round-trips it on save.
+  // Basename like `p_abc123.png`, empty when none. The image itself is served from
+  // /api/persona-avatar/<id>; the basename is held only so a save round-trips it.
   avatar: string;
   tts: PersonaTts;
   skills: string[];
 }
 
-// One saved system-prompt template in the library. Mirrors the controller's
-// djPrompts entries (settings.ts:validateDjPromptsStrict).
+// Mirrors the controller's djPrompts entries (settings.ts:validateDjPromptsStrict).
 export interface DjPromptPreset {
   id: string;
   name: string;
@@ -54,8 +48,7 @@ export interface DjPromptPreset {
 export interface FormState {
   personas: Persona[];
   activePersonaId: string;
-  // The system-prompt template library + which entry is active. '' selects
-  // the built-in default template.
+  // '' selects the built-in default template.
   djPrompts: DjPromptPreset[];
   activeDjPromptId: string;
   // Station house rules — appended to EVERY spoken-output prompt, including
@@ -80,10 +73,9 @@ export interface VoiceOption {
 }
 
 export interface SettingsResponse {
-  // The persona actually on air right now — resolves a scheduled show's owner
-  // when a show is live this hour, otherwise the admin-selected default. The
-  // roster/hero mark "on air" by this; `values.activePersonaId` is only the
-  // default. Optional so the UI degrades against older controllers.
+  // The persona actually on air: a live show's owner, else the admin-selected
+  // default. `values.activePersonaId` is only the default. Optional so the UI
+  // degrades against older controllers.
   onAir?: {
     personaId?: string;
     show?: { id: string; name: string } | null;
@@ -117,10 +109,9 @@ export interface SettingsResponse {
   env?: Record<string, unknown>;
 }
 
-// One entry in the shipped community persona catalog (GET /personas/community).
-// Mirrors the controller's CommunityPersona (personas/community.ts). The
-// catalog is station-agnostic — "already in the roster" is computed client-side
-// by name match, since the panel holds the roster anyway.
+// GET /personas/community; mirrors the controller's CommunityPersona
+// (personas/community.ts). "Already in the roster" is computed client-side by name
+// match, since the panel holds the roster anyway.
 export interface CommunityPersona {
   slug: string;
   displayName: string;

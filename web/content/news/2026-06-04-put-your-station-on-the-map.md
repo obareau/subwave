@@ -6,11 +6,11 @@ author: The SUB/WAVE desk
 excerpt: The new /stations page is a live directory of SUB/WAVE stations around the world. Add yours with a short form and it shows what it is playing the moment it merges.
 ---
 
-SUB/WAVE is self-hosted, so anyone can run their own station. Until now there was no way to find out who else did. The new /stations page is a directory of stations around the world, with a map and a grid that shows who is on the air right now.
+SUB/WAVE is self-hosted, so anyone can run their own station. Until now there was no way to find out who else did. The new [/stations](/stations) page is a directory of stations around the world, with a map and a grid that shows who is on the air right now.
 
 ## What's new
 
-Visit /stations and you get three things:
+Visit [/stations](/stations) and you get three things:
 
 - **A live grid of station cards**, each showing what it's playing this second.
 - **A world map** with every station plotted as a dot and labelled by city.
@@ -24,4 +24,4 @@ Adding your station takes a minute and needs no fork. On the page, click "Add yo
 
 ## Why it helps
 
-A self-hosted network is invisible by default. This gives it a home. You can see who else is running a station, hear what they are playing right now, and add your own to the map in a couple of minutes. One file per station keeps submissions easy to review and easy to revert, so the directory grows by contribution without getting messy.
+A self-hosted network is invisible by default. This gives it a home. You can see who else is running a station, hear what they are playing right now, and add your own to the map in a couple of minutes. (Not on air yet? The [setup guide](/setup) gets a station running first.) One file per station keeps submissions easy to review and easy to revert, so the directory grows by contribution without getting messy.

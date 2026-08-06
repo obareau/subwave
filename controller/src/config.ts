@@ -213,6 +213,11 @@ export const config = {
     // controller learns to air the link OVER the bed rather than over the next
     // song. Mirrors jinglePlayingFile; same {filename, startedAt} shape.
     bedPlayingFile: `${STATE_DIR}/bed-playing.json`,
+    // Written by radio.liq's starve guard (#1300 bug 7): {starved, since, at},
+    // unix SECONDS. `at` is a heartbeat refreshed every tick WHILE starved, so
+    // the controller can tell a live outage from a marker left behind by a
+    // mixer that died mid-outage. Read via broadcast/music-starve.ts.
+    musicStarvedFile: `${STATE_DIR}/music-starved.json`,
   },
   session: {
     // The live DJ session — a chat-history JSON the controller rewrites as
@@ -229,10 +234,14 @@ export const config = {
     // queue.history is capped at 50 (~3h) and only lives in-memory, which is
     // why we keep a separate, longer-lived store.
     recentPlaysFile: `${STATE_DIR}/recent-plays.json`,
-    // Rolling 24h play log cap. With a 3-min max-track cap the station can burn
+    // Rolling play log cap. With a 3-min max-track cap the station can burn
     // ~550 plays/day, so 300 entries barely spanned the 12h anti-repeat window
-    // (issue #874); 600 keeps the full window populated at that churn.
-    recentPlaysMax: 600,
+    // (issue #874). 2500 keeps FOUR days populated at that churn — sized so the
+    // large-library recency boost (recencyWindowsForLibrary, up to 36h) and a
+    // maxed no-repeat window (clampNoRepeatWindow, up to 1000 distinct) are
+    // both honestly suppliable from the sidecar, with margin. ~300KB of JSON,
+    // rewritten once per play — negligible either way.
+    recentPlaysMax: 2500,
     // Count-based hard no-repeat guard: the picker (both pool and agent paths)
     // never re-airs any of the last N DISTINCT plays. Unlike the time-window
     // guard (recencyWindowsForLibrary) this is non-relaxable — it survives the
@@ -242,7 +251,11 @@ export const config = {
     // (effectiveNoRepeatWindow) so a small catalogue never fully blocks; 0
     // disables. Seeds settings.llm.noRepeatWindow — the live, admin-tunable
     // value; env wins. Listener requests stay exempt (request path is untouched).
-    noRepeatWindow: parseInt(process.env.NO_REPEAT_WINDOW || '100', 10),
+    // Default 250 (was 100): 100 distinct blocked ~6-8h of air — a bubble of
+    // ~300 tracks satisfied it forever. 250 is still auto-scaled DOWN on small
+    // libraries by effectiveNoRepeatWindow's 37.5% ceiling, so only catalogues
+    // that can absorb the memory actually carry it.
+    noRepeatWindow: parseInt(process.env.NO_REPEAT_WINDOW || '250', 10),
   },
   curiosity: {
     // Durable dedup ledger for the `curiosity` segment capability. Holds every

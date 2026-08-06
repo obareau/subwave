@@ -1,19 +1,42 @@
-// Public site origin — the single source of truth for absolute URLs in
-// metadata, Open Graph / Twitter cards, robots, and the sitemap.
+// Public site origin: the single source of truth for absolute URLs in metadata,
+// OG/Twitter cards, robots and the sitemap.
 //
-// SITE_URL is resolved at RUNTIME: every route that emits an absolute URL
-// (robots.txt, sitemap.xml, and each public page's canonical/og:url via
-// `export const dynamic = 'force-dynamic'`) renders per-request, so the
-// running container's env is what matters. This is deliberate — the published
-// GHCR image is one generic build shared by every operator, so the domain
-// cannot be known at image-build time; baking it produced localhost URLs on
-// every image-based install. Define SITE_URL once in .env
-// (docker-compose.yml plumbs it into the web container's environment).
-// NEXT_PUBLIC_SITE_URL is accepted as a fallback for older configs. Defaults
-// to the dev origin so local builds still produce a valid `metadataBase`
-// without Next's warning.
+// Resolved at RUNTIME. Every route emitting an absolute URL is force-dynamic, so
+// the running container's env is what matters. This is deliberate: the published
+// GHCR image is one generic build shared by every operator, so the domain can't
+// be known at image-build time, and baking it produced localhost URLs on every
+// image-based install. NEXT_PUBLIC_SITE_URL is accepted as a fallback for older
+// configs. Defaults to the dev origin so local builds still produce a valid
+// `metadataBase` without Next's warning.
 export const SITE_URL = (
   process.env.SITE_URL ||
   process.env.NEXT_PUBLIC_SITE_URL ||
   'http://localhost:7700'
 ).replace(/\/$/, '');
+
+// The project's own public site. Non-official installs point the canonicals
+// of SHARED pages (landing, docs, news, community catalogs) here — see
+// lib/seo.ts canonicalUrl().
+export const OFFICIAL_SITE_URL = 'https://getsubwave.com';
+
+function isOfficialHost(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === 'getsubwave.com' || host === 'www.getsubwave.com';
+  } catch {
+    return false;
+  }
+}
+
+// True when this install IS the official site, or the operator explicitly
+// opted into indexing everything with SUBWAVE_INDEX_ALL=1.
+//
+// Every install serves the same marketing/docs/news pages as getsubwave.com
+// (one shared image), and each used to self-assert canonical over them — so
+// Google folds the duplicates into ONE winner per cluster, and a public
+// self-hosted station could win a dispatch or setup guide away from the
+// official site. Non-official installs therefore donate those canonicals
+// back (and drop the pages from their sitemap) while keeping the pages
+// themselves fully served — nothing changes for their visitors.
+export const IS_OFFICIAL_SITE =
+  process.env.SUBWAVE_INDEX_ALL === '1' || isOfficialHost(SITE_URL);

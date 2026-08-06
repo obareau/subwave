@@ -28,13 +28,12 @@ export interface TransportBarProps {
 
 const SCALE_NUMS = [0, 50, 100, 150, 200, 250];
 
-// Drag distance (px) that sweeps the volume knob across its full 0→1 range.
-// The gesture is *relative* to the press point — unbounded by the knob's ~40px
-// footprint — so this sets the dial's resolution: a comfortable thumb travel
-// for the whole range, with small nudges giving fine control.
+// Drag distance (px) sweeping the knob across its full 0→1 range. The gesture
+// is relative to the press point, so this sets the dial's resolution rather
+// than the knob's ~40px footprint.
 const KNOB_DRAG_RANGE_PX = 160;
-// Movement (px) before a press counts as a drag — swallows tap jitter so a
-// tap on the knob leaves the level untouched.
+// Movement (px) before a press counts as a drag, so tap jitter can't jog the
+// level.
 const KNOB_DRAG_DEADZONE_PX = 4;
 
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
@@ -79,16 +78,15 @@ export default memo(function TransportBar({
   // dead control (issue #298).
   const iosVolumeLocked = useIsIOS();
 
-  // The window between the tune-in gesture and the first audible frame —
-  // surfaced on the power ring so the player doesn't claim to play while silent.
+  // Surfaced on the power ring so the player doesn't claim to play while
+  // still silent.
   const connecting = status === 'connecting';
 
-  // Knob pointer sweeps the conic tick scale: -135° (silent) → +135° (full),
-  // matching the scale's `from -135deg` origin in globals.css.
+  // -135° (silent) → +135° (full), matching the conic scale's `from -135deg`
+  // origin in globals.css.
   const angle = -135 + volume * 270;
 
-  // Needle maps measured latency onto the 0–SCALE_MAX ms scale; parked at 0%
-  // before the first probe, pegged to the top when a probe outright failed.
+  // Parked at 0% before the first probe, pegged to the top when one failed.
   const needlePct =
     latencyMs != null
       ? Math.min(100, (Math.min(latencyMs, SCALE_MAX) / SCALE_MAX) * 100)
@@ -100,8 +98,8 @@ export default memo(function TransportBar({
   const qualityTone =
     signalQuality === 'idle' || signalQuality === 'offline' ? 'text-muted' : 'text-vermilion';
 
-  // One-shot scale pulse when tunedIn flips, so the power button visibly
-  // "engages" even when tune was triggered via keyboard / media keys.
+  // Fires on the tunedIn flip, not the click, so keyboard and media keys get
+  // the same feedback.
   const [tuneScope, animateTune] = useAnimate<HTMLButtonElement>();
   const prevTunedInRef = useRef(tunedIn);
   useEffect(() => {
@@ -111,9 +109,8 @@ export default memo(function TransportBar({
     animateTune(tuneScope.current, { scale: [1, 1.06, 1] }, { duration: 0.25, ease: [0.2, 0.7, 0.2, 1] });
   }, [tunedIn, animateTune, tuneScope]);
 
-  // Pulse the whole knob assembly on keyboard-driven volume adjusts (the inner
-  // .fz-knob owns the rotate transform, so we scale the wrapper to avoid
-  // clobbering it). Skip the initial mount tick.
+  // Scale the WRAPPER: the inner .fz-knob owns the rotate transform and
+  // scaling it would clobber that. Skips the initial mount tick.
   const knobWrapRef = useRef<HTMLDivElement>(null);
   const firstPulseRef = useRef(true);
   useEffect(() => {
@@ -141,12 +138,8 @@ export default memo(function TransportBar({
     }
   }, [volume]);
 
-  // ── Volume knob: relative vertical drag ───────────────────────────────
-  // Press anywhere on the knob and drag up to raise / down to lower — the
-  // standard hardware-knob gesture. Movement is measured relative to the
-  // press point, so the finger can roam the whole screen (pointer capture
-  // keeps tracking after it leaves the 40px target) and resolution isn't
-  // crushed into the knob's footprint the way the old horizontal slider was.
+  // Movement is measured relative to the press point, and pointer capture
+  // keeps tracking after the finger leaves the 40px target.
   const dragRef = useRef<{ id: number; startY: number; startVolume: number; engaged: boolean } | null>(null);
 
   const onKnobPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -162,10 +155,8 @@ export default memo(function TransportBar({
     const drag = dragRef.current;
     if (!drag || drag.id !== e.pointerId) return;
     const dy = drag.startY - e.clientY; // up = louder
-    // Dead-zone: a tap (or its incidental finger jitter) shouldn't jog the
-    // level — only engage once the press turns into a deliberate drag, then
-    // re-baseline so the first adjustment starts from the engagement point
-    // with no jump.
+    // Engage only once the press turns into a deliberate drag, then
+    // re-baseline so the first adjustment starts there with no jump.
     if (!drag.engaged) {
       if (Math.abs(dy) < KNOB_DRAG_DEADZONE_PX) return;
       drag.engaged = true;
@@ -184,9 +175,8 @@ export default memo(function TransportBar({
     }
   };
 
-  // Keyboard a11y for the role="slider" knob. Up/Down are handled globally
-  // (PlayerApp's shortcuts) regardless of focus, so binding them here too would
-  // double-step — we only add the non-conflicting jump keys.
+  // Up/Down are handled globally (PlayerApp's shortcuts) regardless of focus,
+  // so binding them here too would double-step. Jump keys only.
   const onKnobKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     let next: number | null = null;
     if (e.key === 'Home') next = 0;
@@ -215,13 +205,11 @@ export default memo(function TransportBar({
 
   return (
     <div
-      // Full-bleed bar pinned to the very bottom at every width. Bottom +
-      // side safe-area insets live on the deck itself (below) so its own
-      // background fills down to the screen edge — no page bg peeks through.
+      // Safe-area insets live on the deck below, not here, so its background
+      // fills to the screen edge with no page bg peeking through.
       className="absolute inset-x-0 bottom-0 z-20"
     >
       <div className="fz-deck relative grid grid-cols-[auto_1fr_auto] items-stretch bg-[var(--fz-panel)] pt-3 pr-[env(safe-area-inset-right)] pb-[calc(env(safe-area-inset-bottom)_+_0.75rem)] pl-[env(safe-area-inset-left)] [border-top:1px_solid_var(--fz-edge)]">
-        {/* ── POWER ──────────────────────────────────────────────── */}
         <div className="relative flex flex-col items-center justify-center gap-1.5 px-4 pt-1 pb-2 md:px-5 md:pt-1 md:pb-2.5 lg:gap-2 lg:px-6 lg:pt-1.5 lg:pb-3">
           <span className="v3-caption hidden text-muted lg:block">Power</span>
           <m.button
@@ -241,10 +229,7 @@ export default memo(function TransportBar({
           </m.button>
         </div>
 
-        {/* ── SIGNAL ─────────────────────────────────────────────── */}
         <div className="relative flex min-w-0 items-center justify-center px-2 [border-left:1px_solid_var(--fz-line)] md:px-5 lg:px-6">
-          {/* The analog signal meter — shown at every width (the context line
-              lives in the header now). */}
           <div className="flex w-full flex-col justify-center gap-1 font-mono lg:gap-1.5">
             <div className="flex items-baseline justify-between gap-2 lg:gap-4">
               <span className="text-[11px] font-semibold tracking-[0.04em] whitespace-nowrap text-ink lg:text-[12px]">
@@ -275,13 +260,11 @@ export default memo(function TransportBar({
           </div>
         </div>
 
-        {/* ── VOLUME ─────────────────────────────────────────────── */}
         <div className="relative flex flex-col items-center justify-center gap-1.5 px-4 pt-1 pb-2 [border-left:1px_solid_var(--fz-line)] md:px-5 md:pt-1 md:pb-2.5 lg:gap-2 lg:px-6 lg:pt-1.5 lg:pb-3">
           <span className="v3-caption hidden text-muted lg:block">Volume</span>
           {iosVolumeLocked ? (
-            // iOS: volume is hardware-only (see iosVolumeLocked above). Echo a
-            // phone volume rocker rather than ship a dead knob; the full
-            // explanation lives in the tooltip / accessible label.
+            // iOS: volume is hardware-only (see iosVolumeLocked above), so
+            // echo a volume rocker rather than ship a dead knob.
             <div
               className="flex h-10 items-center gap-1.5 text-muted lg:h-[48px]"
               title="On iOS, volume is set with your device's buttons"
@@ -295,11 +278,9 @@ export default memo(function TransportBar({
             </div>
           ) : (
             <div className="flex items-center gap-3 lg:gap-4">
-              {/* The knob is its own control: a role="slider" surface driving a
-                  relative vertical-drag gesture (see onKnobPointerDown). The
-                  ARIA value attrs keep it readable by screen readers; Up/Down
-                  come from PlayerApp's global shortcuts. touch-none stops the
-                  page scrolling out from under a drag. */}
+              {/* role="slider" + the ARIA value attrs keep the drag gesture
+                  readable by screen readers; touch-none stops the page
+                  scrolling out from under a drag. */}
               <div
                 ref={knobWrapRef}
                 role="slider"

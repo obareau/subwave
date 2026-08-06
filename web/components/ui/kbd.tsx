@@ -7,8 +7,7 @@ export interface KbdProps extends HTMLAttributes<HTMLElement> {
   children?: ReactNode;
 }
 
-/* Small newsprint key-cap badge for rendering shortcut hints. Pure CSS — no
-   dependency. Used by the command palette and the shortcuts help dialog. */
+/* Newsprint key-cap badge for shortcut hints. Pure CSS, no dependency. */
 export function Kbd({ children, className, ...rest }: KbdProps) {
   return (
     <kbd

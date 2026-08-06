@@ -1,7 +1,4 @@
 'use client';
-// "Editing · <name>" card: AI fill, avatar, name, tagline, soul, language.
-// Two columns from lg up so the soul textarea sits beside the identity fields
-// instead of running the full editor width.
 import type { ChangeEvent } from 'react';
 import type { Persona } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
@@ -47,7 +44,6 @@ export function PersonaIdentityCard({
       )}
 
       <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8">
-        {/* LEFT — avatar, name, tagline, language */}
         <div className="grid gap-4">
           <div className="stack-mobile grid grid-cols-[96px_1fr] items-start gap-4">
             <PersonaAvatarPicker
@@ -107,7 +103,6 @@ export function PersonaIdentityCard({
           </div>
         </div>
 
-        {/* RIGHT — soul */}
         <div className="field mt-4 lg:mt-0">
           <Label>Soul</Label>
           <Textarea

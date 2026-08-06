@@ -1,16 +1,13 @@
-// Runtime JSON view of the community stations directory. The /stations page
-// renders this same data as HTML; the native app needs it as JSON so a fresh
-// installer can browse and tune in without knowing any URL.
+// Runtime JSON view of the community stations directory, for the native app.
 //
-// NOTE: this lives at /stations.json, NOT under /api — on getsubwave.com the
-// Caddyfile routes /api/* to the controller, so an /api/stations route would
-// never reach this Next.js app. Everything outside /api + /stream.mp3 hits web.
+// It lives at /stations.json, NOT under /api: the Caddyfile routes /api/* to the
+// controller, so an /api/stations route would never reach this Next.js app.
 import { NextResponse } from 'next/server';
 import { getAllStations } from '@/lib/stations';
 
-// The directory is sourced from the community catalog (ISR-revalidated in
-// stations.ts), so this feed re-generates on that cadence rather than only at
-// deploy time. force-static keeps it a cached static asset between revalidations.
+// Sourced from the community catalog (ISR-revalidated in stations.ts), so this
+// re-generates on that cadence rather than only at deploy time; force-static
+// keeps it a cached static asset between revalidations.
 export const dynamic = 'force-static';
 
 export async function GET() {

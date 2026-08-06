@@ -30,9 +30,7 @@ interface PaletteItem {
   onSelect: () => void;
 }
 
-/* ⌘K command palette for the listener-facing player. Scope is player
-   actions only — no jumping to admin/site routes. Each item runs its
-   handler and closes the palette. */
+/* Scope is player actions only — never admin/site routes. */
 export default function CommandPalette({
   open,
   onOpenChange,

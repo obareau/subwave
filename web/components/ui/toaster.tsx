@@ -2,7 +2,7 @@
 
 import { Toaster as SonnerToaster } from 'sonner';
 
-/* V3 Toaster — Sonner with no rounding, ink-bordered, cream-fill. */
+/* Sonner with no rounding, ink-bordered, cream-fill. */
 export function Toaster() {
   return (
     <SonnerToaster

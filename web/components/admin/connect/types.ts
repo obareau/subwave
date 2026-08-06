@@ -1,5 +1,4 @@
-// Client mirror of the controller's connect catalog shapes (src/connect/
-// catalog.ts). Kept as a plain type module so every tab imports one source.
+// Client mirror of the controller's connect catalog shapes (src/connect/catalog.ts)
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 

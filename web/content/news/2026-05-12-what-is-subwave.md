@@ -29,6 +29,6 @@ The DJ pulls from what you actually own, so the station sounds like your taste, 
 
 ## Tune in
 
-Open the player and hit play. If you're setting up your own, the [setup guide](/setup) gets you on air in about ten minutes. Everything past the first three settings is configured from the admin screen: the DJ's voice, its personality, how chatty it is, the look of the player.
+Open the player and hit play. The DJ [takes requests](/news/request-a-track), and the stream plays on [far more than a browser](/news/listen-anywhere). If you're setting up your own, the [setup guide](/setup) gets you on air in about ten minutes. Everything past the first three settings is configured from the [admin screen](/manual/admin): the DJ's [voice](/manual/voices), its personality, how chatty it is, the [look of the player](/manual/themes).
 
 It's your station. It just happens to run itself.

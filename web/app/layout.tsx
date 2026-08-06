@@ -14,14 +14,12 @@ import ThemeProvider from '@/components/ThemeProvider';
 import JsonLd from '@/components/JsonLd';
 import { Toaster } from '@/components/ui/toaster';
 
-// Visitor tracking. The gtag.js script only loads when a Measurement ID is
-// configured (see lib/ga — resolved from the runtime env so it works without a
-// rebuild), so dev and un-instrumented deploys stay analytics-free.
+// gtag.js only loads when a Measurement ID is configured (lib/ga, resolved from
+// the runtime env so it works without a rebuild), so dev and un-instrumented
+// deploys stay analytics-free.
 
-// Fraunces — the display serif. Soft, optical-axis editorial face used for
-// every headline + the masthead wordmark; opsz makes it self-tune contrast to
-// the rendered size. Plus Jakarta Sans carries body/UI; JetBrains Mono is data
-// (timestamps, durations, code, kbd) so numbers read like hi-fi gear.
+// Fraunces is the display serif; its opsz axis self-tunes contrast to the
+// rendered size. Plus Jakarta Sans carries body/UI, JetBrains Mono is data.
 const fraunces = Fraunces({
   subsets: ['latin'],
   axes: ['opsz'],
@@ -30,9 +28,9 @@ const fraunces = Fraunces({
 });
 
 // Curated display faces a theme can select via the --display-font token (see
-// lib/theme FONT_STACKS + the theme-token registry). Loaded globally so the
-// operator-picked headline face applies across every skin + the admin console.
-// Kept small to bound bundle weight; latin subset, display: swap.
+// lib/theme FONT_STACKS). Loaded globally so the operator-picked headline face
+// applies across every skin + the admin console; kept small to bound bundle
+// weight.
 const doto = Doto({
   subsets: ['latin'],
   weight: 'variable',
@@ -80,9 +78,9 @@ const plusJakarta = Plus_Jakarta_Sans({
   variable: '--font-sans',
 });
 
-// JetBrains is the default data face. Its next/font variable is --font-jetbrains
-// now (not --font-mono), because the `font-mono` utility follows the themeable
-// --mono-font token (globals.css @theme), which defaults to JetBrains.
+// The default data face. Its next/font variable is --font-jetbrains, NOT
+// --font-mono: the `font-mono` utility follows the themeable --mono-font token
+// (globals.css @theme), which defaults to JetBrains.
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin', 'latin-ext'],
   weight: ['300', '400', '500', '700', '800'],
@@ -90,8 +88,7 @@ const jetbrainsMono = JetBrains_Mono({
   variable: '--font-jetbrains',
 });
 
-// Curated monospace faces a theme can select via the --mono-font token — reaches
-// the mono-forward skins (Subamp, TTY) and everything using `font-mono`.
+// Curated monospace faces a theme can select via the --mono-font token.
 const ibmPlexMono = IBM_Plex_Mono({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],
@@ -131,8 +128,8 @@ const DESCRIPTION =
 const SOCIAL_TITLE = 'SUB/WAVE — A real internet radio station';
 const OG_IMAGE_ALT = 'SUB/WAVE — a real internet radio station';
 
-// Site-wide structured data. WebSite + Organization give search engines the
-// canonical name/logo to attach to rich results across every page.
+// WebSite + Organization give search engines the canonical name/logo for rich
+// results across every page.
 const SITE_JSONLD = [
   {
     '@context': 'https://schema.org',
@@ -150,22 +147,19 @@ const SITE_JSONLD = [
   },
 ];
 
-// The share-card image tags (og:image, twitter:image) are emitted manually in
-// <head> below — NOT via the Metadata API. Next routes every URL in the
-// Metadata API through `metadataBase`, and it drops metadataBase on the
-// force-dynamic homepage, pinning those URLs to a localhost origin.
-// Hand-written <meta> tags are emitted verbatim, so the absolute SITE_URL
-// survives. Per-page canonical + og:url go through lib/seo's pageMeta(), which
-// passes absolute strings the Metadata API leaves untouched. The Metadata API
-// still owns everything that isn't a fixed URL — titles, descriptions, icons,
-// PWA metas.
+// The share-card image tags (og:image, twitter:image) are emitted by hand in
+// <head> below, NOT via the Metadata API: Next routes every Metadata API URL
+// through `metadataBase` and drops metadataBase on the force-dynamic homepage,
+// pinning those URLs to a localhost origin. Hand-written <meta> tags are emitted
+// verbatim so the absolute SITE_URL survives. The Metadata API still owns
+// everything that isn't a fixed URL.
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: { default: 'SUB/WAVE', template: '%s · SUB/WAVE' },
   description: DESCRIPTION,
   applicationName: 'SUB/WAVE',
-  // iOS standalone-install + status bar styling. Android picks these up via
-  // manifest.js; iOS still needs the `apple-mobile-web-app-*` metas.
+  // Android picks these up via manifest.js; iOS still needs the
+  // `apple-mobile-web-app-*` metas.
   appleWebApp: {
     capable: true,
     title: 'SUB/WAVE',
@@ -190,9 +184,8 @@ export const viewport: Viewport = {
     { media: '(prefers-color-scheme: light)', color: '#f3efe6' },
     { media: '(prefers-color-scheme: dark)',  color: '#100e0c' },
   ],
-  // `cover` lets the page extend under the iPhone notch / Dynamic Island /
-  // home indicator when installed. Pair with env(safe-area-inset-*) in CSS
-  // for any UI close to the edges.
+  // `cover` lets the page extend under the iPhone notch / home indicator when
+  // installed. Pair with env(safe-area-inset-*) for any UI near the edges.
   viewportFit: 'cover',
 };
 
@@ -218,14 +211,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             constant from lib/skin — no untrusted input. */}
         <script dangerouslySetInnerHTML={{ __html: SKIN_INIT_SCRIPT }} />
 
-        {/* Site-wide structured data (WebSite + Organization). */}
         <JsonLd data={SITE_JSONLD} />
 
         {/* Absolute share-card image tags — see the metadata comment above for
-            why these bypass the Metadata API. Per-page canonical + og:url are
-            set via lib/seo's pageMeta(). SITE_URL is resolved from the runtime
-            container env — the public pages render per-request (see
-            lib/site.ts), so these tags always carry the operator's domain. */}
+            why these bypass the Metadata API. SITE_URL is resolved from the
+            runtime container env and the public pages render per-request (see
+            lib/site.ts), so these always carry the operator's domain. */}
         <meta property="og:image" content={`${SITE_URL}/og`} />
         <meta property="og:image:type" content="image/png" />
         <meta property="og:image:width" content="1200" />
@@ -239,10 +230,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <ThemeProvider>
             <ServiceWorkerRegister />
             {children}
-            {/* App-shell transient-feedback channel. Mounted once at the root so
-                every route (onboarding, observatory, landing, admin, player) has
-                somewhere for `notify()` (lib/notify → Sonner) to appear; the
-                per-shell mounts were removed to avoid a duplicate toaster. */}
+            {/* Mounted once at the root so every route has somewhere for
+                `notify()` (lib/notify → Sonner) to appear. Do not add per-shell
+                mounts — they produce a duplicate toaster. */}
             <Toaster />
           </ThemeProvider>
         </MotionProvider>

@@ -1,14 +1,10 @@
-/* ============================================================================
-   SUB/WAVE — Library Observatory · data + layout
-   Ported from the Claude Design prototype (data.jsx / viz.jsx helpers) and
-   adapted to real library records. The prototype laid tracks out by genre
-   cluster + gaussian spread — we reproduce that from real genres, so no
-   embedding projection is needed. Continuous `energyVal` (for the heat ramp)
-   is derived deterministically from the real `energy` band. A seeded mock
-   library remains for the empty-library fallback.
-   ============================================================================ */
+/* Library Observatory — data + layout.
+   Tracks lay out by genre cluster + gaussian spread, so no embedding
+   projection is needed. Continuous `energyVal` (for the heat ramp) is derived
+   deterministically from the discrete `energy` band. A seeded mock library
+   covers the empty-library fallback. */
 
-// --- seeded RNG (mulberry32) ------------------------------------------------
+// seeded RNG (mulberry32)
 export function mulberry32(a: number) {
   return function () {
     a |= 0;
@@ -28,8 +24,8 @@ export function gauss(rng: () => number): number {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
-// Stable string → uint32 seed (FNV-1a). Lets every per-track value seed off the
-// track id, so positions/energy jitter are identical across reloads.
+// Stable string → uint32 seed (FNV-1a), so per-track positions and energy
+// jitter are identical across reloads.
 export function hashStr(s: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -56,11 +52,10 @@ function dist2(a: { x: number; y: number }, b: { x: number; y: number }): number
   return dx * dx + dy * dy;
 }
 
-// nearest neighbours among a candidate list (spatial — used for synapse links
-// and as the mix-next fallback when the server returned no KNN neighbours).
-// Single-pass top-k insertion rather than sorting the whole list — the pool can
-// be the full node set, and k is tiny (6), so O(n·k) beats O(n log n) with none
-// of the per-item object allocation.
+// Spatial nearest neighbours, used for synapse links and as the mix-next
+// fallback when the server returned no KNN neighbours. Single-pass top-k
+// insertion rather than a full sort: the pool can be the whole node set and k
+// is tiny (6), so O(n·k) beats O(n log n) with no per-item allocation.
 export function nearest(track: ObsTrack, list: ObsTrack[], k: number): ObsTrack[] {
   if (k <= 0) return [];
   const best: { t: ObsTrack; d: number }[] = [];
@@ -76,7 +71,7 @@ export function nearest(track: ObsTrack, list: ObsTrack[], k: number): ObsTrack[
   return best.map((p) => p.t);
 }
 
-// tally — count occurrences (single value or array per item), sorted desc
+// Count occurrences (single value or array per item), sorted desc
 export function tally<T>(list: T[], fn: (t: T) => string | string[] | null | undefined): [string, number][] {
   const m = new Map<string, number>();
   list.forEach((t) => {
@@ -100,8 +95,8 @@ export function arcPath(cx: number, cy: number, r0: number, r1: number, a0: numb
   return `M${x0o} ${y0o} A${r1} ${r1} 0 ${large} 1 ${x1o} ${y1o} L${x1i} ${y1i} A${r0} ${r0} 0 ${large} 0 ${x0i} ${y0i} Z`;
 }
 
-// Deterministic pseudo-embedding for the dossier fingerprint, used as a
-// fallback when a track has no stored vector. Same look as the prototype's.
+// Deterministic pseudo-embedding for the dossier fingerprint, used when a
+// track has no stored vector.
 export function embeddingVector(seed: number, dim: number): number[] {
   const rng = mulberry32(seed);
   const out = new Array(dim);
@@ -126,8 +121,8 @@ export function normaliseFingerprint(vec: number[]): number[] {
   return vec.map((v) => Math.max(-1, Math.min(1, v / max)));
 }
 
-// Chromatic tonic → hue for the SONG SHAPE key bands. Major reads lighter/
-// warmer, minor darker/cooler, so a section's colour conveys both at a glance.
+// Chromatic tonic → hue for the SONG SHAPE key bands; major reads lighter,
+// minor darker, so colour conveys tonic and mode at once.
 const TONIC_ORDER = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const FLAT_TO_SHARP: Record<string, string> = {
   Db: 'C#', Eb: 'D#', Gb: 'F#', Ab: 'G#', Bb: 'A#',
@@ -144,10 +139,6 @@ for (let n = 1; n <= 12; n++) {
   CAMELOT_KEYS.push(n + 'A');
   CAMELOT_KEYS.push(n + 'B');
 }
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export type Energy = 'low' | 'medium' | 'high' | null;
 export type Vocal = 'vocal' | 'instrumental' | null;
@@ -171,7 +162,7 @@ export interface KeyRange {
   mode: 'major' | 'minor';
 }
 
-// Raw track row as it arrives from GET /library/observatory.
+// From GET /library/observatory.
 export interface RawTrack {
   id: string;
   title: string | null;
@@ -187,18 +178,15 @@ export interface RawTrack {
   bpm: number | null;
   musicalKey: string | null;
   analysisConfidence: number | null;
-  // Cheap acoustic scalars for colour-by + aggregate panels.
   loudnessLufs: number | null;
   paceMean: number | null;
   vocal: Vocal;
-  // Sound-map coordinates — server-side UMAP of the CLAP audio vector,
-  // normalised to [0,1] per axis. null → not projected; the layout falls back
-  // to the genre-cluster placement for that track.
+  // Server-side UMAP of the CLAP audio vector, normalised to [0,1] per axis.
+  // null → not projected; the layout falls back to genre-cluster placement.
   mapX: number | null;
   mapY: number | null;
 }
 
-// A track after layout — what the map / panels / tooltip consume.
 export interface ObsTrack extends RawTrack {
   idx: number;
   energyVal: number; // continuous 0..1, derived from the energy band
@@ -221,9 +209,7 @@ export interface ObservatoryStats {
   updatedAt: string | null;
 }
 
-// Sound-map projection job status, mirrored from the controller's
-// map-projection.ts ProjectionStatus. Rides the bulk load and the lightweight
-// GET /library/observatory/projection poll.
+// Mirrors the controller's map-projection.ts ProjectionStatus.
 export interface MapProjectionStatus {
   running: boolean;
   startedAt: string | null;
@@ -248,7 +234,7 @@ export interface LibraryData {
   mock: boolean;
 }
 
-// Detail payload from GET /library/observatory/track/:id
+// From GET /library/observatory/track/:id
 export interface TrackDetail {
   track: {
     id: string;
@@ -272,18 +258,17 @@ export interface TrackDetail {
     introMs: number | null;
     analysisConfidence: number | null;
     analysisVersion: number | null;
-    // Acoustic detail for the SONG SHAPE timeline — all null-safe.
     loudnessLufs: number | null;
     peakDb: number | null;
     structure: Section[] | null;
     vocalRanges: Section[] | null;
     pace: PaceSpan[] | null;
     keyRanges: KeyRange[] | null;
-    // Zero-shot audio moods (scored from the CLAP audio vector — sound-derived,
-    // distinct from the editorial `moods`) + the full {mood: cosine} map.
+    // Zero-shot, scored from the CLAP audio vector — sound-derived, distinct
+    // from the editorial `moods`. Scores are the full {mood: cosine} map.
     audioMoods: string[];
     audioMoodScores: Record<string, number> | null;
-    // Measured ending for the SONG SHAPE tail marker. null = not analysed.
+    // Measured ending. null = not analysed.
     outro: { startMs: number; ending: 'fade' | 'cold'; lufs: number | null; bpm: number | null } | null;
   };
   textEmbedding: number[] | null;
@@ -301,8 +286,7 @@ export interface TrackDetail {
 
 const NO_GENRE = '—';
 
-// Lowercased haystack the rail search scans with a single includes() — built
-// once per load so a keystroke doesn't re-lowercase five fields per track.
+// Built once per load so a keystroke doesn't re-lowercase five fields per track.
 function searchTextOf(t: Pick<RawTrack, 'title' | 'artist' | 'album' | 'genre' | 'moods'>): string {
   return [t.title, t.artist, t.album, t.genre, ...(t.moods || [])]
     .filter(Boolean)
@@ -310,8 +294,7 @@ function searchTextOf(t: Pick<RawTrack, 'title' | 'artist' | 'album' | 'genre' |
     .toLowerCase();
 }
 
-// Continuous energy value (for the heat ramp) from the discrete band, jittered
-// per-track off a dedicated seed so positions don't shift if this logic changes.
+// Jittered off a dedicated seed so positions don't shift if this logic changes.
 function energyToVal(energy: Energy, id: string): number {
   const r = mulberry32(hashStr(id) ^ 0x5eed)();
   switch (energy) {
@@ -326,18 +309,11 @@ function energyToVal(energy: Energy, id: string): number {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Layout — place every track on a 1000×1000 disc.
-//
-// Two placements, chosen by data coverage:
-//  · SOUND MAP — when enough tracks carry server-side UMAP coordinates
-//    (mapX/mapY, projected from the CLAP audio vectors), nodes sit where they
-//    SOUND: [0,1] coords scaled into the disc's inscribed square. Genre
-//    "centers" become the centroid of each genre's mapped members (they only
-//    anchor the constellation labels + the rare unmapped track).
-//  · GENRE CLUSTERS — the original synthetic layout (genre ring + gaussian
-//    spread), used for unprojected libraries and the mock showcase.
-// ---------------------------------------------------------------------------
+// Layout — place every track on a 1000×1000 disc. Two placements, chosen by
+// data coverage: SOUND MAP scales the [0,1] UMAP coords into the disc's
+// inscribed square (genre centers become per-genre centroids, anchoring only
+// the constellation labels and unmapped tracks); otherwise GENRE CLUSTERS, a
+// genre ring plus gaussian spread.
 const SOUND_MAP_MIN = 50; // absolute floor of mapped tracks
 const SOUND_MAP_COVERAGE = 0.6; // fraction of tracks that must be mapped
 
@@ -347,7 +323,7 @@ export function layoutTracks(raw: RawTrack[]): {
   centers: Record<string, { x: number; y: number; angle: number }>;
   soundMap: boolean;
 } {
-  // Distinct genres, most-populous first, for a stable angular assignment.
+  // Most-populous first, for a stable angular assignment.
   const counts: Record<string, number> = {};
   raw.forEach((t) => {
     const g = t.genre || NO_GENRE;
@@ -365,8 +341,6 @@ export function layoutTracks(raw: RawTrack[]): {
     const S = 1000 - 2 * M;
     const px = (v: number) => M + v * S;
 
-    // Genre centroids over the mapped members — the constellation-label
-    // anchors, and the drop point for the rare unmapped track.
     const sums: Record<string, { x: number; y: number; c: number }> = {};
     raw.forEach((t) => {
       if (t.mapX == null || t.mapY == null) return;
@@ -443,11 +417,7 @@ export function layoutTracks(raw: RawTrack[]): {
   return { tracks, genres, centers, soundMap: false };
 }
 
-// ---------------------------------------------------------------------------
-// Source palette — maps the REAL tag-source enum (llm | propagated |
-// uncertain-llm | legacy-v1 | manual) to colour + filled/hollow + a short
-// label. Used by colour-by=source and the tag-source filter.
-// ---------------------------------------------------------------------------
+// Tag-source enum → colour + filled/hollow + short label.
 export interface SourceStyle {
   color: string;
   filled: boolean;
@@ -470,22 +440,15 @@ export function sourceStyle(source: string | null): SourceStyle {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Synapse links — 1 nearby same-genre neighbour per node (the nearest within a
-// bounded probe), found via a uniform spatial grid so the whole pass stays
-// O(n) at ANY density. Returns index pairs into `tracks`. Feeds the galaxy's
-// filament LineSegments, where n can be very large.
-// ---------------------------------------------------------------------------
+// Synapse links — one nearby same-genre neighbour per node, via a uniform
+// spatial grid so the pass stays O(n) at any density. Returns index pairs.
+//
 // Per-track distance-check budget across the 9-cell probe. The grid keeps the
-// scan LOCAL, but not SMALL: when a genre packs thousands of tracks into one
-// cluster the probe degenerates toward O(n·clusterSize) — measured ~18 s of
-// main-thread stall at 400k sound-mapped tracks and ~65 s at 400k on the
-// genre-cluster layout. The links are cosmetic (a hair-thin line to A nearby
-// same-genre node), so past the budget we keep the nearest seen so far:
-// candidates share the track's own ≤64-unit cell neighbourhood, and "nearest
-// of 96 local candidates" is indistinguishable from the true nearest at any
-// density where the budget even engages. Sparse cells never hit it, so small
-// and mid-size libraries link exactly as before.
+// scan local but not small: a genre packing thousands of tracks into one
+// cluster degenerates toward O(n·clusterSize) — measured ~18s of main-thread
+// stall at 400k sound-mapped tracks, ~65s on the genre-cluster layout. Links
+// are cosmetic, so past the budget we keep the nearest seen so far; candidates
+// share the track's own ≤64-unit cell neighbourhood. Sparse cells never hit it.
 const LINK_SCAN_BUDGET = 96;
 // 3×3 probe offsets, own cell first (see the budget note inside the loop).
 const PROBE_ORDER: [number, number][] = [
@@ -516,11 +479,11 @@ export function buildSynapseLinks(tracks: ObsTrack[]): [number, number][] {
     let best = -1;
     let bd = Infinity;
     let budget = LINK_SCAN_BUDGET;
-    // Own cell first, ring after: when the budget engages the candidates must
-    // come from the track's immediate neighbourhood, or every link in a dense
-    // cluster spans a whole cell diagonal (measured p95 8u → 76u when the
-    // probe started at the corner cell). Own-cell-first also keeps picks
-    // mutual, so the a<b dedup below still collapses most pairs.
+    // Own cell first, ring after: when the budget engages, candidates must come
+    // from the track's immediate neighbourhood, or every link in a dense cluster
+    // spans a cell diagonal (measured p95 8u → 76u starting at the corner cell).
+    // Own-cell-first also keeps picks mutual, so the a<b dedup still collapses
+    // most pairs.
     probe: for (const [dx, dy] of PROBE_ORDER) {
       const cell = grid.get(`${g}|${gx + dx}|${gy + dy}`);
       if (!cell) continue;
@@ -549,22 +512,18 @@ export function buildSynapseLinks(tracks: ObsTrack[]): [number, number][] {
   return out;
 }
 
-// ---------------------------------------------------------------------------
 // Node appearance — shared by the SVG node layer, the hover overlay, and the
-// canvas renderer so all three stay pixel-identical. `colorBy` selects what the
-// ink→vermilion ramp / source palette encodes.
-// ---------------------------------------------------------------------------
+// canvas renderer so all three stay pixel-identical.
 export type ColorBy = 'energy' | 'confidence' | 'source' | 'analysis' | 'loudness' | 'pace' | 'vocal';
 
-// Integrated loudness (LUFS, typically −30…0) → 0..1 for the heat ramp. Louder
-// reads hotter. null → mid-faint, like the unknown-energy case.
+// Integrated loudness (LUFS, typically −30…0) → 0..1 for the heat ramp.
+// null → mid-faint, like the unknown-energy case.
 export function loudnessToVal(lufs: number | null): number {
   if (lufs == null) return 0.5;
   return Math.max(0, Math.min(1, (lufs + 30) / 30));
 }
 
-// Vocal vs instrumental palette (reuses the source filled/hollow convention):
-// vocal = filled vermilion, instrumental = filled ink, unknown = hollow gray.
+// Reuses the source filled/hollow convention.
 export function vocalStyle(v: Vocal): SourceStyle {
   if (v === 'vocal') return { color: '#d94b2a', filled: true, label: 'VOCAL' };
   if (v === 'instrumental') return { color: '#4a443d', filled: true, label: 'INSTRUMENTAL' };
@@ -591,11 +550,8 @@ export function nodeFilled(t: ObsTrack, colorBy: ColorBy): boolean {
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// Mock library — empty-library fallback. A trimmed port of the prototype's
-// seeded generator, emitting the real ObsTrack shape (incl. layout + real
-// source enum) so the UI looks identical with or without a backing library.
-// ---------------------------------------------------------------------------
+// Mock library — empty-library fallback. Seeded generator emitting the real
+// ObsTrack shape so the UI looks identical with or without a backing library.
 const MOCK_SCENES = [
   { genre: 'Ambient', tempo: [60, 82], moods: ['hazy', 'reflective', 'calm'], energy: [0.05, 0.3], angle: 205 },
   { genre: 'Downtempo', tempo: [78, 100], moods: ['night', 'rainy', 'calm'], energy: [0.2, 0.5], angle: 230 },
@@ -678,8 +634,8 @@ export function buildMockLibrary(count = 400): LibraryData {
     byGenre[scene.genre] = (byGenre[scene.genre] || 0) + 1;
     bySource[source] = (bySource[source] || 0) + 1;
 
-    // Hoisted in the same order the picks used to run inline, so the seeded
-    // RNG stream (and thus the sample layout) is unchanged.
+    // Pick order is load-bearing: it fixes the seeded RNG stream, and so the
+    // sample layout.
     const title = `${mpick(rng, MOCK_ADJ)} ${mpick(rng, MOCK_NOUN)}`;
     const artist = (a1 ? a1 + ' ' : '') + a2;
     const album = mpick(rng, MOCK_ALBUM);
@@ -699,8 +655,8 @@ export function buildMockLibrary(count = 400): LibraryData {
       bpm,
       musicalKey: analysed ? (CAMELOT_KEYS[Math.floor(rng() * 24)] ?? null) : null,
       analysisConfidence: analysed ? Math.round((0.55 + rng() * 0.43) * 100) / 100 : null,
-      // Acoustic scalars track the energy band so the new colour-by modes look
-      // plausible on the sample library too.
+      // Acoustic scalars track the energy band so colour-by modes look
+      // plausible on the sample library.
       loudnessLufs: analysed ? Math.round((-22 + ev * 16 + (rng() - 0.5) * 3) * 10) / 10 : null,
       paceMean: analysed ? Math.max(0.02, Math.min(0.98, Math.round((ev + (rng() - 0.5) * 0.2) * 100) / 100)) : null,
       vocal: analysed ? (rng() < 0.7 ? 'vocal' : 'instrumental') : null,
@@ -741,12 +697,9 @@ export function buildMockLibrary(count = 400): LibraryData {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Mock track dossier — synthesises the rich per-track detail (the lazy
-// /track/:id payload) for a sample-library node, so the landing-page showcase
-// can open a full dossier (embeddings + song-shape timeline + enrichment)
-// without a backend. Deterministic off the track's seed, like buildMockLibrary.
-// ---------------------------------------------------------------------------
+// Mock track dossier — synthesises the lazy /track/:id payload so the
+// landing-page showcase can open a full dossier without a backend.
+// Deterministic off the track's seed, like buildMockLibrary.
 const MOCK_SECTION_KINDS = ['intro', 'verse', 'chorus', 'verse', 'chorus', 'bridge', 'outro'];
 const MOCK_TONICS = ['C', 'D', 'E', 'F', 'G', 'A', 'B', 'C#', 'F#', 'G#'];
 
@@ -756,7 +709,6 @@ export function buildMockDetail(track: ObsTrack): TrackDetail {
   const durSec = track.durationSec ?? 210;
   const totalMs = durSec * 1000;
 
-  // Structural sections across the full span, with small per-boundary jitter.
   const nSec = 5 + Math.floor(rng() * 3); // 5–7
   const bounds = [0];
   for (let i = 1; i < nSec; i++) {
@@ -769,7 +721,6 @@ export function buildMockDetail(track: ObsTrack): TrackDetail {
   }
   const introMs = structure[0]!.endMs;
 
-  // Pace curve — rides the track's energy with a build-to-chorus hump + jitter.
   const base = track.energyVal;
   const nPace = 14;
   const pace: PaceSpan[] = [];
@@ -784,7 +735,7 @@ export function buildMockDetail(track: ObsTrack): TrackDetail {
     });
   }
 
-  // Two key ranges; mode follows the Camelot suffix (A = minor, B = major).
+  // Mode follows the Camelot suffix (A = minor, B = major).
   const mode: 'major' | 'minor' = track.musicalKey?.endsWith('B') ? 'major' : 'minor';
   const keyRanges: KeyRange[] = [
     { startMs: 0, endMs: Math.round(totalMs * 0.62), tonic: MOCK_TONICS[seed % MOCK_TONICS.length]!, mode },
@@ -796,7 +747,7 @@ export function buildMockDetail(track: ObsTrack): TrackDetail {
     },
   ];
 
-  // Vocal presence on the sung sections (empty array = instrumental).
+  // Empty array = instrumental.
   const vocalRanges: Section[] | null =
     track.vocal === 'instrumental'
       ? []
@@ -804,8 +755,8 @@ export function buildMockDetail(track: ObsTrack): TrackDetail {
 
   const lastfmTags = [track.genre?.toLowerCase(), ...track.moods].filter(Boolean).slice(0, 4) as string[];
 
-  // Zero-shot audio moods — reuse the editorial moods with plausible cosines
-  // so the SOUNDS LIKE row shows in the demo. Outro: ~40% of tracks fade.
+  // Reuse the editorial moods with plausible cosines so the SOUNDS LIKE row
+  // shows in the demo.
   const audioMoods = track.analysed ? track.moods.slice(0, 2) : [];
   const audioMoodScores = audioMoods.length
     ? Object.fromEntries(audioMoods.map((m, i) => [m, Math.round((0.34 - i * 0.04 + rng() * 0.04) * 1000) / 1000]))

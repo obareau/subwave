@@ -1,38 +1,31 @@
 'use client';
 
-// Stateful helpers shared by skin implementations — the hook siblings of
-// shared.ts (which stays pure derivations). Everything here reads only the
-// core contexts, per the skin contract (see types.ts); wording and layout
-// stay with each skin.
+// The hook siblings of shared.ts (which stays pure derivations). Everything
+// here reads only the core contexts, per the skin contract (see types.ts);
+// wording and layout stay with each skin.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePlayerActions, usePlayerFeed } from '@/components/player/PlayerCore';
 import { useLiteMode } from '@/hooks/useLiteMode';
 
-/** Whether a skin may run a JS-driven (motion) transition right now.
- *
- *  Lite mode's kill in globals.css is `animation: none !important`, which only
- *  reaches CSS keyframes — motion animates from JS and sails straight through
- *  it. So a skin that adds motion without this gate silently stops honouring
- *  the listener's low-power toggle: no error, no lint failure, just a switch
- *  that quietly does nothing. Every skin transition reads this and cuts
- *  instantly when it's false.
+/** Whether a skin may run a JS-driven (motion) transition right now. Lite
+ *  mode's `animation: none !important` only reaches CSS keyframes, so motion
+ *  sails through it and a skin that skips this gate silently stops honouring
+ *  the low-power toggle.
  *
  *  Reduced motion is NOT this hook's job — MotionConfig's reducedMotion="user"
- *  (components/MotionProvider.tsx) already drops transforms app-wide. The one
- *  exception is a transition built from opacity alone, which that setting
- *  deliberately preserves; such a skin must also call useReducedMotion()
- *  itself (see subamp's LCD latch). */
+ *  (components/MotionProvider.tsx) already drops transforms app-wide. The
+ *  exception is an opacity-only transition, which that setting deliberately
+ *  preserves; those must also call useReducedMotion() (see subamp's LCD
+ *  latch). */
 export function useSkinMotion(): boolean {
   const { lite } = useLiteMode();
   return !lite;
 }
 
-// Poll cadence + give-up window for a submitted request's outcome. Mirrors the
-// classic RequestDrawer (classic/drawers/RequestDrawer.tsx) so every skin gets
-// the same follow-through: accept, then the ack upgrades in place once the DJ
-// picks. The controller resolves within a few seconds; 60s is a generous ceiling
-// after which the accepted line simply stands.
+// Poll cadence + give-up window for a submitted request's outcome. The
+// controller resolves within a few seconds; 60s is a generous ceiling after
+// which the accepted line simply stands.
 const POLL_INTERVAL_MS = 1500;
 const POLL_DEADLINE_MS = 60_000;
 
@@ -65,8 +58,8 @@ export interface RequestSlip {
   send: () => Promise<void>;
 }
 
-/** The request-slip state machine every skin was hand-rolling: compose →
- *  send → show the controller's ack (or the skin's fallback copy) → reset. */
+/** The shared request-slip state machine: compose → send → show the
+ *  controller's ack (or the skin's fallback copy) → reset. */
 export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
   const { submitRequest, pollRequest } = usePlayerActions();
   const [text, setText] = useState('');
@@ -87,9 +80,8 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
   }, []);
   useEffect(() => stopPolling, [stopPolling]);
 
-  // Poll the controller until the request resolves, fails, or the deadline
-  // passes. The accepted ack holds while pending; on resolve it becomes the
-  // DJ's on-air line (or the matched track), on failure the miss copy.
+  // The accepted ack holds while pending; on resolve it becomes the DJ's
+  // on-air line (or the matched track), on failure the miss copy.
   const startPolling = (requestId: string) => {
     pollStopRef.current = false;
     const deadline = Date.now() + POLL_DEADLINE_MS;
@@ -133,8 +125,8 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
       setAck(res.success ? (res.ack || copy.sent) : (res.message || copy.refused));
       if (res.success) {
         setText('');
-        // Accepted in ~50ms with a request id; the match runs in the booth.
-        // Poll for the real pick so the ack upgrades from "on it" to the answer.
+        // Accepted in ~50ms with a request id; the match runs in the booth, so
+        // poll for the real pick and upgrade the ack to the answer.
         if (res.requestId) startPolling(res.requestId);
       }
     } catch {
@@ -165,9 +157,9 @@ export interface TrackLike {
   like: () => Promise<void>;
 }
 
-/** The heart button's state machine (#991), shared by every skin: refresh
- *  liked-state when the on-air track changes, optimistic fill on tap, settle
- *  on the controller's answer. Wording and iconography stay with each skin. */
+/** The heart button's state machine (#991): refresh liked-state when the
+ *  on-air track changes, optimistic fill on tap, settle on the controller's
+ *  answer. Wording and iconography stay with each skin. */
 export function useTrackLike(): TrackLike {
   const { likeCurrent, likeStatus } = usePlayerActions();
   const feed = usePlayerFeed();

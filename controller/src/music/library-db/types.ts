@@ -208,7 +208,11 @@ export interface FilterOpts {
 }
 
 export interface LibraryStats {
+  // TAGGED tracks (moods present) — the tagging-coverage figure.
   total: number;
+  // Every row in the library mirror, tagged or not — the "how big is this
+  // library" figure. See computeStats for why the two must not be conflated.
+  mirrorTotal: number;
   distinctArtists: number;
   byMood: Record<string, number>;
   byEnergy: Record<string, number>;

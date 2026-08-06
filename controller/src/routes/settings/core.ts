@@ -187,6 +187,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
       env: {
         OPENAI_API_KEY: !!process.env.OPENAI_API_KEY,
         ELEVENLABS_API_KEY: !!process.env.ELEVENLABS_API_KEY,
+        FISH_API_KEY: !!process.env.FISH_API_KEY,
         ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
         GOOGLE_GENERATIVE_AI_API_KEY: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY,
         DEEPSEEK_API_KEY: !!process.env.DEEPSEEK_API_KEY,

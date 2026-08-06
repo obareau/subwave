@@ -16,13 +16,18 @@ export interface QuietState {
 
 // Pure transition: previous state + (toggle, freshest count, clock, window) →
 // next state and whether the pass may analyse the next track. `count` is null
-// when Icecast couldn't be read.
+// when Icecast couldn't be read — which the caller defines as SUSTAINED
+// unreadability, not one failed poll: probeListenerCount() returns the gated
+// count, so a blip hands back the last reading actually read from Icecast
+// (#1256, same doctrine as the idle monitor and djCallsAllowed).
 //
 // Regression-critical branches:
 //   • fail-open — an unknown count must never stall the pass forever (the
 //     OPPOSITE direction from djCallsAllowed(): if the stats endpoint is
 //     down, odds are nobody is streaming and the CPU is free; worst case is
-//     pre-gate behaviour, analysing while someone listens);
+//     pre-gate behaviour, analysing while someone listens). That worst case is
+//     why the gated count matters here too — on the raw reading a single
+//     timeout was enough to start a heavy DSP pass over a listener's head;
 //   • an outage still accrues quiet time (quietSince holds), so a recovery
 //     at 0 listeners doesn't pause an already-running pass in an empty room;
 //   • any listener resets the quiet clock to null — the full window must

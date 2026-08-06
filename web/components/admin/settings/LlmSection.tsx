@@ -19,15 +19,13 @@ import {
   type SectionProps,
 } from './shared';
 
-// LLM provider descriptors, the cloud-key env-var map and the badge logic live
-// in ./llm/providerMeta (imported above) — shared with the ProviderSelector card
-// grid and, later, the onboarding wizard. Don't redefine them here.
+// Provider descriptors, the cloud-key env-var map and the badge logic live in
+// ./llm/providerMeta — don't redefine them here.
 
-// Providers whose bearer token is typed inline (routed into settings.llm.keys
-// per provider, not secrets.env) and whose server URL lives in
-// providerBaseUrls. locca's URL may be blank — the controller then falls back
-// to DEFAULT_LOCCA_BASE_URL (registry.ts); mirrored here so Test connection
-// works without an explicit override.
+// Bearer typed inline (into settings.llm.keys per provider, not secrets.env), URL
+// in providerBaseUrls. locca's URL may be blank: the controller falls back to
+// DEFAULT_LOCCA_BASE_URL (registry.ts), mirrored here so Test connection works
+// without an explicit override.
 const INLINE_KEY_PROVIDERS = ['openai-compatible', 'locca'];
 const LOCCA_DEFAULT_BASE_URL = 'http://host.docker.internal:8080/v1';
 
@@ -57,13 +55,10 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   useEffect(() => { setCompatKeyInput(''); setCompatKeyTest(null); }, [form.llm.provider]);
   useEffect(() => { setCompatFallbackKeyInput(''); setCompatFallbackKeyTest(null); }, [form.llm.fallback.provider]);
 
-  // Embeddings inherit settings.llm by default (embedding.provider === ''), so
-  // switching the CHAT provider silently changes the EMBEDDING model too — which
-  // invalidates an already-embedded library and breaks vector search until a
-  // re-embed (#dimension-mismatch). When the library is embedded and embeddings
-  // are inheriting, pin them to the index's actual model on a provider switch and
-  // surface a notice so the operator understands what happened (and can opt to
-  // re-embed on the new provider instead).
+  // Embeddings inherit settings.llm when embedding.provider === '', so switching the
+  // CHAT provider would silently change the EMBEDDING model, invalidating an
+  // already-embedded library and breaking vector search until a re-embed. Pin them
+  // to the index's actual model instead and surface a notice.
   const [embedPinNotice, setEmbedPinNotice] = useState<{ model: string; dim: number; newProvider: string } | null>(null);
   const changeLlmProvider = (v: string) => {
     if (v === form.llm.provider) return;
@@ -74,9 +69,8 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       if (!f) return f;
       const next = { ...f, llm: { ...f.llm, provider: v } };
       if (pin && meta) {
-        // Stored as "provider:model" (e.g. "ollama:nomic-embed-text"); split on
-        // the FIRST colon so ollama tags with their own colon (bge-m3:latest)
-        // keep the tag intact in the model field.
+        // Stored as "provider:model"; split on the FIRST colon so ollama tags with
+        // their own colon (bge-m3:latest) keep the tag intact.
         const i = meta.model.indexOf(':');
         const pinProvider = i > 0 ? meta.model.slice(0, i) : '';
         const pinModel = i > 0 ? meta.model.slice(i + 1) : meta.model;
@@ -233,6 +227,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         budgetSoftPct: form.llm.budgetSoftPct,
         exemptRequests: form.llm.exemptRequests,
         maxOutputTokens: form.llm.maxOutputTokens,
+        discoverySteps: form.llm.discoverySteps,
         ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()
           ? { apiKey: compatKeyInput.trim() }
           : {}),
@@ -243,6 +238,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           ollamaUrl: form.llm.fallback.ollamaUrl,
           numCtx: form.llm.fallback.numCtx,
           repeatPenalty: form.llm.fallback.repeatPenalty,
+          discoverySteps: form.llm.fallback.discoverySteps,
           providerBaseUrls: form.llm.fallback.providerBaseUrls,
           reasoning: form.llm.fallback.reasoning,
           ...(INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
@@ -793,6 +789,32 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </div>
               )}
 
+              {form.llm.pickerAgent && (
+                <div className="field">
+                  <Label>Discovery rounds per pick</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={5}
+                    step={1}
+                    value={form.llm.fallback.discoverySteps}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, discoverySteps: Number(e.target.value) } } }))
+                    }
+                    placeholder="0"
+                    className="max-w-[200px]"
+                  />
+                  <div className="field-hint">
+                    The backup resolves its own budget, since it may be a different
+                    provider running a different model. <strong>0 = auto</strong>.
+                    Note the DJ is told how many rounds it has before a pick starts,
+                    and that promise has to hold on whichever leg ends up running &mdash;
+                    so the station uses the <em>lower</em> of the two numbers whenever
+                    the backup is enabled. 0&ndash;5.
+                  </div>
+                </div>
+              )}
+
               {LLM_ENV_VARS[form.llm.fallback.provider] && (() => {
                 const keyVar = LLM_ENV_VARS[form.llm.fallback.provider]!;
                 return (
@@ -1003,6 +1025,34 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         )}
 
         {form.llm.pickerAgent && (
+          <div className="field mt-4">
+            <Label>Discovery rounds per pick</Label>
+            <Input
+              type="number"
+              min={0}
+              max={5}
+              step={1}
+              value={form.llm.discoverySteps}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, llm: { ...f.llm, discoverySteps: Number(e.target.value) } }))
+              }
+              placeholder="0"
+              className="max-w-[200px]"
+            />
+            <div className="field-hint">
+              How many times the DJ may search your library before it has to commit
+              to a track. {' '}<strong>0 = auto</strong>, which picks for you based on
+              your provider: 1 for self-hosted servers (Ollama, llama.cpp, vLLM,
+              LM Studio), 3 for the cloud providers. Raise it if you run a capable
+              model on your own hardware &mdash; auto is cautious there because many
+              local models wander when given more than one round. Lower it to 1 to
+              cut tokens and latency: every round is a separate call, and they all
+              share the agent deadline above. 0&ndash;5.
+            </div>
+          </div>
+        )}
+
+        {form.llm.pickerAgent && (
           <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
             <div>
               <div className="text-[13px] font-bold">Resolve described requests via web</div>
@@ -1030,20 +1080,21 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <Input
             type="number"
             min={0}
-            max={290}
+            max={1000}
             step={10}
             value={form.llm.noRepeatWindow}
             onChange={(e: ChangeEvent<HTMLInputElement>) =>
               setForm(f => ({ ...f, llm: { ...f.llm, noRepeatWindow: e.target.value } }))
             }
-            placeholder="100"
+            placeholder="250"
             className="max-w-[200px]"
           />
           <div className="field-hint">
             The last N <strong>distinct</strong> tracks can never be re-picked: a hard
             guard on both the agent and candidate-pool pickers, on top of the time-based
-            window. Auto-scales down on a small library so it never blocks everything.
-            {' '}<strong>0 = off</strong>. Listener requests stay exempt. 0&ndash;290.
+            window. Auto-scales down on a small library so it never blocks everything;
+            on a big library, raise it — it is the station&apos;s long memory.
+            {' '}<strong>0 = off</strong>. Listener requests stay exempt. 0&ndash;1000.
           </div>
         </div>
       </Card>
@@ -1149,11 +1200,8 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         saveLabel="Save LLM provider"
       />
 
-      {/* Chat-provider switch would otherwise drag the inherited embedding model
-          with it and invalidate the already-embedded library. We pinned
-          embeddings to the index's model; this notice explains it and lets the
-          operator instead opt to re-embed on the new provider. The SAFE outcome
-          (keep the pin) is the default — only the explicit confirm switches. */}
+      {/* The SAFE outcome (keep the embedding pin) is the default; only the explicit
+          confirm re-embeds on the new provider. */}
       <V3AlertDialog
         open={embedPinNotice != null}
         onOpenChange={(o) => { if (!o) setEmbedPinNotice(null); }}

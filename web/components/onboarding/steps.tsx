@@ -7,15 +7,24 @@ import { ModelCombobox } from '../admin/llm/ModelCombobox';
 import { PROVIDER_IDS } from '../admin/llm/providerMeta';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { LocationPicker } from '../LocationPicker';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { V3Alert } from '@/components/ui/alert';
 
-// Tiny presentation primitives kept local to the wizard — avoids dragging the
-// full admin UI library into a screen most operators see exactly once.
+// Presentation primitives kept local to the wizard, so a screen most operators
+// see once doesn't drag in the full admin UI library. Labels, fills and borders
+// ride the theme tokens.
+
+// Shared by <Field> and the inline label rows that can't wrap their control in
+// a <label>.
+const WIZARD_LABEL_CLASS =
+  'font-mono text-[11px] font-bold tracking-[0.18em] text-ink uppercase';
 
 function StepHeader({ title, blurb }: { title: string; blurb: string }) {
   return (
     <div className="mb-5">
-      <h2 className="text-xl font-semibold text-ink">{title}</h2>
-      <p className="mt-1 text-sm text-ink/70">{blurb}</p>
+      <h2 className="font-display text-xl font-bold text-ink">{title}</h2>
+      <p className="mt-1 text-sm text-muted">{blurb}</p>
     </div>
   );
 }
@@ -31,23 +40,15 @@ function Field({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs font-medium tracking-wide text-ink/60 uppercase">{label}</span>
+      <span className={WIZARD_LABEL_CLASS}>{label}</span>
       {children}
-      {hint ? <span className="text-xs text-ink/50">{hint}</span> : null}
+      {hint ? <span className="font-mono text-[12px] text-muted">{hint}</span> : null}
     </label>
   );
 }
 
 function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      {...props}
-      className={
-        'rounded border border-ink/30 bg-bg px-2 py-1.5 text-sm focus:border-ink focus:outline-none ' +
-        (props.className || '')
-      }
-    />
-  );
+  return <Input {...props} />;
 }
 
 function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
@@ -55,7 +56,7 @@ function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
     <select
       {...props}
       className={
-        'rounded border border-ink/30 bg-bg px-2 py-1.5 text-sm focus:border-ink focus:outline-none ' +
+        'border border-input bg-field px-3 py-[9px] text-[13px] text-ink focus:outline-none focus-visible:ring-1 focus-visible:ring-ring ' +
         (props.className || '')
       }
     />
@@ -68,8 +69,10 @@ function TestPill({ result }: { result: { ok: boolean | null; msg?: string } }) 
     <div
       role="status"
       className={
-        'mt-2 inline-block rounded px-2 py-0.5 text-xs ' +
-        (result.ok ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900')
+        'mt-2 inline-block border px-2 py-0.5 font-mono text-xs ' +
+        (result.ok
+          ? 'border-ink bg-accent-soft text-ink'
+          : 'border-destructive text-destructive')
       }
     >
       {result.ok ? '✓ ' : '✗ '}
@@ -78,14 +81,13 @@ function TestPill({ result }: { result: { ok: boolean | null; msg?: string } }) 
   );
 }
 
-// ─── NAVIDROME ─────────────────────────────────────────────────────────────
+// NAVIDROME
 export function NavidromeStep({ w }: { w: WizardController }) {
   const [busy, setBusy] = useState(false);
   const onTest = async () => {
     setBusy(true);
-    // testNavidrome never throws — it catches its own errors into the pill —
-    // but the finally is the backstop so the button can never get wedged on
-    // "Testing…" if anything unexpected slips through (issue #682).
+    // testNavidrome catches its own errors into the pill; the finally is the
+    // backstop so the button can't wedge on "Testing…" (issue #682).
     try {
       await w.testNavidrome();
     } finally {
@@ -131,35 +133,32 @@ export function NavidromeStep({ w }: { w: WizardController }) {
           />
         </Field>
         <div>
-          <button
-            type="button"
+          <Button
+            variant="solid"
             onClick={onTest}
             disabled={busy || !w.data.navidrome.url || !w.data.navidrome.user || !w.data.navidrome.pass}
-            className="rounded border border-ink bg-ink px-3 py-1.5 text-xs font-medium tracking-wide text-bg uppercase hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {busy ? 'Testing…' : 'Test connection'}
-          </button>
+          </Button>
           <TestPill result={w.data.navidromeTest} />
         </div>
-        <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-ink/80">
-          <strong>Music licensing:</strong> owning these files covers your own
-          private listening, not <em>public</em> broadcast. If anyone but you
-          can hear the stream, you&apos;re publicly performing copyrighted works
-          and need the relevant licences (PRS&nbsp;+&nbsp;PPL in the UK,
+        <V3Alert title="Music licensing">
+          Owning these files covers your own private listening, not{' '}
+          <em>public</em> broadcast. If anyone but you can hear the stream,
+          you&apos;re publicly performing copyrighted works and need the
+          relevant licences (PRS&nbsp;+&nbsp;PPL in the UK,
           ASCAP/BMI&nbsp;+&nbsp;SoundExchange in the US) — or broadcast only
           content you&apos;re cleared to use (your own, Creative Commons,
           royalty-free, public domain). You are the broadcaster and are
           responsible for clearing these rights. Not legal advice.
-        </div>
+        </V3Alert>
       </div>
     </div>
   );
 }
 
-// ─── LLM ───────────────────────────────────────────────────────────────────
-// Provider list, labels and blurbs come from the shared admin/llm/providerMeta
-// module (PROVIDER_IDS + the ProviderSelector card grid) so onboarding and the
-// admin Settings tab never drift.
+// LLM. Provider list, labels and blurbs come from admin/llm/providerMeta so
+// onboarding and the admin Settings tab never drift.
 
 export function LlmStep({ w }: { w: WizardController }) {
   const [busy, setBusy] = useState(false);
@@ -174,10 +173,8 @@ export function LlmStep({ w }: { w: WizardController }) {
       setBusy(false);
     }
   };
-  // Same unified model discovery the admin Settings tab uses. Enabled for the
-  // keyless-discoverable providers (ollama / locca / openai-compatible with a
-  // base URL / openrouter); cloud providers need their key saved on the box
-  // first, so they fall back to free-typing the model id.
+  // Enabled for the keyless-discoverable providers; cloud providers need their
+  // key saved on the box first, so they fall back to free-typing the model id.
   const discoveryEnabled =
     isOllama || isLocca ||
     (isCustom && !!w.data.llm.baseUrl.trim()) ||
@@ -196,10 +193,10 @@ export function LlmStep({ w }: { w: WizardController }) {
         blurb="The DJ talks between tracks. Ollama running on the host is the homelab default — no API key needed."
       />
       <div className="grid gap-3">
-        {/* Not wrapped in <Field> — that renders a <label>, and a label around a
-            radiogroup of buttons hijacks clicks. Inline the same label styling. */}
+        {/* Not <Field>: it renders a <label>, and a label around a radiogroup of
+            buttons hijacks clicks. */}
         <div className="flex flex-col gap-1">
-          <span className="text-xs font-medium tracking-wide text-ink/60 uppercase">Provider</span>
+          <span className={WIZARD_LABEL_CLASS}>Provider</span>
           <ProviderSelector
             value={w.data.llm.provider}
             providerIds={PROVIDER_IDS}
@@ -255,11 +252,10 @@ export function LlmStep({ w }: { w: WizardController }) {
             />
           </Field>
         )}
-        {/* Model — inlined label (not <Field>): the discovery combobox trigger is
-            a <button>, and a <label> wrapping it would hijack the click. Same
-            unified picker + free-type fallback as the admin Settings tab. */}
+        {/* Not <Field>: the combobox trigger is a <button>, and a wrapping
+            <label> would hijack the click. */}
         <div className="flex flex-col gap-1">
-          <span className="text-xs font-medium tracking-wide text-ink/60 uppercase">Model</span>
+          <span className={WIZARD_LABEL_CLASS}>Model</span>
           <div className="flex items-stretch gap-2">
             {discovery.models.length > 0 ? (
               <ModelCombobox
@@ -278,18 +274,18 @@ export function LlmStep({ w }: { w: WizardController }) {
               />
             )}
             {discovery.loading
-              ? <span className="self-center text-xs whitespace-nowrap text-ink/50">discovering…</span>
+              ? <span className="self-center text-xs whitespace-nowrap text-muted">discovering…</span>
               : discoveryEnabled && (
                 <button
                   type="button"
                   onClick={discovery.refresh}
                   title="Refresh model list"
-                  className="rounded border border-ink px-2.5 text-sm hover:bg-ink hover:text-bg"
+                  className="border border-ink px-2.5 text-sm text-ink hover:bg-ink hover:text-bg"
                 >↻</button>
               )
             }
           </div>
-          <span className="text-xs text-ink/50">
+          <span className="text-xs text-muted">
             {discovery.models.length > 0
               ? `${discovery.models.length} model${discovery.models.length !== 1 ? 's' : ''} discovered — pick one or filter.`
               : discoveryEnabled
@@ -302,14 +298,9 @@ export function LlmStep({ w }: { w: WizardController }) {
           </span>
         </div>
         <div>
-          <button
-            type="button"
-            onClick={onTest}
-            disabled={busy || !w.data.llm.model}
-            className="rounded border border-ink bg-ink px-3 py-1.5 text-xs font-medium tracking-wide text-bg uppercase hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          >
+          <Button variant="solid" onClick={onTest} disabled={busy || !w.data.llm.model}>
             {busy ? 'Asking…' : 'Send a test prompt'}
-          </button>
+          </Button>
           <TestPill result={w.data.llmTest} />
         </div>
       </div>
@@ -317,7 +308,7 @@ export function LlmStep({ w }: { w: WizardController }) {
   );
 }
 
-// ─── TTS ───────────────────────────────────────────────────────────────────
+// TTS
 export function TtsStep({ w }: { w: WizardController }) {
   const engine = w.data.tts.defaultEngine;
   const heavyPicked = engine === 'chatterbox' || engine === 'pocket-tts';
@@ -326,7 +317,7 @@ export function TtsStep({ w }: { w: WizardController }) {
     <div>
       <StepHeader
         title="Choose a voice engine"
-        blurb="Piper is the default — fast, local, decent. Kokoro is slower but more natural. Cloud routes through OpenAI or ElevenLabs."
+        blurb="Piper is the default — fast, local, decent. Kokoro is slower but more natural. Cloud routes through OpenAI, ElevenLabs, or Fish Audio."
       />
       <div className="grid gap-3">
         <Field label="Default engine">
@@ -340,7 +331,7 @@ export function TtsStep({ w }: { w: WizardController }) {
           >
             <option value="piper">Piper (fast, local)</option>
             <option value="kokoro">Kokoro (natural, local)</option>
-            <option value="cloud">Cloud (OpenAI / ElevenLabs)</option>
+            <option value="cloud">Cloud (OpenAI / ElevenLabs / Fish Audio)</option>
             <option value="chatterbox">Chatterbox (voice cloning, sidecar)</option>
             <option value="pocket-tts">PocketTTS (multilingual, sidecar)</option>
             <option value="remote">Remote (your own server)</option>
@@ -357,9 +348,9 @@ export function TtsStep({ w }: { w: WizardController }) {
           Enable Chatterbox + PocketTTS (tts-heavy sidecar, ~5–6 GB)
         </label>
         {heavyEnabled && (
-          <div className="rounded-md border border-sky-400/40 bg-sky-400/10 px-3 py-2 text-sm text-sky-100">
-            <strong>Heavy TTS enabled.</strong> The sidecar isn&apos;t started by default.
-            On the machine running this stack, either:
+          <V3Alert title="Heavy TTS enabled">
+            The sidecar isn&apos;t started by default. On the machine running
+            this stack, either:
             <ul className="mt-2 ml-5 list-disc space-y-1">
               <li>
                 Add <code>COMPOSE_PROFILES=tts-heavy</code> to your <code>.env</code>, then run{' '}
@@ -369,14 +360,15 @@ export function TtsStep({ w }: { w: WizardController }) {
                 Or run <code>docker compose --profile tts-heavy up -d</code> for a one-off start.
               </li>
             </ul>
-          </div>
+          </V3Alert>
         )}
         {heavyPicked && !heavyEnabled && (
-          <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-200">
-            <strong>Heads up:</strong> {engine === 'chatterbox' ? 'Chatterbox' : 'PocketTTS'} runs
-            in the optional <code>tts-heavy</code> sidecar but you haven&apos;t enabled it above —
-            this persona will silently fall back to Piper until the sidecar is started.
-          </div>
+          <V3Alert tone="error" title="Heads up">
+            {engine === 'chatterbox' ? 'Chatterbox' : 'PocketTTS'} runs in the
+            optional <code>tts-heavy</code> sidecar but you haven&apos;t enabled
+            it above — this persona will silently fall back to Piper until the
+            sidecar is started.
+          </V3Alert>
         )}
         <label className="flex items-center gap-2 text-sm">
           <input
@@ -395,14 +387,26 @@ export function TtsStep({ w }: { w: WizardController }) {
             <Field label="Cloud TTS provider">
               <Select
                 value={w.data.tts.cloud.provider}
-                onChange={e =>
+                onChange={e => {
+                  const provider = e.target.value;
                   w.patch(d => ({
-                    tts: { ...d.tts, cloud: { ...d.tts.cloud, provider: e.target.value } },
-                  }))
-                }
+                    tts: {
+                      ...d.tts,
+                      cloud: {
+                        ...d.tts.cloud,
+                        provider,
+                        // Credentials are provider-specific: never carry a
+                        // typed key across a selector change.
+                        apiKey: '',
+                        ...(provider === 'fish-audio' ? { model: 's2.1-pro', voice: '' } : {}),
+                      },
+                    },
+                  }));
+                }}
               >
                 <option value="openai">OpenAI</option>
                 <option value="elevenlabs">ElevenLabs</option>
+                <option value="fish-audio">Fish Audio</option>
               </Select>
             </Field>
             <Field label="API key">
@@ -417,6 +421,37 @@ export function TtsStep({ w }: { w: WizardController }) {
                 }
               />
             </Field>
+            {w.data.tts.cloud.provider === 'fish-audio' && (
+              <>
+                <Field label="Fish model id">
+                  <TextInput
+                    value={w.data.tts.cloud.model}
+                    maxLength={100}
+                    placeholder="s2.1-pro"
+                    onChange={e =>
+                      w.patch(d => ({
+                        tts: { ...d.tts, cloud: { ...d.tts.cloud, model: e.target.value } },
+                      }))
+                    }
+                  />
+                </Field>
+                <Field label="Fish voice reference id">
+                  <TextInput
+                    value={w.data.tts.cloud.voice}
+                    maxLength={100}
+                    placeholder="Paste an account, public, or custom reference_id"
+                    onChange={e =>
+                      w.patch(d => ({
+                        tts: { ...d.tts, cloud: { ...d.tts.cloud, voice: e.target.value } },
+                      }))
+                    }
+                  />
+                </Field>
+                <p className="text-xs text-muted">
+                  Account voice discovery is available after setup in Admin → Settings → TTS.
+                </p>
+              </>
+            )}
           </>
         )}
       </div>
@@ -424,7 +459,7 @@ export function TtsStep({ w }: { w: WizardController }) {
   );
 }
 
-// ─── DJ persona ────────────────────────────────────────────────────────────
+// DJ persona
 export function DjStep({ w }: { w: WizardController }) {
   return (
     <div>
@@ -439,10 +474,10 @@ export function DjStep({ w }: { w: WizardController }) {
             onChange={e => w.patch(d => ({ dj: { ...d.dj, stationName: e.target.value } }))}
           />
         </Field>
-        {/* Not a <Field>/<label> — the picker is a composite (combobox + buttons)
-            and shouldn't live inside a single <label>. */}
+        {/* Not <Field>: the picker is a composite and can't live inside one
+            <label>. */}
         <div className="flex flex-col gap-1">
-          <span className="text-xs font-medium tracking-wide text-ink/60 uppercase">Location</span>
+          <span className={WIZARD_LABEL_CLASS}>Location</span>
           <LocationPicker
             variant="onboarding"
             value={{
@@ -456,12 +491,12 @@ export function DjStep({ w }: { w: WizardController }) {
               if (tz) w.patch(d => ({ dj: { ...d.dj, timezone: tz } }));
             }}
           />
-          <span className="text-xs text-ink/50">
+          <span className="text-xs text-muted">
             Search a city — coordinates and timezone fill in automatically. Used for weather +
             “broadcasting from…” prompts.
           </span>
           {w.data.dj.timezone ? (
-            <span className="text-xs text-ink/50">
+            <span className="text-xs text-muted">
               Timezone: {w.data.dj.timezone} (from your location)
             </span>
           ) : null}
@@ -471,7 +506,7 @@ export function DjStep({ w }: { w: WizardController }) {
   );
 }
 
-// ─── REVIEW + SAVE ─────────────────────────────────────────────────────────
+// REVIEW + SAVE
 export function ReviewStep({
   w,
   onDone,
@@ -507,20 +542,15 @@ export function ReviewStep({
       <dl className="grid grid-cols-[120px_1fr] gap-x-4 gap-y-2 text-sm">
         {rows.map(([k, v]) => (
           <div key={k} className="contents">
-            <dt className="text-ink/60">{k}</dt>
+            <dt className="text-muted">{k}</dt>
             <dd className="text-ink">{v}</dd>
           </div>
         ))}
       </dl>
-      {err && <p role="alert" className="mt-3 text-sm text-red-700">{err}</p>}
-      <button
-        type="button"
-        onClick={onSave}
-        disabled={busy}
-        className="mt-5 rounded border border-ink bg-ink px-4 py-2 text-sm font-medium tracking-wide text-bg uppercase hover:opacity-90 disabled:opacity-40"
-      >
+      {err && <p role="alert" className="mt-3 text-sm text-destructive">{err}</p>}
+      <Button variant="solid" size="lg" className="mt-5" onClick={onSave} disabled={busy}>
         {busy ? 'Saving…' : 'Save and finish'}
-      </button>
+      </Button>
     </div>
   );
 }

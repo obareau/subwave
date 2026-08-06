@@ -164,6 +164,14 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
     if (opts.embeddingForId) {
       const picks = kmeansSeedPicks(candidatePool, opts.embeddingForId, remaining);
       for (const id of picks) take('kmeans', id);
+      // k-means can return fewer than asked — un-embedded candidates drop out,
+      // and the cluster count is bounded (KMEANS_MAX_K). Top up randomly so
+      // the seed budget is always spent.
+      if (chosen.size < budget) {
+        const rest = shuffle(candidatePool.filter(id => !chosen.has(id)))
+          .slice(0, budget - chosen.size);
+        for (const id of rest) take('kmeans-topup', id);
+      }
     } else {
       // No embeddings — shuffle and take. Deterministic seed for testability
       // is left as an implementation-time detail; default is Math.random.
@@ -179,38 +187,57 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
   };
 }
 
-// Lightweight k-means in pure JS — fine for our cluster counts (≤500) and
-// vector dims (≤1536). Iterates a fixed small number of times for speed;
-// quality is "good enough for picking diverse seeds," not "optimal."
+// Lightweight k-means in pure JS. Bounded so the layer stays usable on real
+// library sizes: the pool is sampled down to KMEANS_POOL_CAP and the cluster
+// count capped at KMEANS_MAX_K, which with the incremental init below keeps
+// the whole thing O(POOL_CAP · MAX_K · dim) — seconds for 768-d vectors, a
+// fine price inside a one-shot tagger job. Quality is "good enough for picking
+// diverse seeds," not "optimal"; selectSeeds tops up any shortfall randomly.
+const KMEANS_POOL_CAP = 4000;
+const KMEANS_MAX_K = 150;
+
 function kmeansSeedPicks(
   ids: string[],
   vecOf: (id: string) => Float32Array | number[] | null,
   k: number,
 ): string[] {
   if (ids.length === 0 || k <= 0) return [];
+  const kk = Math.min(k, KMEANS_MAX_K);
+  const sampledIds = ids.length > KMEANS_POOL_CAP
+    ? shuffle([...ids]).slice(0, KMEANS_POOL_CAP)
+    : ids;
   const vectors: { id: string; v: number[] }[] = [];
-  for (const id of ids) {
+  for (const id of sampledIds) {
     const v = vecOf(id);
     if (v && v.length > 0) vectors.push({ id, v: Array.from(v) });
   }
   if (vectors.length === 0) return [];
-  if (vectors.length <= k) return vectors.map(x => x.id);
+  if (vectors.length <= kk) return vectors.map(x => x.id);
 
   // Init centroids with k-means++ — pick first at random, then each next
   // proportional to squared-distance from the closest existing centroid.
+  // INCREMENTAL: keep each point's distance-to-nearest-centroid and refresh it
+  // against only the newest centroid per round — O(n·k·dim), where the old
+  // from-scratch recompute was O(n·k²·dim), which is what made this layer
+  // unaffordable (and therefore dead) on real libraries.
   const dim = vectors[0].v.length;
   const centroids: number[][] = [vectors[Math.floor(Math.random() * vectors.length)].v.slice()];
-  while (centroids.length < k) {
-    const dists = vectors.map(x => minSqDist(x.v, centroids));
-    const total = dists.reduce((a, b) => a + b, 0);
+  const nearest = vectors.map(x => sqDist(x.v, centroids[0]));
+  while (centroids.length < kk) {
+    const total = nearest.reduce((a, b) => a + b, 0);
     if (total === 0) break;
     let pick = Math.random() * total;
     let idx = 0;
-    for (; idx < dists.length; idx++) {
-      pick -= dists[idx];
+    for (; idx < nearest.length; idx++) {
+      pick -= nearest[idx];
       if (pick <= 0) break;
     }
-    centroids.push(vectors[Math.min(idx, vectors.length - 1)].v.slice());
+    const c = vectors[Math.min(idx, vectors.length - 1)].v.slice();
+    centroids.push(c);
+    for (let i = 0; i < vectors.length; i++) {
+      const d = sqDist(vectors[i].v, c);
+      if (d < nearest[i]) nearest[i] = d;
+    }
   }
 
   // Lloyd iterations
@@ -262,11 +289,3 @@ function sqDist(a: number[], b: number[]): number {
   return s;
 }
 
-function minSqDist(v: number[], centroids: number[][]): number {
-  let best = Infinity;
-  for (const c of centroids) {
-    const d = sqDist(v, c);
-    if (d < best) best = d;
-  }
-  return best;
-}

@@ -6,7 +6,7 @@ author: The SUB/WAVE desk
 excerpt: A new subwave-aio-cuda image runs the sounds-like and vocal analysis on an NVIDIA card, so one-click installs get the fast path without splitting into a five-service stack.
 ---
 
-When the CUDA analyzer shipped last week, it only helped one kind of install. The overlay it rides on swaps a container inside the full compose stack, and the one-click image has none to swap. So an operator running the all-in-one asked the obvious question. What about the rest of us?
+When [the CUDA analyzer shipped last week](/news/analyzer-on-the-gpu), it only helped one kind of install. The overlay it rides on swaps a container inside the full compose stack, and the [one-click image](/news/one-click-on-unraid) has none to swap. So an operator running the all-in-one asked the obvious question. What about the rest of us?
 
 ## What's new
 
@@ -39,4 +39,4 @@ One trap to avoid. Do not point an all-in-one container at `subwave-analyzer-cud
 
 ## Why it helps
 
-A one-click install was always a trade, less to configure in exchange for less to tune. This takes one thing off that list. If there is a card in the box, the deep analysis can use it, no five-service stack required.
+A one-click install was always a trade, less to configure in exchange for less to tune. This takes one thing off that list. If there is a card in the box, the [deep analysis](/manual/analysis) can use it, no five-service stack required.

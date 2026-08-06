@@ -11,7 +11,7 @@ Two changes this week. One you'll see, one you'll hear.
 
 ## Pick your own light or dark
 
-The station palette is still yours to set in admin, and that's what shapes the overall look for everyone. But the day-to-day light-or-dark choice is now personal. There's a switcher in the player header and in the admin header.
+The [station palette](/manual/themes) is still yours to set in admin, and that's what shapes the overall look for everyone. But the day-to-day light-or-dark choice is now personal. There's a switcher in the player header and in the admin header.
 
 Tap it to cycle light, dark, or system. System follows your device, so the player goes dark at night with everything else. Your pick is remembered on your device and doesn't change anyone else's view.
 
@@ -19,7 +19,7 @@ Tap it to cycle light, dark, or system. System follows your device, so the playe
 
 Firefox had a rough edge with the Opus stream: on some track changes the audio would just go silent until you reloaded. We traced it to how Firefox handled the Opus mount mid-stream.
 
-The fix is simple. Firefox now stays on the MP3 mount, which it handles cleanly through track changes. Chrome, Safari, and the rest still get Opus at roughly half the bandwidth. Nothing for you to do; it's the default now.
+The fix is simple. Firefox now stays on the [MP3 mount](/news/listen-anywhere), the same universal one Sonos and car stereos use, which it handles cleanly through track changes. Chrome, Safari, and the rest still get Opus at roughly half the bandwidth. Nothing for you to do; it's the default now.
 
 ## Why it helps
 

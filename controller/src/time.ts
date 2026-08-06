@@ -118,3 +118,21 @@ export function spokenHourPhrase(hour: number) {
   if (h < 22) return `${word} in the evening`;
   return `${word} at night`;
 }
+
+// The time as a radio DJ would round it — minute-aware, deliberately coarse
+// (radio rounds, it doesn't read a watch). The hourly check normally rides the
+// :00 cron where "just gone six" is honest, but manual /dj/segment triggers
+// and voice-queue holds can land it anywhere in the hour, and the hour-only
+// phrase said "just gone six" at 6:31 (#1282). Past :40 the phrase leans on
+// the NEXT hour ("quarter to seven") — spokenHourPhrase normalises h+1 at the
+// day edge, so 23:50 reads "coming up on midnight".
+export function spokenTimePhrase(hour: number, minute: number) {
+  const h = ((hour % 24) + 24) % 24;
+  const m = ((Math.trunc(minute) % 60) + 60) % 60;
+  if (m <= 4) return `just gone ${spokenHourPhrase(h)}`;
+  if (m <= 14) return `just after ${spokenHourPhrase(h)}`;
+  if (m <= 24) return `quarter past ${spokenHourPhrase(h)}`;
+  if (m <= 39) return `half past ${spokenHourPhrase(h)}`;
+  if (m <= 49) return `quarter to ${spokenHourPhrase(h + 1)}`;
+  return `coming up on ${spokenHourPhrase(h + 1)}`;
+}

@@ -1,10 +1,6 @@
 'use client';
 
-// Skill Edit Card — the "segment sheet" editor, shown as a modal over
-// /admin/skills. Implements the claude.ai/design "Skill Edit Card" redesign:
-// a newspaper-styled sheet with a masthead (name, kind, status toggle), a body
-// (cooldown presets + input, optional window, optional news feed, a context
-// chip bank, the brief) and a transport bar (Save / Cancel / Run now / Close).
+// Skill Edit Card — the segment-sheet editor, shown as a modal over /admin/skills.
 //
 // One component serves three jobs:
 //   • create a custom (prompt-only) skill  → POST /dj/skills
@@ -12,9 +8,9 @@
 //   • edit a built-in skill (incl. News)   → PUT  /dj/skills/:kind/file
 // The controller is the validation gate; this form does light client checks.
 //
-// The on/off toggle and Run now are LIVE operator actions (toggle hits
-// /dj/skill-toggle, run hits /dj/skill) — they don't participate in the
-// Save/dirty flow, which only writes the SKILL.md file fields.
+// The on/off toggle and Run now are LIVE operator actions (/dj/skill-toggle,
+// /dj/skill) — they don't participate in the Save/dirty flow, which only writes
+// the SKILL.md file fields.
 import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
@@ -26,8 +22,8 @@ import { Eyebrow } from '../ui';
 import { CONTEXT_FIELD_LABELS, CONTEXT_FIELDS_FALLBACK, splitContext } from './contextFields';
 import { skillSubmitUrl } from '../../../lib/repo';
 
-// Minimal shape of a catalogue skill (from GET /dj/skills) — only what the
-// modal needs. The full list type lives in SkillsPanel.
+// Only what this modal needs from GET /dj/skills; the full list type lives in
+// SkillsPanel.
 export interface SkillLike {
   name: string;
   kind?: string;
@@ -37,8 +33,7 @@ export interface SkillLike {
   cooldownMs?: number;
 }
 
-// Slim persona shape from GET /settings — enough for the DJ assignment
-// checklist. `skills: null` is the "all skills" sentinel (see controller
+// `skills: null` is the "all skills" sentinel (controller
 // settings.ts:validatePersonasStrict).
 export interface PersonaLite {
   id: string;
@@ -56,22 +51,37 @@ interface SkillEditModalProps {
   onRosterChange?: () => void;       // re-fetch personas after assignments change
 }
 
-// The shipped defaults for a built-in (read from the image template), used to
-// gate the "Reset to default" button. The reset itself is server-side.
+// The shipped defaults for a built-in, used only to gate the "Reset to default"
+// button — the reset itself is server-side.
 interface SkillDefaults {
   label?: string;
   cooldown?: string;
   context?: string;
-  feed?: string;
-  feedMaxItems?: number;
   brief?: string;
+}
+
+// A knob the skill declares for itself in its tool.mjs (`configFields`, see the
+// controller's skills/config-fields.ts). The form renders whatever the skill
+// declares — nothing here is keyed on the skill's NAME, which is what let a
+// renamed copy of News keep its feed field (#1300).
+export interface SkillConfigField {
+  key: string;
+  type: 'text' | 'url' | 'number';
+  label: string;
+  placeholder?: string;
+  hint?: string;
+  min?: number;
+  max?: number;
+  /** number fields only — whole numbers only, so the stepper moves by 1. */
+  integer?: boolean;
 }
 
 // GET /dj/skills/:kind/file — covers built-in and custom responses.
 interface SkillFileResponse {
   kind: string;
   custom?: boolean;
-  isNews?: boolean;
+  configFields?: SkillConfigField[];
+  config?: Record<string, string | number>;
   label?: string;
   cooldown?: string;
   context?: string;
@@ -79,8 +89,6 @@ interface SkillFileResponse {
   window?: 'any' | 'commute';
   requiresKey?: string;
   hasTool?: boolean;
-  feed?: string | null;
-  feedMaxItems?: number | null;
   tags?: string[];
   brief?: string;
   defaults?: SkillDefaults | null;
@@ -94,26 +102,43 @@ const COOLDOWN_PRESETS = ['15m', '25m', '45m', '1h', '6h'];
 const TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
 const TAGS_MAX = 8;
 
-// The mutable file fields — snapshotted so we can compute "dirty" and revert.
+// Snapshotted so "dirty" can be computed and edits reverted.
 interface FileFields {
   label: string;
   cooldown: string;
   context: string[];
   window: 'any' | 'commute';
-  feed: string;
-  feedMaxItems: string;
+  /** Values for the skill's own declared knobs, keyed by field key. Strings
+   *  throughout — the controller coerces and validates against the declaration. */
+  config: Record<string, string>;
   tags: string[];
   brief: string;
 }
 
 function emptyFields(): FileFields {
-  return { label: '', cooldown: '', context: [], window: 'any', feed: '', feedMaxItems: '', tags: [], brief: '' };
+  return { label: '', cooldown: '', context: [], window: 'any', config: {}, tags: [], brief: '' };
 }
 
-// Order-independent comparison key for the tracked fields. Tags keep their
-// order (they're an authored list, not a set) — only context is order-free.
+// The skill's current knob values as form strings (the controller sends numbers
+// as numbers).
+function configValues(j: SkillFileResponse): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(j.config || {}).map(([k, v]) => [k, v == null ? '' : String(v)]),
+  );
+}
+
+// Comparison key for the tracked fields. Tags keep their order (an authored list,
+// not a set); only context is order-free. Config is normalised — a knob the
+// controller reports as unset is ABSENT, so typing into an empty field and
+// clearing it again must not read as an unsaved change.
 function fieldsKey(f: FileFields): string {
-  return JSON.stringify({ ...f, context: [...f.context].sort() });
+  const config = Object.fromEntries(
+    Object.entries(f.config)
+      .map(([k, v]) => [k, (v || '').trim()] as const)
+      .filter(([, v]) => v)
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+  return JSON.stringify({ ...f, config, context: [...f.context].sort() });
 }
 
 function titleCase(slug: string): string {
@@ -132,7 +157,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const [name, setName] = useState('');            // slug — create only
   const [kind, setKind] = useState(skill?.kind || skill?.name || '');
   const [custom, setCustom] = useState(mode === 'create' ? true : !!skill?.custom);
-  const [isNews, setIsNews] = useState(false);
+  const [configFields, setConfigFields] = useState<SkillConfigField[]>([]);
   const [hasTool, setHasTool] = useState(false);
   const [requiresKey, setRequiresKey] = useState('');   // hidden passthrough
   const [knownContext, setKnownContext] = useState<string[]>(CONTEXT_FIELDS_FALLBACK);
@@ -141,9 +166,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const [snapshot, setSnapshot] = useState<string>(fieldsKey(emptyFields()));
   const [tagDraft, setTagDraft] = useState('');   // the tag input's in-progress text
 
-  // DJ assignment — which personas run this skill. Seeded from the roster at
-  // mount (a `skills: null` persona runs everything); saved via
-  // PUT /dj/skills/:slug/personas alongside (after) the file save.
+  // Seeded from the roster at mount (a `skills: null` persona runs everything);
+  // saved via PUT /dj/skills/:slug/personas after the file save.
   const roster = personas || [];
   const initialAssigned = () => (skill
     ? roster.filter(p => p.skills === null || p.skills.includes(skill.name)).map(p => p.id)
@@ -160,8 +184,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
 
   const patch = (p: Partial<FileFields>) => setFields(f => ({ ...f, ...p }));
 
-  // Commit the tag input's draft (Enter / comma / blur). Mirrors the
-  // controller's rules so a bad tag fails here, loudly, before save.
   const addTag = (raw: string) => {
     const tag = raw.trim().toLowerCase();
     if (!tag) return;
@@ -185,7 +207,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     window.setTimeout(() => setFlash(cur => (cur === msg ? null : cur)), 2000);
   };
 
-  // ── Prefill (edit) ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isEdit || !fileId) return;
     let cancelled = false;
@@ -201,8 +222,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
           cooldown: j.cooldown || '',
           context: splitContext(j.context),
           window: j.window === 'commute' ? 'commute' : 'any',
-          feed: j.feed || '',
-          feedMaxItems: j.feedMaxItems != null ? String(j.feedMaxItems) : '',
+          config: configValues(j),
           tags: Array.isArray(j.tags) ? j.tags : [],
           brief: j.brief || '',
         };
@@ -210,7 +230,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         setSnapshot(fieldsKey(next));
         setKind(j.kind || fileId);
         setCustom(!!j.custom);
-        setIsNews(!!j.isNews);
+        setConfigFields(Array.isArray(j.configFields) ? j.configFields : []);
         setHasTool(!!j.hasTool);
         setRequiresKey(j.requiresKey || '');
         setDefaults(j.defaults || null);
@@ -230,19 +250,16 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEdit, fileId, adminFetch]);
 
-  // Escape-to-close and body scroll-lock are handled by EditorDialog (Radix
-  // Dialog) — no manual key listener, so the nested delete confirm gets escape
-  // first and the page behind stays locked.
+  // Escape-to-close and scroll-lock come from EditorDialog (Radix). No manual key
+  // listener: that is what lets the nested delete confirm get Escape first.
 
   const assignDirty = isEdit && JSON.stringify([...assigned].sort()) !== assignSnapshot;
   const dirty = loaded && (fieldsKey(fields) !== snapshot || assignDirty);
   const nameValid = !isEdit ? SLUG_RE.test(name) : true;
   const canSave = loaded && !!fields.brief.trim() && nameValid && !busy;
 
-  // Display name in the masthead: the label, falling back to the slug/kind.
   const displayName = fields.label || (isEdit ? titleCase(kind) : (name ? titleCase(name) : 'New skill'));
 
-  // ── Actions ───────────────────────────────────────────────────────────────
   const save = async () => {
     if (!canSave) return;
     setBusy(true);
@@ -258,9 +275,13 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         body.window = fields.window;
         if (requiresKey) body.requiresKey = requiresKey;  // preserve disk-authored gate
       }
-      if (isNews) {
-        body.feed = fields.feed.trim() || undefined;
-        if (fields.feedMaxItems.trim()) body.feedMaxItems = fields.feedMaxItems.trim();
+      // Always sent when the skill declares knobs, so clearing a field clears
+      // the frontmatter line. Omitted entirely for a skill with none, which the
+      // controller reads as "leave whatever is on disk".
+      if (configFields.length) {
+        body.config = Object.fromEntries(
+          configFields.map(f => [f.key, (fields.config[f.key] || '').trim()]),
+        );
       }
 
       let r: Response;
@@ -287,8 +308,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         onClose();
       } else {
         setSnapshot(fieldsKey(fields));   // edits are now the saved baseline
-        // DJ assignments save as a separate resource (personas[].skills). The
-        // file save above already stood — a failure here reports on its own.
+        // A separate resource (personas[].skills): the file save above already
+        // stood, so a failure here reports on its own.
         if (assignDirty && skill) {
           try {
             const ar = await adminFetch(`/dj/skills/${skill.name}/personas`, {
@@ -351,9 +372,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     } finally { setActing(false); }
   };
 
-  // Delete a custom skill (its whole state/skills/<slug>/ folder), then close.
-  // Confirmation is the V3AlertDialog below (driven by confirmDelete), not a
-  // native window.confirm.
+  // Deletes the whole state/skills/<slug>/ folder.
   const remove = async () => {
     if (!isEdit || !skill) return;
     setConfirmDelete(false);
@@ -371,9 +390,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     }
   };
 
-  // Export this skill as a .zip (SKILL.md + tool.mjs if any). Auth-gated, so we
-  // fetch the bytes via adminFetch and trigger the download from the blob — a
-  // plain <a href> can't carry the Basic-auth header.
+  // The download goes through adminFetch + a blob because a plain <a href> can't
+  // carry the Basic-auth header.
   const exportZip = async () => {
     try {
       const r = await adminFetch(`/dj/skills/${fileId}/export`);
@@ -395,11 +413,9 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     }
   };
 
-  // Share a custom, prompt-only skill to the community: open the prefilled
-  // add-skill Issue Form on GitHub in a new tab. A maintainer reviews the
-  // generated PR; once merged it ships to everyone as an installable community
-  // skill. Only offered for tool-less custom skills — built-ins already ship,
-  // and executable tool.mjs skills aren't accepted through this (v1) path.
+  // Opens the prefilled add-skill Issue Form on GitHub. Only offered for tool-less
+  // custom skills — built-ins already ship, and executable tool.mjs skills aren't
+  // accepted through this path.
   const shareToCommunity = () => {
     const url = skillSubmitUrl({
       'skill-name': kind,
@@ -412,11 +428,9 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  // Restore a built-in to its shipped default. Server-side and immediate: POST
-  // overwrites BOTH the SKILL.md AND the tool.mjs in state/skills/<kind>/ from the
-  // image template (an in-form repopulate couldn't restore the code). We then
-  // refetch the now-restored SKILL.md so the form mirrors the shipped values, and
-  // refresh the catalogue.
+  // Server-side and immediate: the POST overwrites BOTH the SKILL.md AND the
+  // tool.mjs in state/skills/<kind>/ from the image template, which an in-form
+  // repopulate could not do. The refetch afterwards mirrors the shipped values back.
   const resetToDefault = async () => {
     if (custom || !isEdit || busy) return;
     setBusy(true);
@@ -434,13 +448,13 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
           cooldown: fj.cooldown || '',
           context: splitContext(fj.context),
           window: fj.window === 'commute' ? 'commute' : 'any',
-          feed: fj.feed || '',
-          feedMaxItems: fj.feedMaxItems != null ? String(fj.feedMaxItems) : '',
+          config: configValues(fj),
           tags: Array.isArray(fj.tags) ? fj.tags : [],
           brief: fj.brief || '',
         };
         setFields(next);
         setSnapshot(fieldsKey(next));
+        setConfigFields(Array.isArray(fj.configFields) ? fj.configFields : []);
         setHasTool(!!fj.hasTool);
       }
       flashFor('RESET TO SHIPPED DEFAULT');
@@ -452,7 +466,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     }
   };
 
-  // ── Style helpers (mirror the design, using our theme vars) ─────────────────
   const I = 'var(--ink)';
   const sectionLabel: CSSProperties = {
     fontSize: 11, letterSpacing: '0.22em', textTransform: 'uppercase', fontWeight: 700, color: I,
@@ -481,19 +494,14 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     border: '1px solid var(--ink)', background: 'var(--field)', color: 'var(--ink)',
   };
 
-  // ── Header / footer slots for the full-screen EditorDialog ──────────────────
-  // Uniform header: a static label + the segment type (the editable name/slug
-  // live in the body's first section, matching the other editors).
   const headerTitle = (
     <Eyebrow className="text-vermilion">{isEdit ? 'Edit skill' : 'New skill'}</Eyebrow>
   );
   const headerSub = (
     <span className="caption truncate">{custom ? 'custom segment' : 'built-in segment'}</span>
   );
-  // On-air toggle (edit only) — lives in the footer with the other actions so
-  // the header stays uniform across all three editors.
-  // Sized down on a phone (52x26) — the footer is fixed furniture, and the
-  // toggle is the one control that can't collapse into the overflow menu.
+  // Sized down on a phone (52x26): the footer is fixed furniture, and this is the
+  // one control that can't collapse into the overflow menu.
   const airToggle = isEdit ? (
     <div
       onClick={() => { if (!acting) toggleEnabled(); }}
@@ -513,10 +521,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     </div>
   ) : null;
 
-  // Transport bar — the shared EditorFooter: on-air toggle always visible, the
-  // editor verbs (run / export / delete / share) inline on desktop and behind a
-  // single `⋯` on a phone, Close/Save pinned right. Status (unsaved / flash)
-  // rides its own line. Border + padding come from EditorDialog's footer slot.
   const footer = (
     <EditorFooter
       status={(dirty || flash) ? (
@@ -593,7 +597,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       ) : (
         <div style={{ opacity: isEdit && !enabled ? 0.6 : 1, transition: 'opacity .2s ease' }}>
 
-            {/* Skill name + slug */}
             <div className="sw-section">
               <div style={sectionLabel}>SKILL NAME</div>
               <input
@@ -616,7 +619,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               )}
             </div>
 
-            {/* Cooldown */}
             <div className="sw-section">
               <div style={sectionLabel}>COOLDOWN · MINIMUM GAP BETWEEN AIRINGS</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap', marginTop: 16 }}>
@@ -636,7 +638,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, letterSpacing: '0.01em' }}>e.g. 45m, 6h, 2d, or a bare number (minutes).</div>
             </div>
 
-            {/* Window — custom skills only (built-in window isn't editable) */}
             {custom && (
               <div className="sw-section">
                 <div style={sectionLabel}>WHEN IT CAN AIR</div>
@@ -649,34 +650,40 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               </div>
             )}
 
-            {/* News feed — news built-in only */}
-            {isNews && (
+            {configFields.length > 0 && (
               <div className="sw-section">
-                <div style={sectionLabel}>NEWS FEED · RSS 2.0</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
-                  <input
-                    type="url"
-                    value={fields.feed}
-                    onChange={e => patch({ feed: e.target.value })}
-                    placeholder="https://…/rss.xml"
-                    style={{ ...inputBase, flex: '1 1 320px', minWidth: 0, padding: '11px 15px', fontSize: 14 }}
-                  />
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>MAX ITEMS</span>
-                    <input
-                      type="number"
-                      min={1}
-                      value={fields.feedMaxItems}
-                      onChange={e => patch({ feedMaxItems: e.target.value })}
-                      placeholder="10"
-                      style={{ ...inputBase, width: 90, padding: '11px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }}
-                    />
-                  </label>
+                <div style={sectionLabel}>SKILL SETTINGS</div>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
+                  {configFields.map(f => (
+                    <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: f.type === 'number' ? '0 0 auto' : '1 1 320px', minWidth: 0 }}>
+                      <span style={{ fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>{f.label}</span>
+                      <input
+                        type={f.type === 'number' ? 'number' : f.type === 'url' ? 'url' : 'text'}
+                        min={f.type === 'number' ? f.min : undefined}
+                        max={f.type === 'number' ? f.max : undefined}
+                        step={f.type === 'number' ? (f.integer ? 1 : 'any') : undefined}
+                        value={fields.config[f.key] || ''}
+                        onChange={e => patch({ config: { ...fields.config, [f.key]: e.target.value } })}
+                        placeholder={f.placeholder || ''}
+                        style={{
+                          ...inputBase,
+                          ...(f.type === 'number'
+                            ? { width: 110, padding: '11px 12px', fontVariantNumeric: 'tabular-nums' }
+                            : { width: '100%', minWidth: 0, padding: '11px 15px' }),
+                          boxSizing: 'border-box',
+                          fontSize: 14,
+                        }}
+                      />
+                      {f.hint && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{f.hint}</span>}
+                    </label>
+                  ))}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6, maxWidth: '78ch' }}>
+                  Declared by this skill&apos;s <code>tool.mjs</code> and stored in its own <code>SKILL.md</code>, so a copy of the skill keeps its settings.
                 </div>
               </div>
             )}
 
-            {/* Context bank */}
             <div className="sw-section">
               <div style={sectionLabel}>CONTEXT THE DJ MAY MENTION</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
@@ -700,7 +707,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               </div>
             </div>
 
-            {/* Tags — freeform organisation labels for the skill list */}
             <div className="sw-section">
               <div style={sectionLabel}>TAGS · ORGANISE THE SKILL LIST</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginTop: 16 }}>
@@ -746,7 +752,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               </div>
             </div>
 
-            {/* DJ assignment — which personas run this skill (edit only) */}
             {isEdit && roster.length > 0 && (
               <div className="sw-section">
                 <div style={sectionLabel}>WHICH DJS RUN IT</div>
@@ -774,12 +779,9 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               </div>
             )}
 
-            {/* Brief */}
             <div className="sw-section">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                 <div style={sectionLabel}>THE BRIEF · WHAT THE DJ SAYS, AND WHEN TO STAY SILENT</div>
-                {/* Built-ins revert to their shipped default — restores both the
-                    brief (SKILL.md) and the data tool (tool.mjs) from the image. */}
                 {!custom && defaults && (
                   <button
                     type="button"
@@ -816,8 +818,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
           </div>
         )}
 
-      {/* Delete confirm — the shared V3AlertDialog. Layers above the
-          full-screen EditorDialog (both Radix) and now receives Escape first. */}
       <V3AlertDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}

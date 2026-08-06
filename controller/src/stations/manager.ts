@@ -312,6 +312,7 @@ export function deleteStation(root: string, id: string): void {
 const STALE_IPC_FILES = [
   'next.txt', 'say.txt', 'intro.txt', 'sfx.txt',
   'now-playing.json', 'jingle-playing.json', 'bed-playing.json',
+  'music-starved.json',
 ];
 
 function drainStaleIpc(dir: string): void {

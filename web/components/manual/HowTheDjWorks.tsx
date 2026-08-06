@@ -15,8 +15,8 @@ export default function HowTheDjWorks() {
         <h2>One song ends, the DJ chooses the next.</h2>
         <p>
           Every transition is a decision. By default the DJ runs as a small agent: it digs
-          through your library with real tools — similar artists, mood tags, playlists,
-          even a &ldquo;sounds like&rdquo; audio search — and picks the next track itself,
+          through your library with real tools (similar artists, mood tags, playlists,
+          even a &ldquo;sounds like&rdquo; audio search) and picks the next track itself,
           steering by the time of day, the weather, and the current mood. If the agent
           fails or runs slow, the station quietly falls back to a simpler pick: it gathers
           a pool of candidates — songs in a similar mood, similar artists, recently-added
@@ -41,10 +41,10 @@ export default function HowTheDjWorks() {
         <p className="bs-eyebrow">THE DJS</p>
         <h2>A roster of personas, one on the mic.</h2>
         <p>
-          The station keeps a roster of <em>personas</em> — each one a name, a soul (the
+          The station keeps a roster of <em>personas</em>. Each one is a name, a soul (the
           character brief behind everything they say), and a few behaviour knobs: their
           own voice, their own language, how chatty they are, how long their scripts run.
-          Three ship out of the box — Marlowe, Wren and Hale — and the roster grows to
+          Three ship out of the box (Marlowe, Wren and Hale), and the roster grows to
           forty-eight from the admin console.
         </p>
         <p>
@@ -92,10 +92,10 @@ export default function HowTheDjWorks() {
         <p className="bs-eyebrow">WHEN IT TALKS</p>
         <h2>Links, IDs, the time, the weather.</h2>
         <p>
-          Between tracks the DJ does what radio DJs do — a short link tying one song to
+          Between tracks the DJ does what radio DJs do: a short link tying one song to
           the next, a station ID, the time at the top of the hour, and between-track
-          segments: a weather note when the conditions change, a news brief, a curiosity,
-          an album anniversary, a deep cut from your own library. Spoken segments ride{' '}
+          segments (a weather note when the conditions change, a news brief, a curiosity,
+          an album anniversary, a deep cut from your own library). Spoken segments ride{' '}
           <em>over</em> the music: the track ducks down while the DJ talks, then comes
           back up.
         </p>
@@ -109,8 +109,8 @@ export default function HowTheDjWorks() {
         <p className="text-muted">
           Listener requests get their own on-air moment — the DJ acknowledges each one
           before it plays; see <Link href="/manual/requests">Making Requests</Link>. The
-          between-track segments are skills, and you can edit them or write your own —
-          see <Link href="/manual/skills">Custom Skills</Link>.
+          between-track segments are skills, and you can edit them or write your own; see{' '}
+          <Link href="/manual/skills">Custom Skills</Link>.
         </p>
       </section>
 

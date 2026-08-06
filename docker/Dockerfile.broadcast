@@ -1,34 +1,20 @@
 # SUB/WAVE broadcast image — Icecast2 + Liquidsoap in one container.
+# icecast2 serves listeners on :7702; liquidsoap connects over loopback and
+# exposes telnet on :1234 (internal). broadcast-entrypoint.sh resolves the
+# shared passwords, renders icecast.xml, launches both, and exits if either
+# dies so the restart policy bounces them together.
 #
-# Replaces the previous split (subwave-icecast + subwave-liquidsoap). The two
-# processes are always launched together, share the same `state/` mount, and
-# already coordinate through the icecast-secrets handshake — collapsing them
-# removes the inter-container healthcheck race and the moul/icecast amd64-only
-# constraint at the same time.
-#
-# Layout inside the container:
-#   - icecast2 runs as the icecast2 user on :7702 (HTTP) — listener-facing.
-#   - liquidsoap runs as the liquidsoap user (uid 10000), connects to icecast
-#     over 127.0.0.1, and exposes its telnet control port on :1234 (internal).
-#   - A tiny shell supervisor (broadcast-entrypoint.sh) resolves the shared
-#     password, renders icecast.xml, launches both, and exits if either dies
-#     so the container's restart policy bounces them together.
-# v2.4.5 minimum: 2.4.4's clock scanned every source in the graph per pull,
-# and pass-through layers (smooth_add/compress) pull more than once per frame —
-# together the per-transition DJ effect chains (sweep/washout/dissolve, ~30
-# operators) pegged a core and stalled the stream clock at every crossfade
-# ("Latency is too high" → dead-air source resets). 2.4.5 makes clock
-# sync-source propagation push-based/O(1), which removes the stall entirely
-# (verified against the dissolve worst case in an isolated sandbox).
+# v2.4.5 minimum: 2.4.4's per-pull clock scan let the per-transition DJ effect
+# chains (~30 operators) peg a core and stall the stream clock at every
+# crossfade ("Latency is too high" → dead-air source resets). 2.4.5 makes
+# clock propagation push-based/O(1).
 FROM savonet/liquidsoap:v2.4.5
 
 USER root
 
-# - icecast2: the broadcast server (apt also creates the icecast2 user).
-# - sudo: lets the supervisor drop privileges to icecast2 / liquidsoap.
-# - openssl: random hex generation for first-boot secrets.
-# - curl: liquidsoap's protocol.external HTTPS fetch (Subsonic stream URLs)
-#   and the supervisor's "icecast accepting connections yet" probe.
+# sudo: drop privileges to icecast2/liquidsoap. openssl: first-boot secret
+# generation. curl: liquidsoap's HTTPS Subsonic fetch + the entrypoint's
+# "icecast up yet" probe.
 RUN apt-get update -qq \
  && apt-get install -y --no-install-recommends \
         icecast2 \
@@ -38,24 +24,19 @@ RUN apt-get update -qq \
         ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Bake the icecast config template (with ${ICECAST_*_PASSWORD} placeholders)
-# and the mixer script + repo-bundled audio (emergency loop + studio bed).
-# Prod no longer bind-mounts these from the repo — operators install via the
-# image-only path. Dev compose can still bind-mount over the top for hot reload.
+# Baked config + repo-bundled audio (prod is image-only; dev compose can still
+# bind-mount over the top).
 COPY docker/icecast.xml.template /etc/icecast2/icecast.xml.template
 COPY liquidsoap/radio.liq /etc/liquidsoap/radio.liq
 COPY sounds /sounds
 
-# Bake the supervisor entrypoint.
 COPY docker/broadcast-entrypoint.sh /usr/local/bin/broadcast-entrypoint
 RUN chmod +x /usr/local/bin/broadcast-entrypoint
 
-# Healthcheck: icecast HTTP is reachable. Start period covers cold-boot
-# (apt'd icecast2 takes a couple of seconds to bind the socket).
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=6 \
     CMD curl -fsS http://localhost:7702/status-json.xsl > /dev/null || exit 1
 
-# Supervisor runs as root so it can resolve secrets, render icecast.xml, and
-# sudo into the dedicated user accounts for each process.
+# Entrypoint runs as root so it can resolve secrets, render icecast.xml, and
+# sudo into the per-process users.
 USER root
 ENTRYPOINT ["/usr/local/bin/broadcast-entrypoint"]

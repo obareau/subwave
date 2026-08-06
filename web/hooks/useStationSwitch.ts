@@ -1,12 +1,10 @@
 'use client';
 
-// Shared "station switch in flight" machinery for the sidebar station
-// switcher and the /admin/stations panel. While `switching` is non-null this
-// polls /state until the NEW controller answers — station.id is boot-frozen
-// (controller/src/routes/public.ts), so a response carrying the target id
-// (or multiStation === true for the CONVERT_SENTINEL) means the restart
-// completed — then hard-reloads so every hook re-derives from the new
-// station's settings.
+// Shared "station switch in flight" machinery for the sidebar switcher and the
+// /admin/stations panel. station.id is boot-frozen
+// (controller/src/routes/public.ts), so a /state response carrying the target id
+// (or multiStation for CONVERT_SENTINEL) means the restart completed; then hard
+// reload so every hook re-derives from the new station's settings.
 
 import { useEffect, useRef } from 'react';
 import { useAdminAuth } from '../lib/adminAuth';

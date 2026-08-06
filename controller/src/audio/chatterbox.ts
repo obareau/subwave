@@ -16,10 +16,10 @@
 // WAV path, isAvailable() returns a boolean, that's the whole contract.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { config } from '../config.js';
+import { scan as scanVoices } from './voice-library.js';
 import {
   isRemoteEnabled,
   speakRemote,
@@ -236,30 +236,25 @@ export function isAvailable() {
   return existsSync(config.chatterbox.python) && existsSync(config.chatterbox.workerScript);
 }
 
-// List the reference-WAV filenames the operator has uploaded into the shared
-// voice directory. The admin UI uses these to populate the per-persona voice
-// dropdown for BOTH Chatterbox and PocketTTS (issue #213). Returns [] (not an
-// error) if the directories don't exist yet — that's the pre-install state and
-// the UI handles it gracefully.
+// List the reference-WAV filenames the operator has in the shared voice
+// directory. The admin UI uses these to populate the per-persona voice dropdown
+// for BOTH Chatterbox and PocketTTS (issue #213). Returns [] (not an error) if
+// the directories don't exist yet — that's the pre-install state and the UI
+// handles it gracefully.
 //
-// The legacy `state/chatterbox-voices/` folder is still scanned so operators
-// who set up before #213 don't have to move files. Filenames present in both
-// dirs are deduped (the canonical `state/voices/` copy wins on resolution —
-// see resolveReferenceWav).
+// The scan itself lives in audio/voice-library.ts, which is the single owner of
+// those directories (the admin import/delete routes use the same scan). The
+// legacy `state/chatterbox-voices/` folder is still covered, deduped with the
+// canonical `state/voices/` copy winning — matching resolveReferenceWav.
+//
+// This stays the documented listing path and keeps its shape — a plain
+// string[] — because GET /settings publishes it on every admin poll.
+// Deliberately calls scan() and NOT list(): list() probes durations with
+// ffprobe, which would mean a subprocess per voice per poll.
 let legacyWarned = false;
-async function readVoiceWavs(dir: string): Promise<string[]> {
-  try {
-    const entries = await readdir(dir);
-    return entries.filter((f) => f.toLowerCase().endsWith('.wav'));
-  } catch {
-    return [];
-  }
-}
 export async function listReferenceVoices(): Promise<string[]> {
-  const [primary, legacy] = await Promise.all([
-    readVoiceWavs(config.voices.dir),
-    readVoiceWavs(config.voices.legacyDir),
-  ]);
+  const files = await scanVoices();
+  const legacy = files.filter((f) => f.legacy);
   if (legacy.length > 0 && !legacyWarned) {
     legacyWarned = true;
     console.log(
@@ -267,14 +262,7 @@ export async function listReferenceVoices(): Promise<string[]> {
       + ` — move them to ${config.voices.dir} when convenient`,
     );
   }
-  const seen = new Set<string>();
-  const merged: string[] = [];
-  for (const f of [...primary, ...legacy]) {
-    if (seen.has(f)) continue;
-    seen.add(f);
-    merged.push(f);
-  }
-  return merged.sort();
+  return files.map((f) => f.file);
 }
 
 export function voiceDir(): string {

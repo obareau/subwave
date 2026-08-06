@@ -8,7 +8,7 @@ export default function AcousticAnalysis() {
     <ManualPage
       eyebrow="MANUAL · 13"
       title="Acoustic analysis."
-      intro="Beyond mood and energy tags, SUB/WAVE can listen to each track and measure how it actually sounds — tempo, key, loudness, and, optionally, a 'sounds-like' fingerprint and where the vocals sit. The DJ leans on these to build smoother, better-matched sets. The basics run out of the box; the heavier dimensions are one line away."
+      intro="Beyond mood and energy tags, SUB/WAVE can listen to each track and measure how it actually sounds: tempo, key, loudness, and, optionally, a 'sounds-like' fingerprint and where the vocals sit. The DJ leans on these to build smoother, better-matched sets. The basics run out of the box; the heavier dimensions are one line away."
       current="/manual/analysis"
     >
       <section className="bs-section">
@@ -16,7 +16,7 @@ export default function AcousticAnalysis() {
         <h2>Tempo, key &amp; loudness — on by default.</h2>
         <p>
           The <code className="bs-code-inline">analyzer</code> is a small service that ships
-          and starts <strong>by default</strong> alongside the controller — no profile, no
+          and starts <strong>by default</strong> alongside the controller: no profile, no
           flag. It measures each track&rsquo;s <strong>tempo (BPM)</strong>,{' '}
           <strong>musical key</strong>, <strong>intro length</strong> and{' '}
           <strong>loudness</strong>, and hands them to the DJ as tie-breakers for smoother
@@ -24,7 +24,7 @@ export default function AcousticAnalysis() {
           to talk over an intro.
         </p>
         <p>
-          The default image is <strong>lean</strong> — librosa only, no PyTorch — so it
+          The default image is <strong>lean</strong> (librosa only, no PyTorch), so it
           stays small and runs natively on both amd64 and arm64 (a NAS, a Pi, Apple
           Silicon). Coverage climbs on the <Link href="/admin/library">Library</Link> page
           under <strong>Acoustic analysis · bpm / key</strong>.
@@ -40,7 +40,7 @@ export default function AcousticAnalysis() {
           <div className="bs-eyebrow">&ldquo;ENGINE OFF&rdquo;?</div>
           <p>
             The acoustic-engine indicator is a <em>live reachability check</em>, not a saved
-            setting. If the analyzer container is stopped, existing data still drives picks —
+            setting. If the analyzer container is stopped, existing data still drives picks;
             only new analysis pauses until it&rsquo;s back.
           </p>
         </div>
@@ -70,7 +70,7 @@ export default function AcousticAnalysis() {
           <code className="bs-code-inline">subwave-analyzer-heavy</code> image. If you turn
           on <strong>Audio fingerprint</strong> or <strong>Vocal activity</strong> on the
           Library page while running the lean analyzer, you&rsquo;ll see a note that the
-          engine can&rsquo;t produce them — that&rsquo;s the cue to switch to the heavy image
+          engine can&rsquo;t produce them; that&rsquo;s the cue to switch to the heavy image
           below. (This is entirely separate from the <code className="bs-code-inline">tts-heavy</code>{' '}
           voices sidecar, which is TTS-only.)
         </p>
@@ -103,7 +103,7 @@ ANALYZER_HEAVY=1`}</CodeBlock>
           </li>
           <li>
             <strong>Unraid one-click (AIO).</strong> There&rsquo;s no second container to
-            swap — point the container&rsquo;s <strong>Repository</strong> at{' '}
+            swap; point the container&rsquo;s <strong>Repository</strong> at{' '}
             <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-aio-heavy</code>{' '}
             and re-pull.
           </li>
@@ -113,7 +113,7 @@ ANALYZER_HEAVY=1`}</CodeBlock>
           <p>
             The heavy image is <strong>amd64-only</strong> (the CPU-torch stack). On an
             arm64 host (Pi, Apple Silicon, arm cloud) also set{' '}
-            <code className="bs-code-inline">DOCKER_DEFAULT_PLATFORM=linux/amd64</code> — it
+            <code className="bs-code-inline">DOCKER_DEFAULT_PLATFORM=linux/amd64</code>; it
             runs under emulation (slower, but analysis is a one-time per-track pass).
           </p>
         </div>
@@ -123,6 +123,23 @@ ANALYZER_HEAVY=1`}</CodeBlock>
           dimensions on the <Link href="/admin/library">Library</Link> page and run a
           backfill.
         </p>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">NEEDS THE INTERNET ONCE</div>
+          <p>
+            The weights are <strong>not baked into the image</strong> — the heavy analyzer
+            fetches them from huggingface.co the first time it needs them, so the heavy tier
+            has a one-time outbound dependency that everything else about the station
+            doesn&rsquo;t. On a host with no reach the load fails, sounds-like coverage stays
+            at zero, and the analysis pass keeps re-targeting the same tracks every run. The
+            Library panel names the cause when this happens. It is <em>not</em> the lean/heavy
+            image split, so switching images won&rsquo;t help. Let it out once, or pre-seed the
+            cache offline; the recipe is in <code className="bs-code-inline">docs/tts-heavy.md</code>.
+            After fixing it, restart whatever holds the analyzer: the sidecar container on a
+            compose install, or the controller itself on an AIO or local venv, where the worker
+            is a child of it. The failure is remembered until you do, which is what stops the pass
+            churning; the Library panel names the right process for your install.
+          </p>
+        </div>
       </section>
 
       <section className="bs-section">
@@ -130,19 +147,19 @@ ANALYZER_HEAVY=1`}</CodeBlock>
         <h2>The CUDA flavour — same features, much faster.</h2>
         <p>
           Hosts with an NVIDIA card can run the heavy stack on the GPU instead of pinning
-          CPU cores — a big speed-up on deep library ingestion. It&rsquo;s a compose{' '}
+          CPU cores, a big speed-up on deep library ingestion. It&rsquo;s a compose{' '}
           <em>overlay</em>, not an <code className="bs-code-inline">.env</code> toggle (a
           GPU reservation can&rsquo;t be switched from <code className="bs-code-inline">.env</code>):
         </p>
         <CodeBlock>{`docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d`}</CodeBlock>
         <p>
           That swaps the analyzer to the{' '}
-          <code className="bs-code-inline">subwave-analyzer-cuda</code> image — everything{' '}
-          <code className="bs-code-inline">-heavy</code> does, on CUDA —{' '}so{' '}
+          <code className="bs-code-inline">subwave-analyzer-cuda</code> image (everything{' '}
+          <code className="bs-code-inline">-heavy</code> does, on CUDA), so{' '}
           <code className="bs-code-inline">ANALYZER_HEAVY</code> is unnecessary while the
           overlay is applied. Requirements: the NVIDIA driver + Container Toolkit on the
           host, nothing else (the CUDA runtime rides inside the image). If the GPU
-          isn&rsquo;t actually visible, the worker logs a warning and falls back to CPU —
+          isn&rsquo;t actually visible, the worker logs a warning and falls back to CPU;
           analysis never fails over device selection.
         </p>
         <div className="bs-callout">
@@ -160,7 +177,7 @@ ANALYZER_HEAVY=1`}</CodeBlock>
             The AIO has no separate analyzer to swap, so there&rsquo;s no overlay: the GPU
             rides on the image. Point the container at{' '}
             <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-aio-cuda</code>{' '}
-            — the same heavy features on CUDA — and hand it the card
+            (the same heavy features on CUDA) and hand it the card
             (<code className="bs-code-inline">--gpus all</code>, or on Unraid the nvidia
             runtime plus <code className="bs-code-inline">NVIDIA_VISIBLE_DEVICES</code>;{' '}
             <a className="bs-link" href="/setup/unraid#acoustic-analysis">
@@ -170,7 +187,7 @@ ANALYZER_HEAVY=1`}</CodeBlock>
           </p>
           <p>
             Don&rsquo;t point an AIO install at{' '}
-            <code className="bs-code-inline">subwave-analyzer-cuda</code> — that&rsquo;s the
+            <code className="bs-code-inline">subwave-analyzer-cuda</code>: that&rsquo;s the
             bare analyzer micro-service, and swapping to it replaces your whole station
             with just an analyzer.
           </p>
@@ -190,7 +207,7 @@ ANALYZER_HEAVY=1`}</CodeBlock>
         <h2>Let analysis yield to the live station.</h2>
         <p>
           A bulk pass over a large library runs for hours, and on a homelab it competes
-          with local LLM / TTS — and the stream itself — for the same CPU or GPU.{' '}
+          with local LLM / TTS, and the stream itself, for the same CPU or GPU.{' '}
           <strong>Quiet times</strong> (off by default, on the{' '}
           <Link href="/admin/library">Library</Link> page next to the sounds-like and vocal
           controls) pauses any analysis run while someone is listening, and resumes once
@@ -202,7 +219,7 @@ ANALYZER_HEAVY=1`}</CodeBlock>
           <em>&ldquo;Waiting for quiet&rdquo;</em> while it holds. It applies to manual{' '}
           <strong>Analyse</strong> runs too — a pass outlives the click, so the bypass is
           turning the toggle off, not the button. If the listener count can&rsquo;t be read
-          at all (Icecast down), analysis proceeds — a stats outage never stalls a library
+          at all (Icecast down), analysis proceeds; a stats outage never stalls a library
           scan.
         </p>
       </section>

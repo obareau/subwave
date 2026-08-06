@@ -6,6 +6,7 @@ import { m } from 'motion/react';
 import { notify, errorMessage } from '../../../lib/notify';
 import { cn } from '../../../lib/cn';
 import type { StationLocale } from '../../../lib/format';
+import type { EngineAvailability } from '../tts/engineMeta';
 import { Play } from 'lucide-react';
 import { Btn, Eyebrow, Metric } from '../ui';
 import { Button } from '../../ui/button';
@@ -18,6 +19,8 @@ export const KEY_HINTS: Record<string, string> = {
   OPENROUTER_API_KEY: 'sk-or-v1-...',
   AI_GATEWAY_API_KEY: 'gateway API key',
   ELEVENLABS_API_KEY: 'el_...',
+  // Fish keys have no documented prefix — point at where to mint one instead.
+  FISH_API_KEY: 'key from fish.audio/app/api-keys',
   EMBEDDING_API_KEY: 'optional — defaults to chat key',
 };
 
@@ -38,19 +41,26 @@ export interface CloudTtsCfg {
   model: string;
   voice: string;
   baseUrl: string;
-  // ElevenLabs voice_settings (issue #696). All four are read + saved
-  // regardless of provider so switching provider later preserves the
-  // operator's tuning, but the UI + the outbound request only surface them
-  // when provider === 'elevenlabs'.
+  // ElevenLabs voice_settings (issue #696). Read + saved regardless of provider so
+  // switching preserves the tuning; only surfaced when provider === 'elevenlabs'.
   voiceStability: number;
   voiceStyle: number;
   voiceSimilarityBoost: number;
   voiceUseSpeakerBoost: boolean;
+  // Fish Audio S2.1 controls. Persisted across provider switches, surfaced and
+  // sent only when provider === 'fish-audio'.
+  temperature: number;
+  topP: number;
+  latency: 'low' | 'normal' | 'balanced';
+  // Free-form extra request-body fields for openai-compatible servers (issue
+  // #1317) — Chatterbox's temperature/seed/exaggeration and friends. Kept as
+  // text on both sides; the controller coerces each value to its JSON type at
+  // send time (settings/compat-params.ts).
+  compatParams: { key: string; value: string }[];
 }
 
-// ElevenLabs voice_settings defaults — the single client-side copy, read by
-// both form hydration and the dirty-check. Must mirror DEFAULTS.tts.cloud in
-// controller/src/settings.ts (which itself mirrors ElevenLabs' own baseline).
+// The single client-side copy, read by both form hydration and the dirty-check.
+// Must mirror DEFAULTS.tts.cloud in controller/src/settings.ts.
 export const ELEVENLABS_VS_DEFAULTS = {
   voiceStability: 0.5,
   voiceStyle: 0,
@@ -58,26 +68,40 @@ export const ELEVENLABS_VS_DEFAULTS = {
   voiceUseSpeakerBoost: true,
 } as const;
 
+export const FISH_TTS_DEFAULTS = {
+  temperature: 0.7,
+  topP: 0.7,
+  latency: 'normal' as const,
+};
+
+export interface TtsFallbackForm {
+  enabled: boolean;
+  engine: string;
+  voice: string;
+  cloudProvider: string;
+}
+
 export interface TtsForm {
-  // Station-wide voice switch. false = music only — the DJ never speaks and no
-  // script is generated for it. Jingles are unaffected (jingleRatio owns those)
-  // and manual segment triggers still fire. Mirrors DEFAULTS.tts.enabled.
+  // false = music only: no script is generated at all. Jingles are unaffected
+  // (jingleRatio owns those) and manual segment triggers still fire.
   enabled: boolean;
   defaultEngine: string;
+  // Operator-chosen rescue voice. When on, this engine AND voice speaks for a
+  // persona whose own engine is unavailable or fails mid-render, ahead of the
+  // hardcoded defaultEngine → piper → kokoro floor behind it.
+  fallback: TtsFallbackForm;
   kokoro: { voice: string };
   chatterbox: { referenceVoice: string };
   pocketTts: { voice: string };
   cloud: CloudTtsCfg;
   remote: { url: string };
-  // Per-engine voice-level trim in dB, keyed by engine id (note the hyphen in
-  // `pocket-tts`). Always carries all 6 known engines, 0 = unity = no change.
+  // Keyed by engine id (note the hyphen in `pocket-tts`). Always carries all 6
+  // known engines; 0 = unity.
   gainDb: Record<string, number>;
-  // Per-engine speech-rate multiplier, keyed by engine id. Always carries all 6
-  // known engines, 1.0 = unity = no change. Inert for chatterbox/pocket-tts/remote.
+  // Always carries all 6 known engines; 1.0 = unity. Inert for
+  // chatterbox/pocket-tts/remote.
   speed: Record<string, number>;
-  // Operator speech corrections — find→replace pairs applied to every spoken
-  // line before any TTS engine reads it (the editable sibling of the built-in
-  // SUB/WAVE → "Subwave" rule).
+  // find→replace pairs applied to every spoken line before any engine reads it.
   corrections: { from: string; to: string }[];
 }
 
@@ -90,6 +114,7 @@ export interface LlmFallbackForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   reasoning: boolean;
+  discoverySteps: number;
 }
 
 export interface LlmForm {
@@ -110,6 +135,8 @@ export interface LlmForm {
   budgetSoftPct: number;
   exemptRequests: boolean;
   maxOutputTokens: number;
+  // 0 = auto (follow the provider capability table); 1-5 overrides it.
+  discoverySteps: number;
   fallback: LlmFallbackForm;
 }
 
@@ -213,11 +240,9 @@ export interface PrivacyForm {
   publishPersonaSouls: boolean;
 }
 
-/** Listener-request pipeline gates (request-system hardening). `enabled` is
- *  the fast pause switch — the one that, during a raid, previously only
- *  existed as an env var requiring a restart. Every field applies live; the
- *  controller clamps on save so the UI doesn't need to. Numbers are held as
- *  strings, parsed on save (the weather lat/lng idiom). */
+/** Every field applies live and the controller clamps on save, so the UI doesn't
+ *  need to. Numbers are held as strings and parsed on save (the weather lat/lng
+ *  idiom). */
 export interface RequestsForm {
   enabled: boolean;
   maxPending: string;
@@ -296,10 +321,13 @@ export interface SettingsData {
     tts?: {
       enabled?: boolean;
       defaultEngine?: string;
+      fallback?: Partial<TtsFallbackForm>;
       kokoro?: { voice?: string; lang?: string };
       chatterbox?: { referenceVoice?: string };
       pocketTts?: { voice?: string };
-      cloud?: Partial<CloudTtsCfg>;
+      // The saved shape also carries the redacted key sentinels ('set' when a
+      // key is on file, '' otherwise) — GET /settings never returns raw keys.
+      cloud?: Partial<CloudTtsCfg> & { apiKey?: string; compatApiKey?: string };
       remote?: { url?: string };
       gainDb?: Record<string, number>;
       speed?: Record<string, number>;
@@ -354,7 +382,7 @@ export interface SettingsData {
   };
   tts?: {
     engines?: string[];
-    available?: Record<string, boolean>;
+    available?: EngineAvailability;
     kokoroVoices?: string[];
     kokoroVoiceLanguages?: Record<string, string>;
     kokoroLangs?: string[];
@@ -385,16 +413,14 @@ export interface SettingsData {
   libraryStats?: {
     total?: number;
     withEmbedding?: number;
-    // Provenance of the text-embedding index: the model it was built with
-    // ("provider:model") and its vector dim. Null when the library was never
-    // embedded. Drives the chat-provider-switch warning in LlmSection.
+    // The model the text index was built with ("provider:model") + its dim; null
+    // when never embedded. Drives the chat-provider-switch warning in LlmSection.
     embeddingMeta?: { model: string; dim: number } | null;
   };
   tagger?: { running?: boolean };
   env?: Record<string, unknown>;
-  // Navidrome connection read state (Settings → Music source). passSet only —
-  // the password value never reaches the browser. Env flags are per-field:
-  // url can be env-managed while user/pass come from the wizard/admin.
+  // passSet only — the password value never reaches the browser. Env flags are
+  // per-field: url can be env-managed while user/pass come from the wizard.
   navidrome?: {
     url?: string;
     user?: string;
@@ -407,7 +433,7 @@ export interface SettingsData {
 }
 
 export type Patch = Record<string, unknown>;
-export type SaveSettings = (patch: Patch) => Promise<void>;
+export type SaveSettings = (patch: Patch) => Promise<boolean>;
 
 export type FormUpdater = (updater: (f: FormState) => FormState) => void;
 
@@ -491,8 +517,7 @@ interface SaveBarProps {
   extra?: ReactNode;
 }
 
-// Save bar — no inline status; success/failure goes through the global
-// toaster (lib/notify) so it stays consistent with every other admin action.
+// No inline status: success/failure goes through the global toaster (lib/notify).
 export function SaveBar({ note, busy, onSave, saveLabel, extra }: SaveBarProps) {
   return (
     <div className="flex flex-wrap items-center gap-3 border border-ink bg-[var(--ink-softer)] p-3">
@@ -501,13 +526,11 @@ export function SaveBar({ note, busy, onSave, saveLabel, extra }: SaveBarProps) 
           `openai-compatible:Qwen3…gguf` model id) that would otherwise set the
           flex item's min-content and push the bar past a phone viewport. */}
       <span className="min-w-0 text-[12px] leading-[1.5] break-words text-muted">{note}</span>
-      {/* Full-width action row on a phone (the note takes the whole first
-          line anyway); `sm:` restores the right-aligned inline cluster. */}
+      {/* Full-width action row on a phone; `sm:` restores the inline cluster. */}
       <span className="ml-auto flex w-full gap-2 sm:w-auto">
         {extra}
-        {/* whileTap fires before the network call — operator feels the
-            commit even though the actual save toast lands a few hundred
-            ms later. */}
+        {/* whileTap fires before the network call, so the commit is felt before
+            the save toast lands. */}
         <m.span whileTap={{ scale: 0.97 }} className="inline-flex flex-1 sm:flex-none">
           <Btn tone="accent" onClick={onSave} disabled={busy} className="w-full sm:w-auto">{saveLabel}</Btn>
         </m.span>
@@ -589,17 +612,15 @@ interface PreviewButtonProps {
   label?: string;
 }
 
-// Audio files behind /api/jingles/.../audio and /api/sfx/.../audio are
-// admin-gated (HTTP Basic). A plain <audio src> can't send the header, so
-// we fetch the bytes via adminFetch, hand them to <Audio> as a Blob URL,
-// and revoke the URL when playback ends.
+// The audio behind /api/jingles/.../audio and /api/sfx/.../audio is admin-gated
+// (HTTP Basic) and a plain <audio src> can't send the header — hence the
+// adminFetch + Blob URL, revoked when playback ends.
 export function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButtonProps) {
   const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle');
 
   useEffect(() => {
     return () => {
-      // Unmounting (e.g. row deleted while previewing) — make sure we
-      // don't leak the audio element or the object URL.
+      // Unmounting mid-preview must not leak the audio element or the object URL.
       if (currentPreview && currentPreview.audio.dataset.owner === path) {
         currentPreview.stop();
       }
@@ -638,8 +659,6 @@ export function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButto
     }
   };
 
-  // Icon-ghost preview (Imaging.dc.html): a filled play triangle that swaps to
-  // animated EQ bars while the clip is on air. `label` is the accessible name.
   return (
     <Button
       type="button"

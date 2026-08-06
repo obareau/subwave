@@ -23,12 +23,24 @@ export interface PoolBuilderOpts {
   maxPerArtist: number;      // cap any one artist's share of the pool
 }
 
+export interface TakeOpts {
+  // Never let this source contribute ZERO purely because everything in it is
+  // inside the recency window: on an empty first pass, retry ignoring recency.
+  // For the DEDICATED SHOW sources only (show-genre, show-playlist), where an
+  // empty contribution doesn't just remove the source — the strict end-filters
+  // in scheduler.ts never-starve on an empty in-filter set, so a show pinned to
+  // a narrow playlist whose tracks are all inside the (library-scaled, up to
+  // 36 h) window would coast entirely OFF-playlist. Dedup and the artist cap
+  // still apply on the retry; only the recency guard is dropped.
+  neverStarve?: boolean;
+}
+
 export interface PoolBuilder {
   pool: any[];                          // accumulated candidates (with `_source`)
   fromSource: Record<string, number>;   // per-source accepted counts (for logging)
   // Pull up to `cap` fresh candidates from `items` under label `label`, applying
   // the recency / dedup / artist-cap guards. Mutates `pool` and `fromSource`.
-  take: (label: string, items: any[], cap: number) => void;
+  take: (label: string, items: any[], cap: number, opts?: TakeOpts) => void;
 }
 
 export function createPoolBuilder(opts: PoolBuilderOpts): PoolBuilder {
@@ -39,7 +51,7 @@ export function createPoolBuilder(opts: PoolBuilderOpts): PoolBuilder {
   const poolIds = new Set<string>();
   const poolKeys = new Set<string>();
 
-  const take = (label: string, items: any[], cap: number) => {
+  const pull = (label: string, items: any[], cap: number, ignoreRecency: boolean): number => {
     let n = 0;
     for (const t of items) {
       if (n >= cap || pool.length >= targetPool) break;
@@ -48,7 +60,7 @@ export function createPoolBuilder(opts: PoolBuilderOpts): PoolBuilder {
       // guard) so a title-less row can't collapse an artist's whole catalogue.
       const tk = t.title ? trackKey(t) : '';
       // Recency: block by id AND title|artist key (defeats duplicate copies).
-      if (recentIds.has(t.id) || (tk && recentKeys.has(tk))) continue;
+      if (!ignoreRecency && (recentIds.has(t.id) || (tk && recentKeys.has(tk)))) continue;
       // Pool dedup: by id AND key, so copies #2..N don't re-fill the pool.
       if (poolIds.has(t.id) || (tk && poolKeys.has(tk))) continue;
       const ak = artistKey(t);
@@ -60,6 +72,12 @@ export function createPoolBuilder(opts: PoolBuilderOpts): PoolBuilder {
       if (ak) artistInPool.set(ak, (artistInPool.get(ak) || 0) + 1);
       n++;
     }
+    return n;
+  };
+
+  const take = (label: string, items: any[], cap: number, takeOpts: TakeOpts = {}) => {
+    const n = pull(label, items, cap, false);
+    if (n === 0 && takeOpts.neverStarve) pull(label, items, cap, true);
   };
 
   return { pool, fromSource, take };

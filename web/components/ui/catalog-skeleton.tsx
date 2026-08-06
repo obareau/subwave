@@ -1,13 +1,10 @@
-// Suspense fallbacks for the catalog-backed broadsheet pages (/stations,
-// /shows). Those routes are force-dynamic and await a remote catalog before
-// they can render, so the data-dependent regions sit behind boundaries and the
-// static shell — hero, CTA, footer note — flushes first. These placeholders
-// reserve the real layout's footprint so the stream-in doesn't shift anything.
+// Suspense fallbacks for the catalog-backed broadsheet pages. Those routes are
+// force-dynamic and await a remote catalog, so data-dependent regions sit behind
+// boundaries and the static shell flushes first. These placeholders reserve the
+// real layout's footprint so the stream-in doesn't shift anything.
 //
-// Server components: no state, no effects, nothing to hydrate. Styles live with
-// the rest of the bs- broadsheet vocabulary in app/globals.css.
+// Server components: no state, no effects, nothing to hydrate.
 
-/** Placeholder for the "12 stations · 7 countries" tally row. */
 export function CatalogStatSkeleton() {
   return (
     <p className="bs-stat-strip" role="status" aria-label="Loading catalog">
@@ -16,7 +13,6 @@ export function CatalogStatSkeleton() {
   );
 }
 
-/** Placeholder for the dotted world chart on /stations. */
 export function CatalogMapSkeleton() {
   return (
     <div className="bs-station-map" aria-hidden="true">
@@ -25,11 +21,8 @@ export function CatalogMapSkeleton() {
   );
 }
 
-/**
- * Placeholder run of cards in the newspaper-column grid. `count` should be
- * roughly a screenful — enough to hold the scroll height steady, not so many
- * that a short catalog collapses noticeably when the real list arrives.
- */
+/** `count` should be roughly a screenful: enough to hold the scroll height
+ *  steady, not so many that a short catalog visibly collapses on arrival. */
 export function CatalogGridSkeleton({ count = 6 }: { count?: number }) {
   return (
     <ul className="bs-stations-grid" role="status" aria-label="Loading catalog">

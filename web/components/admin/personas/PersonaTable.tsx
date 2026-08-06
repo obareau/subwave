@@ -1,8 +1,8 @@
 'use client';
 
-// DJ roster as a dense table — the "list" half of the cards/list toggle on
-// /admin/personas. Same contract as the slate cards: the row opens the editor,
-// and the spine carries the same status colour (on air / default / incomplete).
+// The "list" half of the cards/list toggle on /admin/personas. Same contract as
+// the slate cards: the row opens the editor, and the spine carries the same status
+// colour.
 
 import { useMemo } from 'react';
 import type { Persona } from './types';
@@ -121,8 +121,7 @@ export function PersonaTable({
     },
   ], [activePersonaId, onAirPersonaId, avatarTick]);
 
-  // Same status priority as the card spine: on air wins, then default, then
-  // incomplete, then a plain hairline.
+  // Same status priority as the card spine.
   const spineFor = ({ persona: p }: PersonaRow): string => {
     if (p.id === onAirPersonaId) return 'var(--accent)';
     if (p.id === activePersonaId) return 'var(--ink)';

@@ -6,6 +6,7 @@
 import express from 'express';
 import AdmZip from 'adm-zip';
 import { requireAdmin } from '../middleware/auth.js';
+import * as blocklist from '../music/blocklist.js';
 import { zipUpload } from '../middleware/upload.js';
 import { queue } from '../broadcast/queue.js';
 import * as dj from '../llm/dj.js';
@@ -15,12 +16,13 @@ import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, runProgrammeFeature, runProgrammeOutro, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
 import * as sfxLib from '../broadcast/sfx.js';
-import { loadSkills, parseFrontmatter, parseTags, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, TAG_RE, TAGS_PER_SKILL_LIMIT, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
+import { loadSkills, loadedCapabilities, parseFrontmatter, parseTags, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, TAG_RE, TAGS_PER_SKILL_LIMIT, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
 import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
+import { coerceConfigValues, readConfigValues, type SkillConfigField } from '../skills/config-fields.js';
 import { mapPool } from '../util/async-pool.js';
 import { readFile, rm, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { STATE_DIR, config } from '../config.js';
+import { STATE_DIR } from '../config.js';
 import { skipTrack } from '../broadcast/liquidsoap-control.js';
 import { getFullContext } from '../context.js';
 
@@ -35,10 +37,44 @@ interface SkillFields {
   contextFields?: string[];
   window?: 'any' | 'commute';
   requiresKey?: string;
-  feed?: string;
-  feedMaxItems?: number;
+  config?: Record<string, string | number>;
+  configKeys?: string[];
   tags?: string[];
   brief?: string;
+}
+
+// The knobs a skill declares for itself in tool.mjs (`configFields`). Read off
+// the LOADED capability, never off the kind string — that hardcoding is what
+// made a renamed copy of News lose its feed field (#1300).
+function declaredConfigFields(kind: string): SkillConfigField[] {
+  const cap = loadedCapabilities().find(c => c.kind === kind);
+  return (cap?.configFields as SkillConfigField[] | undefined) || [];
+}
+
+// The skill's own frontmatter as the loader parsed it — the fallback source of
+// current knob values when the state SKILL.md can't be read.
+function loadedConfig(kind: string): Record<string, string> | null {
+  const cap = loadedCapabilities().find(c => c.kind === kind);
+  return (cap?.config as Record<string, string> | undefined) || null;
+}
+
+// The knob values a save should persist, plus the declared key list that tells
+// writeSkillFile which frontmatter lines this form is authoritative for.
+//
+// Values: prefer the explicit `config` object; accept top-level keys too (the
+// pre-#1300 shape, `{ feed, feedMaxItems }`); and when the caller sends neither,
+// keep what's already on disk — writeSkillFile rewrites the whole SKILL.md, so a
+// line we don't emit is a line we delete. Anything the skill does NOT declare is
+// carried through by writeSkillFile's own preserve pass, so a tool.mjs that
+// currently fails to import costs its skill a settings form, never its saved
+// values. Throws on an invalid value (the routes turn that into a 400).
+function resolveConfig(kind: string, body: any): { config: Record<string, string | number>; configKeys: string[] } {
+  const fields = declaredConfigFields(kind);
+  const configKeys = fields.map(f => f.key);
+  if (!fields.length) return { config: {}, configKeys };
+  if (body?.config !== undefined) return { config: coerceConfigValues(fields, body.config), configKeys };
+  if (fields.some(f => body?.[f.key] !== undefined)) return { config: coerceConfigValues(fields, body), configKeys };
+  return { config: readConfigValues(fields, loadedConfig(kind)), configKeys };
 }
 
 // Normalise a tags form value (array or comma string) with LOUD validation — a
@@ -64,6 +100,11 @@ function buildTags(raw: unknown): string[] | undefined {
 // The subset of a Subsonic song toAdminRow reads to build a queue-ready row.
 interface AdminSong {
   id: string;
+  // Only present on raw Subsonic songs; the never-play match prefers these
+  // over the name fallback, so keep them on the way in even though no admin
+  // row renders them.
+  albumId?: string | null;
+  artistId?: string | null;
   title?: string | null;
   artist?: string | null;
   album?: string | null;
@@ -345,12 +386,18 @@ function buildCustomSkillFields(slug: string, b: Record<string, unknown>): Skill
 router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   const kind = req.params.kind;
   const cat = skillCatalog().find(s => s.kind === kind);
+  // Settings the skill declares for ITSELF (news' feed, anything a custom
+  // tool.mjs declares) plus their current values — the form renders whatever is
+  // here, so a renamed copy keeps its knobs (#1300).
+  const configFields = declaredConfigFields(kind);
 
   if (SEEDED_KINDS.has(kind)) {
     // Shipped defaults read straight from the built-in's TEMPLATE (NOT the live
     // state copy), so the admin "Reset to default" shows the as-shipped brief
-    // even after the state SKILL.md has been edited. News seeds its feed from
-    // config (env-or-BBC), mirroring the seeder.
+    // even after the state SKILL.md has been edited. Knob values are NOT part of
+    // this payload — the reset itself is server-side (resetBuiltinSkill re-seeds
+    // news' feed from config, env-or-BBC), and the UI only reads `defaults` to
+    // decide whether to offer the button.
     const tpl = await readTemplate(kind);
     const defaults = tpl ? {
       label: tpl.data.label || kind,
@@ -358,7 +405,6 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       context: (effectiveContextFields({ contextFields: tpl.data.context ?? tpl.data.contextFields }) || []).join(', '),
       tags: parseTags(tpl.data.tags),
       brief: tpl.body || '',
-      ...(kind === 'news' ? { feed: config.news.feedUrl, feedMaxItems: config.news.maxItems } : {}),
     } : null;
 
     const file = join(SKILLS_DIR, kind, 'SKILL.md');
@@ -369,15 +415,14 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         kind,
         custom: false,
         exists: true,
-        isNews: kind === 'news',
         label: data.label || cat?.label || kind,
         cooldown: data.cooldown || msToCooldownStr(cat?.cooldownMs || 0),
         // Comma-separated "right now" fields this segment may weave in (#471).
         // Prefer the file's own value; fall back to the live effective set.
         context: (data.context ?? data.contextFields)?.trim() || (cat?.contextFields || []).join(', '),
         knownContextFields: [...dj.CONTEXT_FIELDS],
-        feed: data.feed || cat?.feed || null,
-        feedMaxItems: data.feedMaxItems ? parseInt(data.feedMaxItems, 10) : (cat?.feedMaxItems || null),
+        configFields,
+        config: readConfigValues(configFields, data),
         tags: parseTags(data.tags),
         brief: body || cat?.description || '',
         // Built-ins now carry an editable tool.mjs in state too (seeded on first
@@ -392,13 +437,12 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         kind,
         custom: false,
         exists: false,
-        isNews: kind === 'news',
         label: cat?.label || kind,
         cooldown: msToCooldownStr(cat?.cooldownMs || 0),
         context: (cat?.contextFields || []).join(', '),
         knownContextFields: [...dj.CONTEXT_FIELDS],
-        feed: cat?.feed || null,
-        feedMaxItems: cat?.feedMaxItems || null,
+        configFields,
+        config: readConfigValues(configFields, loadedConfig(kind)),
         tags: cat?.tags || [],
         brief: cat?.description || '',
         hasTool: await skillHasTool(kind),
@@ -418,7 +462,11 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       kind,
       custom: true,
       exists: true,
-      isNews: false,
+      // A custom skill carrying a tool.mjs with `configFields` gets the same
+      // settings section as a built-in — this is the half that was missing for
+      // an exported-and-renamed News skill (#1300).
+      configFields,
+      config: readConfigValues(configFields, data),
       label: data.label || cat?.label || kind,
       cooldown: data.cooldown || (cat?.cooldownMs ? msToCooldownStr(cat.cooldownMs) : ''),
       context: (data.context ?? data.contextFields)?.trim() || (cat?.contextFields || []).join(', '),
@@ -473,8 +521,8 @@ router.post('/dj/skills', requireAdmin, async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // PUT /dj/skills/:kind/file — write a skill's SKILL.md from the admin edit form,
-// then reload so the change applies immediately. Built-in kinds take the news-
-// aware path; custom slugs (which must already exist) take the prompt-only path.
+// then reload so the change applies immediately. Built-in kinds take the seeded
+// path; custom slugs (which must already exist) take the prompt-only path.
 // ---------------------------------------------------------------------------
 router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   const kind = req.params.kind;
@@ -491,6 +539,10 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
     let fields: SkillFields;
     try {
       fields = buildCustomSkillFields(kind, b);
+      // Knobs the skill's own tool.mjs declares. Without this the rewrite below
+      // would drop them: an imported+renamed News skill lost its `feed:` line on
+      // the first save from the admin form (#1300).
+      Object.assign(fields, resolveConfig(kind, b));
     } catch (err) {
       return res.status(400).json({ error: err.message });
     }
@@ -505,7 +557,7 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
     }
   }
 
-  // Built-in edit — brief/cooldown/label/context, + feed/feedMaxItems for news.
+  // Built-in edit — brief/cooldown/label/context, + any knobs its tool declares.
   const brief = typeof b.brief === 'string' ? b.brief.trim() : '';
   if (!brief) return res.status(400).json({ error: 'brief is required' });
 
@@ -540,20 +592,12 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
     }
   }
 
-  // Feed is news-only. Validate it parses as an http(s) URL.
-  if (kind === 'news') {
-    const feed = typeof b.feed === 'string' ? b.feed.trim() : '';
-    if (feed) {
-      try {
-        const u = new URL(feed);
-        if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('protocol');
-      } catch {
-        return res.status(400).json({ error: 'feed must be an http(s) URL' });
-      }
-      fields.feed = feed;
-    }
-    const max = parseInt(b.feedMaxItems, 10);
-    if (Number.isFinite(max) && max > 0) fields.feedMaxItems = max;
+  // Knobs the skill declares for itself (news' feed / feedMaxItems), validated
+  // against that declaration rather than against the kind string.
+  try {
+    Object.assign(fields, resolveConfig(kind, b));
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
   }
 
   try {
@@ -798,12 +842,20 @@ router.post('/dj/auto-link', requireAdmin, (req, res) => {
 // ---------------------------------------------------------------------------
 // POST /dj/skip — force-end the current track (operator override)
 // There is no listener-facing skip by design; this is admin-gated only.
+// Commits the queued pick to dj_queue first (queue.commitBeforeSkip, #1300
+// bug 6) so the skip airs what the admin queue shows as next, not a random
+// auto.m3u fill — the response says which of the two actually happened.
 // ---------------------------------------------------------------------------
 router.post('/dj/skip', requireAdmin, async (req, res) => {
   try {
+    const prep = await queue.commitBeforeSkip();
     await skipTrack();
-    queue.log('scheduler', 'track skipped by operator');
-    res.json({ ok: true });
+    if (prep.pending && !prep.committed) {
+      queue.log('scheduler', `track skipped by operator — queued pick not confirmed in dj_queue after ${Math.round(prep.waitedMs / 1000)}s; the auto playlist may fill the slot first`);
+    } else {
+      queue.log('scheduler', 'track skipped by operator');
+    }
+    res.json({ ok: true, pending: prep.pending, committed: prep.committed });
   } catch (err) {
     queue.log('error', `/dj/skip failed: ${err.message}`);
     res.status(500).json({ error: err.message });
@@ -840,6 +892,10 @@ router.delete('/dj/queue/:trackId', requireAdmin, async (req, res) => {
 // carries none).
 function toAdminRow(s: AdminSong) {
   const tag = library.get(s.id);
+  // Matched against the SOURCE song, not the row below: the row drops
+  // albumId/artistId, which would demote an album/artist block to its
+  // normalised-name fallback.
+  const blocked = blocklist.matchOf(s);
   return {
     id: s.id,
     title: s.title,
@@ -866,6 +922,10 @@ function toAdminRow(s: AdminSong) {
     paceMean: tag?.paceMean ?? null,
     // Same derivation as /library/browse: [] = analysed, no vocals detected.
     instrumental: tag?.vocalRanges == null ? null : tag.vocalRanges.length === 0,
+    // Which never-play entry keeps this row off the air, or null. /dj/search
+    // returns blocked rows on purpose (the operator has to be able to find one
+    // to review it) — this is what tells them apart on screen.
+    blockedBy: blocked ? blocklist.refOf(blocked) : null,
   };
 }
 

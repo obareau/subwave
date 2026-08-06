@@ -1,14 +1,7 @@
 'use client';
 
-// The single "Tagging" modal opened from the library panel's primary button.
-// Three tabs, one per intent:
-//   • Run     — pick which pipeline steps run, then start a forward run
-//   • Re-scan — maintenance passes that redo already-done work after a model change
-//   • Reset   — nuke ALL tagging data (tags, embeddings, acoustics, enrichment)
-//               and start fresh, behind a double confirmation
-// Run/Re-scan are "configure + launch a pipeline run"; Reset is a destructive
-// one-shot. The optional-dimension lifecycle (enable / disable / backfill CLAP +
-// Demucs) lives on the panel's coverage rows instead, next to the meters it changes.
+// The enable/disable/backfill lifecycle for CLAP + Demucs deliberately lives on
+// the panel's coverage rows instead, next to the meters it changes.
 
 import { useEffect, useState } from 'react';
 import { Play, RefreshCw, Trash2, AlertTriangle } from 'lucide-react';
@@ -24,39 +17,29 @@ type Tab = 'run' | 'rescan' | 'reset';
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  // state
   batch: Batch;
   setBatch: (b: Batch) => void;
   busy: boolean;
   remaining: number | null;
-  // Total tracks in the library — used to spell out the re-embed scope ("all N
-  // tracks"), since a model-change reseed rebuilds the whole library, not just
-  // the tagged set. null while the coverage scan is still counting.
+  // A model-change reseed rebuilds the WHOLE library, not just the tagged set,
+  // so the re-embed copy spells out this total. null while coverage is counting.
   libraryTotal: number | null;
-  // coverage-derived availability. analysisOff locks the Run tab's "Analyze
-  // acoustics" step; vocalWanted gates the per-run "Vocal activity" sub-checkbox
-  // (Run tab) + the "Re-analyse vocal" sub-toggle (Re-scan tab) so they stay
-  // hidden until the operator opts vocal in on the panel (#646).
+  // analysisOff locks the "Analyze acoustics" step; vocalWanted keeps the vocal
+  // sub-toggles hidden until the operator opts vocal in on the panel (#646).
   analysisOff: boolean;
   vocalWanted: boolean;
-  // Whether the acoustic pass will actually emit sounds-like (CLAP) fingerprints:
-  // the dimension is enabled AND the engine can produce them. false → the
-  // "Analyze acoustics" / "Re-analyse acoustics" steps run bpm/key only, so their
-  // hints drop the sounds-like promise rather than advertising a no-op.
+  // The dimension is enabled AND the engine can produce fingerprints. false →
+  // the analyse steps run bpm/key only, so their hints drop the promise.
   soundsLikeActive: boolean;
-  // Daily-token-budget tier from /settings — drives the pre-run spend warning.
-  // null (old controller / not yet polled) is treated as 'normal' (no warning).
+  // null (old controller / not yet polled) is treated as 'normal', no warning.
   budgetMode: BudgetMode | null;
-  // Provider attribution for the Run tab's cost preview (#1162): the mood/energy
-  // seed calls bill to the DJ's chat LLM (settings.llm), NOT the embedding
-  // provider — operators kept assuming the embedding setting covered the whole
-  // job. llmLabel ≈ "Google · gemini-2.0-flash-lite", embedLabel ≈ "OpenAI".
-  // null until the settings poll lands (the line just omits the attribution).
+  // Cost-preview attribution (#1162): mood/energy seed calls bill to the DJ's
+  // chat LLM (settings.llm), NOT the embedding provider. null until the settings
+  // poll lands, and the line then omits the attribution.
   llmLabel: string | null;
   embedLabel: string | null;
-  // when set, the modal opens straight to the matching tab/selection
+  // When set, the modal opens straight to the matching tab/selection.
   intent: 'reembed' | null;
-  // handlers
   onStart: (steps?: TagSteps) => void;
   onReconcile: () => void;
   onRescan: (opts: RescanOpts) => void;
@@ -73,33 +56,27 @@ const TABS: { key: Tab; label: string }[] = [
 export default function LibraryTaggingModal(p: Props) {
   const [tab, setTab] = useState<Tab>('run');
 
-  // Run-tab step selection — all on by default EXCEPT the Demucs vocal pass:
-  // measured at ~90% of the whole acoustics phase (~10s/track on a 24-thread
-  // CPU), so the default forward run stays quick and vocal coverage is a
-  // deliberate tick (or the coverage row's Backfill, which sweeps the backlog).
+  // All on by default EXCEPT the Demucs vocal pass, measured at ~90% of the
+  // whole acoustics phase (~10s/track on a 24-thread CPU).
   const [steps, setSteps] = useState<TagSteps>({
     reconcile: true, enrich: true, tagMoods: true, analyze: true, vocal: false,
   });
   const toggleStep = (k: keyof TagSteps) => setSteps(s => ({ ...s, [k]: !s[k] }));
 
-  // Re-scan passes (moved here from the panel's old maintenance drawer).
   const [passes, setPasses] = useState<RescanOpts>({
     reseed: false, reEnrich: false, reAnalyze: false, upgrade: false,
   });
-  // Sub-toggle: does a Re-analyse-acoustics pass also redo the slow Demucs pass?
-  // Default on (re-analyse = redo all); unticking keeps existing vocal ranges.
+  // Does a Re-analyse-acoustics pass also redo the slow Demucs pass? Unticking
+  // keeps existing vocal ranges.
   const [reAnalyzeVocal, setReAnalyzeVocal] = useState(true);
   const [confirmRescan, setConfirmRescan] = useState(false);
-  // "Then tag untagged tracks" sub-toggle — offered only when Re-embed is the
-  // ONLY selected pass (a reseed-only run can continue straight into the forward
-  // tag pass; combining it with other re-* passes isn't well-defined). Defaults
-  // ON when the modal was opened by the stale-embedding banner (intent 'reembed'),
-  // since that banner blocked a run the operator actually wanted.
+  // Offered only when Re-embed is the ONLY selected pass — combining the
+  // continuation with other re-* passes isn't well-defined.
   const [thenTag, setThenTag] = useState(false);
   const togglePass = (k: keyof RescanOpts) => setPasses(prev => ({ ...prev, [k]: !prev[k] }));
 
-  // Reset tab — first confirmation is an acknowledgement checkbox that arms the
-  // button; clicking it then opens the second (a danger alert dialog).
+  // Reset takes two confirmations: this checkbox arms the button, which then
+  // opens a danger alert dialog.
   const [resetAck, setResetAck] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const passAllSelected = !!(passes.reseed && passes.reEnrich && passes.reAnalyze && passes.upgrade);
@@ -107,8 +84,6 @@ export default function LibraryTaggingModal(p: Props) {
   const reseedOnly = !!passes.reseed && !passes.reEnrich && !passes.reAnalyze && !passes.upgrade;
   const clearPasses = () => setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
 
-  // On each open, reset to a sensible tab. A 'reembed' intent (the panel's
-  // "embeddings missing" nudge) jumps to Re-scan with re-embed pre-ticked.
   useEffect(() => {
     if (!p.open) return;
     if (p.intent === 'reembed') {
@@ -120,8 +95,7 @@ export default function LibraryTaggingModal(p: Props) {
       setTab('run');
       setThenTag(false);
     }
-    // The destructive acknowledgement never survives a modal close — every open
-    // starts un-armed so Reset can't be one-clicked from a stale tick.
+    // Every open starts un-armed so Reset can't be one-clicked from a stale tick.
     setResetAck(false);
     // Only re-run when the modal transitions open (or the intent changes).
   }, [p.open, p.intent]);
@@ -132,20 +106,15 @@ export default function LibraryTaggingModal(p: Props) {
   const effSteps: TagSteps = {
     ...steps,
     analyze: effAnalyze,
-    // Vocal only matters when analyze runs and vocal is opted-in; otherwise send
-    // false (a harmless --no-vocal — backend ignores it when analyze is off).
+    // Otherwise send false — a harmless --no-vocal the backend ignores.
     vocal: effAnalyze && p.vocalWanted ? steps.vocal : false,
   };
   const anyStep = effSteps.reconcile || effSteps.enrich || effSteps.tagMoods || effSteps.analyze;
   const onlyReconcile = effSteps.reconcile && !effSteps.enrich && !effSteps.tagMoods && !effSteps.analyze;
 
-  // ---- Run-tab cost preview (Item A) -------------------------------------
-  // Estimate the LLM spend before the operator commits. inScope = tracks this
-  // run will embed+tag = min(batch limit, untagged remaining); seedEst = the
-  // up-front LLM seed budget tag-library.ts spends before propagation carries
-  // the rest. Both need live counts, so the line is suppressed until the
-  // coverage scan has a total + remaining. Batch 25 mirrors tag-library's
-  // default --batch. See seedBudget() below for the mirrored autoSeedCount.
+  // Run-tab cost preview. seedEst is the up-front LLM seed budget tag-library.ts
+  // spends before propagation carries the rest; the batch-of-25 divisor mirrors
+  // tag-library's default --batch. Suppressed until coverage has live counts.
   const limitNum = p.batch === 'all' ? Infinity : parseInt(p.batch, 10);
   const inScope =
     p.remaining == null
@@ -185,7 +154,6 @@ export default function LibraryTaggingModal(p: Props) {
 
   return (
     <Modal open={p.open} onOpenChange={p.onOpenChange} title="Tagging" width={620}>
-      {/* tab strip */}
       <div className="flex gap-1 border-b border-separator-strong px-1">
         {TABS.map(t => (
           <button
@@ -205,9 +173,6 @@ export default function LibraryTaggingModal(p: Props) {
       {/* p-3 on phones: the Modal body already carries px-5, so the nested p-5
           left ~275px of usable width inside a 358px dialog. */}
       <div className="flex flex-col gap-4 p-3 sm:p-5">
-        {/* Daily-token-budget caution — shown on both tabs when the day's spend
-            is near (soft) or past (hard) the cap, so a run's LLM steps won't
-            surprise the operator with extra spend or mid-run failures. */}
         {tab !== 'reset' && budgetWarn && (
           <div className="flex items-start gap-2 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] leading-[1.5] text-ink">
             {budgetWarn === 'soft' ? (
@@ -220,7 +185,6 @@ export default function LibraryTaggingModal(p: Props) {
             )}
           </div>
         )}
-        {/* ----------------------------------------------------------------- RUN */}
         {tab === 'run' && (
           <>
             <p className="text-[12px] leading-[1.55] text-muted">
@@ -284,7 +248,6 @@ export default function LibraryTaggingModal(p: Props) {
           </>
         )}
 
-        {/* -------------------------------------------------------------- RE-SCAN */}
         {tab === 'rescan' && (
           <>
             <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1.5">
@@ -349,7 +312,6 @@ export default function LibraryTaggingModal(p: Props) {
           </>
         )}
 
-        {/* ---------------------------------------------------------------- RESET */}
         {tab === 'reset' && (
           <>
             <div className="flex items-start gap-2.5 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2.5 text-[12px] leading-[1.55] text-ink">
@@ -369,7 +331,6 @@ export default function LibraryTaggingModal(p: Props) {
               to rebuild coverage. Use this only to start completely clean — for a model change,
               the <b>Re-scan</b> tab redoes just the affected work and keeps your tags.
             </p>
-            {/* first confirmation — arm the action */}
             <button
               type="button"
               role="checkbox"
@@ -392,7 +353,6 @@ export default function LibraryTaggingModal(p: Props) {
             </button>
             <div className="flex flex-wrap items-center justify-end gap-2.5 border-t border-dashed border-separator-strong pt-3.5">
               <Btn onClick={() => p.onOpenChange(false)}>Cancel</Btn>
-              {/* second confirmation happens in the danger dialog this opens */}
               <Btn tone="danger" disabled={!resetAck || p.busy} onClick={() => setConfirmReset(true)}>
                 <Trash2 size={12} /> Reset library…
               </Btn>
@@ -424,7 +384,6 @@ export default function LibraryTaggingModal(p: Props) {
   );
 }
 
-// Checkbox-style toggle row, shared by the Run steps and the Re-scan passes.
 function Pass({ on, onClick, name, hint, disabled, tag }: {
   on: boolean; onClick: () => void; name: string; hint: string; disabled?: boolean; tag?: string;
 }) {
@@ -453,17 +412,13 @@ function Pass({ on, onClick, name, hint, disabled, tag }: {
   );
 }
 
-// Client mirror of controller/src/music/tag-library.ts `autoSeedCount` — the
-// up-front LLM seed budget (~4% of the library, floored 200, capped 2500). Kept
-// here so the Run-tab cost preview can show a figure without a round-trip; the
-// backend copy is authoritative. MIRROR: keep the 200 / 2500 / 0.04 constants in
-// sync with tag-library.ts (a comment there points back here).
+// MIRROR of controller/src/music/tag-library.ts `autoSeedCount` (the backend
+// copy is authoritative): keep the 200 / 2500 / 0.04 constants in sync — a
+// comment there points back here.
 function seedBudget(librarySize: number): number {
   return Math.max(200, Math.min(2500, Math.round(librarySize * 0.04)));
 }
 
-// Small uppercase cost/characteristic badge — quick / network / AI · billed /
-// slow / very slow. Shared by the step rows and the Acoustic & audio headers.
 function Chip({ children }: { children: string }) {
   return (
     <span className="rounded-[3px] border border-separator-strong bg-[var(--ink-soft)] px-1.5 py-px text-[9px] font-bold tracking-[0.08em] text-muted uppercase">

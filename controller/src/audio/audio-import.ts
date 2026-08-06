@@ -121,10 +121,19 @@ function runFfmpeg(args: string[]): Promise<void> {
 // written to a temp file (not piped) so seek-dependent containers like m4a/mp4
 // decode correctly. `loudnorm` applies EBU R128 levelling — appropriate for
 // speech-length jingles, left off for short transient effects where a one-pass
-// loudnorm on <2s of audio is unreliable.
+// loudnorm on <2s of audio is unreliable. `sampleRate`/`channels` pin the
+// output format — voice-clone references are stored mono 24 kHz so every
+// cloning worker gets the same canonical shape.
 export async function transcodeAudio(
   input: Buffer,
-  { outPath, format, loudnorm = false, atempo }: { outPath: string; format: TranscodeFormat; loudnorm?: boolean; atempo?: number },
+  { outPath, format, loudnorm = false, atempo, sampleRate, channels }: {
+    outPath: string;
+    format: TranscodeFormat;
+    loudnorm?: boolean;
+    atempo?: number;
+    sampleRate?: number;
+    channels?: number;
+  },
 ): Promise<void> {
   if (!input?.length) throw new Error('empty audio buffer');
   await mkdir(path.dirname(outPath), { recursive: true });
@@ -139,6 +148,8 @@ export async function transcodeAudio(
     if (filters.length) args.push('-af', filters.join(','));
     if (format === 'wav') args.push('-c:a', 'pcm_s16le');
     else args.push('-c:a', 'libmp3lame', '-q:a', '4');
+    if (sampleRate) args.push('-ar', String(sampleRate));
+    if (channels) args.push('-ac', String(channels));
     args.push('-y', outPath);
     await runFfmpeg(args);
   } finally {

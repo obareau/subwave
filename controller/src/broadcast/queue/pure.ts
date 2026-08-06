@@ -7,6 +7,7 @@
 
 import * as library from '../../music/library.js';
 import * as settings from '../../settings.js';
+import { DRAIN_DEADLINE_SEC } from '../drain-policy.js';
 import type { Track } from './types.js';
 
 export function pickLinkInterval() {
@@ -47,6 +48,90 @@ export const BACKFILL_DEDUP_MAX_GAP_MS = 15 * 60_000;
 // symmetric cost — an on-format-for-the-NEXT-show track starting a minute or
 // two early — is how real radio tees up a changeover anyway.
 export const PICK_SHOW_LOOKAHEAD_SEC = 120;
+
+// The moment the pick — and its attached link — actually starts AIRING:
+// `showAt` minus the attribution padding above. `showAt` deliberately probes
+// past the start so show identity resolves right (#1205), but a link's spoken
+// clock must not inherit that padding: ctx resolved at `showAt` put "Local
+// time" exactly two minutes ahead of air on every pick-attached link (#1282,
+// a regression from #864's own fix). Exact inverse of runPickCycle's
+// `showAt = now + leadSec + PICK_SHOW_LOOKAHEAD_SEC`, kept here beside the
+// constant so the two can't drift apart.
+export function linkAirDate(showAt: Date): Date {
+  return new Date(showAt.getTime() - PICK_SHOW_LOOKAHEAD_SEC * 1000);
+}
+
+// How much runway `linkAirDate(showAt)` needs before it is trustworthy enough
+// to speak on air (#1314).
+//
+// That date is a FORECAST, made once at pick-decision time from the on-air
+// track's remaining play, and nothing re-checks it afterwards. It only holds if
+// the pick reaches Liquidsoap BEFORE that track ends. When the round outruns
+// the runway, dj_queue is empty at the seam, auto.m3u fills the slot, and the
+// pick airs at the END of that filler track — while its link still names the
+// moment the filler STARTED, i.e. a whole track behind. #1282 removed a fixed
+// +120s overshoot that had been masking this undershoot on average.
+//
+// Sized off the pick round itself, measured over 788 rounds: 27.7% ran longer
+// than 45s and 18.3% longer than 60s, but only 0.3% longer than 120s. The
+// exposed population is maybeDeadlinePick's empty-queue backstop, which fires
+// with DRAIN_DEADLINE_SEC..HARD_DEADLINE_SEC of runway on ANY station whatever
+// its track lengths — so the floor is that same deadline: speak the clock only
+// when the pick is being made AHEAD of the endgame window, never inside it. A
+// track-start pick on a normal 3-5 minute track clears it comfortably and keeps
+// its clock; below it the link simply doesn't state a time, which is the
+// pre-#864 behaviour for an unknowable air moment. The flip side is accepted,
+// not accidental: a library whose tracks run under ~2 minutes (punk, hardcore)
+// never has this much runway even at track start, so its links simply never
+// speak the clock — that library's every seam sits inside the risk window the
+// floor exists to silence, and hourly checks still tell the time.
+export const LINK_CLOCK_MIN_RUNWAY_SEC = DRAIN_DEADLINE_SEC;
+
+// The instant a pick-attached link may claim to air at, or null when the
+// forecast can't be trusted (no look-ahead at all, or too little runway left).
+// Callers pass the LIVE clock, not the moment `showAt` was built: on the pool
+// path the link is written after the pick call has already burned part of the
+// runway, and that spend is exactly what makes a forecast go bad.
+export function linkClockAt(showAt: Date | null | undefined, nowMs: number): Date | null {
+  if (!showAt) return null;
+  const airAt = linkAirDate(showAt);
+  if ((airAt.getTime() - nowMs) / 1000 < LINK_CLOCK_MIN_RUNWAY_SEC) return null;
+  return airAt;
+}
+
+// How far the real air moment may sit from the time a link was told to speak
+// before the line is dropped instead of aired.
+//
+// The forecast is inherently loose by ~40s: the seam fires at the START of the
+// crossfade (4-12s early), a jingle or bed can push it out (5-15s late), and
+// every listener hears it a further `stream.bufferSeconds` (22s by default)
+// behind the live edge at which it was stamped. 90s clears all of that with
+// room to spare while staying far below a missed slot, which costs a whole
+// filler track (3-5 min). With LINK_CLOCK_MIN_RUNWAY_SEC in front of it this
+// is a backstop for the 0.3% tail, not a routine drop.
+export const LINK_CLOCK_DRIFT_TOLERANCE_SEC = 90;
+
+// Should airIntro drop this link because the clock it was written against no
+// longer matches reality? Only items that were actually GIVEN a clock carry a
+// `linkClockAt` stamp, so a link written under a clock ban is never dropped
+// here. Same trade as shouldDropStaleLink: silence on one hand-off beats airing
+// a wrong fact, and rendered audio can't be re-cut. Absolute, because a
+// predecessor cueing out early moves the seam the other way.
+//
+// Deliberately NOT narrowed to lines that demonstrably state a time, the way
+// shouldDropStaleLink narrows to lines that name their predecessor. That guard
+// can afford `mentionsTrack` because it matches exact title/artist strings; a
+// clock has no such handle — the model may write "18:38", "twenty to seven" or,
+// under a spell-out house rule, "eighteen thirty-eight", and a detector that
+// misses one airs the wrong time, which is the whole failure. So the stamp is
+// the offer, not the usage: a link that was given a clock and chose not to use
+// it can be dropped for nothing. With LINK_CLOCK_MIN_RUNWAY_SEC in front, that
+// costs a link in the 0.3% tail — cheaper than a regex that has to be right
+// about every phrasing an LLM might reach for.
+export function linkClockDrifted(clockAtMs: number | null | undefined, nowMs: number): boolean {
+  if (typeof clockAtMs !== 'number' || !Number.isFinite(clockAtMs)) return false;
+  return Math.abs(nowMs - clockAtMs) > LINK_CLOCK_DRIFT_TOLERANCE_SEC * 1000;
+}
 
 // Seconds from NOW until the pick being made will start airing — the lead the
 // show look-ahead adds to the wall clock (see runPickCycle).
@@ -169,6 +254,61 @@ export function shouldDropStaleLink(
   if (!item?.linkPrev) return false;
   if (sameTrack(item.linkPrev, predecessor)) return false;   // names the right track → fine
   return mentionsTrack(item.introScript, item.linkPrev);     // wrong predecessor — only drop if it's actually named
+}
+
+// Does the track now starting already bring its OWN spoken line to this
+// boundary — an auto-DJ link, or a listener request's intro? If so a
+// boundary-deferred wall-clock segment (the station ident) must NOT also air
+// here: the two are different kinds, so no per-kind cooldown sees the pair, and
+// the airVoice serialiser only stops them OVERLAPPING — back to back with no
+// music between is precisely what it produces (issue #1258).
+//
+// `introAired` is deliberately NOT consulted. An item still sitting in
+// `upcoming` whose intro has already fired is the BED case: onBedStarted airs
+// the link over the instrumental bed seconds before the song itself starts, so
+// the ident would land right behind a link the listener just heard — the same
+// collision with the order reversed.
+//
+// The one exception is a link airIntro is about to drop as a stale
+// back-announce: that boundary ends up silent after all, so the ident is the
+// only thing that would speak and it should. Pure + exported so the rule is
+// unit-pinned (scripts/ident-link-collision.test.ts).
+//
+// The rule mirrors airIntro's own airing decision, and `opts` carries the two
+// runtime drop paths the item's fields alone can't predict — both of which
+// leave the boundary silent, so the ident may take it after all:
+//   - `voiceAllowed` — airIntro's station-voice backstop (settings.tts.enabled
+//     off) drops the line outright. The pending segment itself may still air:
+//     manual /dj/segment triggers are exempt from the voice switch.
+//   - `wavExists` — a rendered WAV the voice reaper has already deleted, with
+//     no script left on the item to re-render from, is a silent return in
+//     airIntro. A surviving script always speaks (airIntro re-renders).
+//   - `nowMs` — the live clock, against which a link whose spoken time has
+//     drifted past tolerance is dropped (linkClockDrifted, #1314).
+// Injected rather than read here so the rule stays pure; omitting them assumes
+// voice on, the WAV present, and the clock still good.
+export function boundaryCarriesTrackVoice(
+  item: {
+    introScript?: string | null;
+    introWav?: string | null;
+    // Part of the contract even though this rule never reads them: introAired
+    // is deliberately ignored (the BED case above), and introKind doesn't
+    // matter — links and request intros are both track-tied and unmovable.
+    introKind?: string | null;
+    introAired?: boolean;
+    linkPrev?: { id?: string | null; title?: string | null; artist?: string | null } | null;
+    linkClockAt?: number | null;
+  } | null | undefined,
+  predecessor: { id?: string | null; title?: string | null } | null,
+  opts: { voiceAllowed?: boolean; wavExists?: (path: string) => boolean; nowMs?: number } = {},
+): boolean {
+  if (!item) return false;
+  if (opts.voiceAllowed === false) return false;
+  const canSpeak = !!item.introScript
+    || (!!item.introWav && (opts.wavExists ? opts.wavExists(item.introWav) : true));
+  if (!canSpeak) return false;
+  if (opts.nowMs != null && linkClockDrifted(item.linkClockAt, opts.nowMs)) return false;
+  return !shouldDropStaleLink(item, predecessor);
 }
 
 // Per-target-file write chain. Liquidsoap polls each handoff file (say.txt,

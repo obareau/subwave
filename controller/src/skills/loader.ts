@@ -20,6 +20,10 @@
 //   export const ready = (services) => boolean   // OPTIONAL: gate availability
 //   export const inputs = { query: '…' }   // OPTIONAL: agent-steerable string
 //     params ({ name: description }); validated values arrive as `input`
+//   export const configFields = { feed: { type: 'url', label: '…' } } // OPTIONAL:
+//     operator-editable knobs (skills/config-fields.ts). Values live in this
+//     skill's OWN frontmatter and arrive as `config`, so a copied/renamed skill
+//     keeps its settings form — see issue #1300 (bug 11)
 // `services` (station-services.ts) is the curated facade onto search, the
 // library, the play log, feeds and durable recall — the one way a tool reaches
 // the world. Every tool runs behind a timeout + try/catch at the call site
@@ -38,6 +42,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { STATE_DIR } from '../config.js';
 import { queue, registerSkillKinds } from '../broadcast/queue.js';
 import { buildStationServices } from '../llm/internal/tools/station-services.js';
+import { parseConfigFields, type SkillConfigField } from './config-fields.js';
 
 // Shipped built-in TEMPLATE store, resolved relative to this module so it works
 // under both dev (tsx on bind-mounted src) and prod (tsx on the COPYd src). This
@@ -204,9 +209,9 @@ function sanitizeToolInputs(raw: any): Record<string, string> | undefined {
 }
 
 // Dynamically import a skill's optional tool.mjs. Returns the data function plus
-// its optional `description` / `ready` / `inputs` exports, or null when there's
-// no tool.
-async function loadToolModule(dir: string): Promise<{ fn: any; description?: string; ready?: any; inputs?: Record<string, string> } | null> {
+// its optional `description` / `ready` / `inputs` / `configFields` exports, or
+// null when there's no tool.
+async function loadToolModule(dir: string): Promise<{ fn: any; description?: string; ready?: any; inputs?: Record<string, string>; configFields?: SkillConfigField[] } | null> {
   const file = join(dir, 'tool.mjs');
   try {
     await stat(file);
@@ -225,6 +230,7 @@ async function loadToolModule(dir: string): Promise<{ fn: any; description?: str
     description: typeof mod.description === 'string' ? mod.description : undefined,
     ready: typeof mod.ready === 'function' ? mod.ready : undefined,
     inputs: sanitizeToolInputs(mod.inputs),
+    configFields: parseConfigFields(mod.configFields),
   };
 }
 
@@ -279,8 +285,10 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // The skill's own frontmatter, handed to the tool as its 4th arg so a skill
     // can read its own knobs (e.g. news' feed / feedMaxItems).
     config: data,
-    feed: data.feed ? data.feed.trim() : undefined,
-    feedMaxItems: data.feedMaxItems && Number.isFinite(parseInt(data.feedMaxItems, 10)) ? parseInt(data.feedMaxItems, 10) : undefined,
+    // Operator-editable knobs this skill declares for itself (tool.mjs
+    // `configFields`). Drives the admin editor's settings section — see
+    // config-fields.ts. Empty for a prompt-only or undeclared skill.
+    configFields: [] as SkillConfigField[],
   };
 
   // Readiness: a tool module's `ready(services)` wins; else a keyed skill is
@@ -301,6 +309,9 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // handed to toolFn as its 5th argument. Absent → zero-arg tool, the
     // historical shape.
     cap.toolInputs = toolMod.inputs;
+    // Operator knobs travel with the tool, not the kind — a duplicated skill
+    // copies tool.mjs and keeps its settings form (#1300).
+    cap.configFields = toolMod.configFields || [];
   }
 
   return cap;

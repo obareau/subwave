@@ -10,7 +10,7 @@
 // single poisoned show bricked every show create/edit, schedule edit, and full
 // restore with `shows[N].themeId "sunset" is not a known theme id`. The theme
 // system already tolerates stale ids everywhere else (the lenient load path and
-// serve-time getTheme() fall back to the station default), so strict validation
+// serve-time GET /themes fall back to the station default), so strict validation
 // must DROP an unknown id to "" rather than throw. It must NOT weaken any other
 // strictness, and must never discard a valid (still-known) pick.
 //

@@ -173,6 +173,22 @@ router.post('/onboarding/test-llm', requireAdmin, async (req, res) => {
 router.post('/onboarding/save', requireAdmin, async (req, res) => {
   const b = req.body || {};
   try {
+    // Validate Fish's provider-specific settings before ANY wizard store is
+    // mutated. Navidrome/setup credentials are written earlier than the shared
+    // settings patch, so deferring this to settings.update() could otherwise
+    // make a rejected Fish save hide onboarding on the next reload.
+    const fishCloud = b.tts?.cloud;
+    if (fishCloud?.enabled && fishCloud.provider === 'fish-audio') {
+      const model = String(fishCloud.model || '').trim();
+      const voice = String(fishCloud.voice || '').trim();
+      if (!model || model.length > 100 || /[\r\n]/.test(model)) {
+        throw new Error('Fish Audio model id must be 1-100 characters with no line breaks');
+      }
+      if (!voice || voice.length > 100 || /[\r\n]/.test(voice)) {
+        throw new Error('Fish Audio voice reference id must be 1-100 characters with no line breaks');
+      }
+    }
+
     // Navidrome — only the wizard-managed overlay; never mutate the live env.
     if (b.navidrome && typeof b.navidrome === 'object') {
       await saveSetupConfig({

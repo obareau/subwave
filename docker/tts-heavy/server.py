@@ -1,20 +1,14 @@
 """
 subwave-tts-heavy — optional Chatterbox + PocketTTS sidecar for SUB/WAVE.
 
-The controller (controller/src/audio/chatterbox.ts, audio/pocketTts.ts) talks
-to this service over HTTP when TTS_HEAVY_URL is set in its environment. The
-shared /var/sub-wave volume is mounted in both containers, so the sidecar
-writes the WAV to the absolute `out` path the controller asks for, and the
-controller hands the same path to Liquidsoap via next.txt / say.txt /
-intro.txt. No audio over the wire — only metadata.
-
-Architecture: this is a thin FastAPI shim. The real inference happens in two
-long-lived Python subprocesses — the SAME stdio worker scripts the controller
-uses for its in-process build (controller/scripts/{chatterbox,pocket_tts}_
-worker.py). Each runs in its own venv (/opt/chatterbox/venv,
-/opt/pocket-tts/venv) because chatterbox-tts and pocket-tts have incompatible
-pip resolutions in a single env. asyncio.Lock per worker serialises requests
-so two simultaneous DJ lines don't interleave.
+The controller (audio/chatterbox.ts, audio/pocketTts.ts) talks to this over
+HTTP when TTS_HEAVY_URL is set. A thin FastAPI shim over two long-lived
+subprocesses — the SAME stdio workers the controller runs in-process
+(controller/scripts/{chatterbox,pocket_tts}_worker.py), one venv each because
+the two packages have incompatible pip resolutions. One JSON object per line
+over stdin/stdout; an asyncio.Lock per worker serialises requests. No audio
+over the wire — the sidecar writes the WAV to the absolute `out` path on the
+shared /var/sub-wave volume and the controller hands that path to Liquidsoap.
 
 Endpoints:
   GET  /health   → {ok, engines, chatterbox_loaded, pocket_loaded}
@@ -41,26 +35,21 @@ POCKET_TTS_WORKER = os.environ.get("POCKET_TTS_WORKER", "/app/workers/pocket_tts
 DEVICE = os.environ.get("TTS_HEAVY_DEVICE", "cpu").lower()
 POCKET_TTS_DEFAULT_VOICE = os.environ.get("POCKET_TTS_VOICE", "alba")
 
-# Per-worker HF cache homes so the two engines don't fight over the same
-# directory. Each is a named volume in the compose files, so the weights a
-# worker downloads on its first boot survive container recreates. The env vars
-# below tell huggingface_hub where to look at runtime (and are passed into each
-# worker's env via env_extra below).
+# Per-worker HF cache homes so the engines don't fight over one directory;
+# each is a named volume in compose, so first-boot weight downloads survive
+# recreates. Passed into each worker's env via env_extra.
 CHATTERBOX_HF_HOME = os.environ.get("CHATTERBOX_HF_HOME", "/opt/chatterbox/hf-cache")
 POCKET_HF_HOME = os.environ.get("POCKET_HF_HOME", "/opt/pocket-tts/hf-cache")
 
-# Max bytes of one worker stdout line. asyncio's default StreamReader limit is
-# 64 KiB; TTS responses are small (a WAV path) but keep this in step with the
-# analyzer sidecar so a future payload can't hit LimitOverrunError (#996).
+# Max bytes of one worker stdout line. TTS responses are small, but keep in
+# step with the analyzer sidecar so a future payload can't hit asyncio's
+# 64 KiB default and LimitOverrunError (#996).
 WORKER_STDOUT_LIMIT = 16 * 1024 * 1024
 
-# Which engines this sidecar should actually load. BOTH are baked into the
-# image, but loading a PyTorch model costs RAM + a multi-GB first-boot weight
-# download + 30-60s of startup — so an operator who only uses one engine can
-# skip the other entirely by narrowing this list. Comma-separated; defaults to
-# both for back-compat. e.g. TTS_HEAVY_ENGINES=pocket-tts runs PocketTTS only
-# (no Chatterbox). Unknown/empty entries are ignored; an empty result falls
-# back to loading both so a typo never silently disables all TTS.
+# Which engines to load. BOTH are baked into the image, but each costs RAM +
+# a multi-GB first-boot download + 30-60s startup, so operators can narrow the
+# comma-separated list. Unknown/empty entries are ignored; an empty result
+# falls back to both so a typo never silently disables all TTS.
 _ALL_ENGINES = ("chatterbox", "pocket-tts")
 ENABLED_ENGINES = [
     e
@@ -83,22 +72,15 @@ log = logging.getLogger("tts-heavy")
 class TtsWorker:
     """Async wrapper around a long-lived stdio TTS worker subprocess.
 
-    The worker scripts speak one JSON object per line over stdin/stdout —
-    same protocol used by controller/src/audio/{chatterbox,pocketTts}.ts.
-    We don't multiplex: one request in flight per worker, gated by a lock.
-
-    Lifecycle is supervised by run() — a long-running coroutine kicked off
-    from the FastAPI lifespan as a background task. run() loops on
-    start → wait-for-exit → respawn with a short backoff, mirroring the
-    auto-restart behaviour in the controller-side TS workers. This is what
-    lets a worker that crashes mid-session (OOM, fatal model error) come
-    back without anyone bouncing the container.
+    One JSON object per line over stdin/stdout (the same protocol as the
+    controller's in-process TS clients); no multiplexing — one request in
+    flight per worker, gated by a lock. run() supervises the lifecycle:
+    start → wait-for-exit → respawn with a short backoff, so a crash (OOM,
+    fatal model error) recovers without bouncing the container.
     """
 
-    # Backoff between restart cycles. Short — we'd rather see the worker try
-    # again quickly than babysit a long retry window. start_backoff applies
-    # when start() itself fails (model load error, missing venv); run_backoff
-    # applies when start() succeeded but the worker exited later.
+    # START_BACKOFF applies when start() itself fails (model load error,
+    # missing venv); RUN_BACKOFF when the worker exited after a clean start.
     START_BACKOFF_S = 5.0
     RUN_BACKOFF_S = 2.0
 
@@ -110,17 +92,13 @@ class TtsWorker:
         self.proc: asyncio.subprocess.Process | None = None
         self.lock = asyncio.Lock()
         self.ready = False
-        # The worker's ready message, minus the `ready` flag — carries
-        # per-engine capability metadata (e.g. pocket-tts' voice_cloning,
-        # issue #238). Cleared on every restart cycle.
+        # Ready message minus the `ready` flag — per-engine capability
+        # metadata (e.g. pocket-tts' voice_cloning, #238). Cleared on restart.
         self.ready_meta: dict[str, Any] = {}
 
     async def run(self) -> None:
-        """Keep the worker alive forever (or until cancelled).
-
-        Cancellation comes from the lifespan teardown. We catch it once to
-        terminate the running subprocess cleanly before bubbling up.
-        """
+        """Keep the worker alive forever; on cancellation (lifespan teardown)
+        terminate the running subprocess before bubbling up."""
         try:
             while True:
                 try:
@@ -130,7 +108,6 @@ class TtsWorker:
                     self._reset()
                     await asyncio.sleep(self.START_BACKOFF_S)
                     continue
-                # Worker is ready. Block until it exits, then respawn.
                 assert self.proc is not None
                 code = await self.proc.wait()
                 log.warning(
@@ -143,13 +120,11 @@ class TtsWorker:
             raise
 
     def _reset(self) -> None:
-        """Clear ready/proc between restart cycles."""
         self.ready = False
         self.proc = None
         self.ready_meta = {}
 
     def _terminate(self) -> None:
-        """Best-effort kill the current subprocess (used on shutdown)."""
         if self.proc and self.proc.returncode is None:
             try:
                 self.proc.terminate()
@@ -168,21 +143,14 @@ class TtsWorker:
             env=env,
             limit=WORKER_STDOUT_LIMIT,
         )
-        # Pump stderr to our log so the operator sees the worker's startup
-        # output (model load progress, fatal errors, etc.) in tts-heavy's
-        # docker logs. The task exits naturally when the worker closes stderr
-        # on death, so there's one pump task per active subprocess.
+        # Pump stderr to our log so model load progress / fatal errors land in
+        # the container logs. Exits when the worker closes stderr on death.
         asyncio.create_task(self._pump_stderr())
 
-        # Read until we see {"ready": true}. Workers emit some non-JSON noise
-        # on stdout during model load — perth (chatterbox's watermarker) prints
-        # "loaded PerthNet (Implicit) at step 250,000" via a bare print().
-        # Mirror the controller's TS code (controller/src/audio/chatterbox.ts
-        # handleMessage) and silently skip anything that doesn't parse — the
-        # workers themselves only emit JSON for protocol messages. Chatterbox
-        # can take 30+ seconds to instantiate ChatterboxTurboTTS even from a
-        # warm cache, so no timeout here — run()'s restart loop is the
-        # upstream safety net if a load hangs forever.
+        # Read until {"ready": true}, skipping non-JSON stdout noise (perth —
+        # chatterbox's watermarker — bare-print()s a load message). Chatterbox
+        # can take 30+ seconds even from a warm cache, so no timeout — run()'s
+        # restart loop is the upstream safety net.
         try:
             msg = await self._await_message()
             if msg.get("fatal"):
@@ -190,8 +158,8 @@ class TtsWorker:
             if not msg.get("ready"):
                 raise RuntimeError(f"[{self.name}] expected ready, got: {msg}")
         except Exception:
-            # Failed to reach ready — terminate the half-booted process so
-            # run() doesn't pile orphans up across retry cycles.
+            # Terminate the half-booted process so run() doesn't pile orphans
+            # up across retry cycles.
             self._terminate()
             raise
         self.ready_meta = {k: v for k, v in msg.items() if k != "ready"}
@@ -211,9 +179,8 @@ class TtsWorker:
             try:
                 msg = json.loads(text)
             except json.JSONDecodeError:
-                # Almost certainly noise from a transitive dep (perth's
-                # PerthNet load message, etc.). Log at info so it's visible
-                # but don't fail the protocol.
+                # Noise from a transitive dep — visible but not a protocol
+                # failure.
                 log.info(f"[{self.name}] non-JSON on stdout: {text!r}")
                 continue
             return msg
@@ -229,19 +196,17 @@ class TtsWorker:
 
     async def request(self, payload: dict[str, Any]) -> dict[str, Any]:
         async with self.lock:
-            # Fail fast if the worker isn't currently up. The /speak handler
-            # turns this into an HTTP error and the controller's dispatcher
-            # falls back to Piper — preferable to blocking the HTTP request
-            # while we wait for an unhealthy worker to come back.
+            # Fail fast when the worker is down — the controller's dispatcher
+            # falls back to Piper, preferable to blocking the HTTP request on
+            # an unhealthy worker.
             if not self.ready or not self.proc or self.proc.returncode is not None:
                 raise RuntimeError(f"[{self.name}] worker not ready")
             assert self.proc.stdin
             req = json.dumps(payload, ensure_ascii=False)
             self.proc.stdin.write((req + "\n").encode())
             await self.proc.stdin.drain()
-            # _await_message skips non-JSON stdout chatter — same fix as in
-            # start(). Without it, any post-ready print() from the workers
-            # would crash the next /speak call.
+            # _await_message skips post-ready print() noise too — without
+            # that, any stray stdout would crash the next /speak call.
             return await self._await_message()
 
 
@@ -269,11 +234,9 @@ pocket_worker = TtsWorker(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Kick the worker supervisors as background tasks so uvicorn binds :8080
-    # immediately. Without this, chatterbox's 30-60s cold load would block
-    # the port bind and the controller's probe would see "connection refused"
-    # for the entire boot — leading operators to think the sidecar is broken
-    # when it's just still loading.
+    # Background tasks so uvicorn binds :8080 immediately — chatterbox's
+    # 30-60s cold load would otherwise block the bind and the controller's
+    # probe would see "connection refused" for the entire boot.
     log.info(f"enabled engines: {', '.join(ENABLED_ENGINES)}")
     tasks = []
     if "chatterbox" in ENABLED_ENGINES:
@@ -285,9 +248,8 @@ async def lifespan(_app: FastAPI):
     finally:
         for t in tasks:
             t.cancel()
-        # Give the supervisors a moment to terminate their subprocesses
-        # cleanly before uvicorn exits. SIGKILL from the container stop is
-        # the upstream fallback if any of this hangs.
+        # Let the supervisors terminate their subprocesses before uvicorn
+        # exits; the container-stop SIGKILL is the fallback if this hangs.
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
@@ -304,13 +266,11 @@ class SpeakRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    # `engines` is the list of engines that are *currently ready*, not the
-    # static set this sidecar supports. The controller's probe loop in
-    # controller/src/audio/ttsHeavyClient.ts uses `engines.includes(<name>)`
-    # as its readiness signal, so reporting an engine here while its worker
-    # is still booting (or has crashed mid-session) would cause failed
-    # /speak calls instead of clean fall-throughs to Piper. The boolean
-    # *_loaded fields are kept for operator diagnostics.
+    # `engines` lists engines *currently ready*, not the static set — the
+    # controller's probe (audio/ttsHeavyClient.ts) keys readiness on
+    # `engines.includes(<name>)`, so advertising a still-booting or crashed
+    # engine would cause failed /speak calls instead of clean fall-throughs
+    # to Piper. The *_loaded booleans are operator diagnostics.
     ready_engines: list[str] = []
     if chatterbox_worker.ready:
         ready_engines.append("chatterbox")
@@ -319,17 +279,13 @@ async def health():
     return {
         "ok": True,
         "engines": ready_engines,
-        # The engines this sidecar was configured to load (TTS_HEAVY_ENGINES),
-        # regardless of whether they've finished loading yet — for operator
-        # diagnostics. `engines` above is the subset currently *ready*.
+        # What TTS_HEAVY_ENGINES asked for, regardless of load state.
         "enabled": ENABLED_ENGINES,
         "chatterbox_loaded": chatterbox_worker.ready,
         "pocket_loaded": pocket_worker.ready,
-        # Whether PocketTTS can do zero-shot voice cloning. False when the
-        # gated kyutai/pocket-tts weights weren't available at load (no
-        # HF_TOKEN) — the controller surfaces this so cloned .wav voices don't
-        # silently revert to a built-in (issue #238). None until the worker is
-        # ready and has reported its capability.
+        # PocketTTS zero-shot cloning capability — false when the gated
+        # weights weren't available at load (no HF_TOKEN), so cloned .wav
+        # voices don't silently revert to a built-in (#238). None until ready.
         "pocket_voice_cloning": (
             pocket_worker.ready_meta.get("voice_cloning") if pocket_worker.ready else None
         ),
@@ -345,9 +301,9 @@ async def speak(req: SpeakRequest):
         raise HTTPException(400, "missing 'out' path")
     Path(req.out).parent.mkdir(parents=True, exist_ok=True)
 
-    # A known engine that this sidecar was told not to load: fail clearly so
-    # the controller's dispatcher falls back to Piper instead of blocking on a
-    # worker that will never become ready.
+    # A known engine this sidecar was told not to load: fail clearly so the
+    # dispatcher falls back to Piper instead of blocking on a worker that
+    # will never become ready.
     if req.engine in _ALL_ENGINES and req.engine not in ENABLED_ENGINES:
         raise HTTPException(
             503,
@@ -367,9 +323,8 @@ async def speak(req: SpeakRequest):
             "id": "1",
             "text": text,
             "voice": req.voice or POCKET_TTS_DEFAULT_VOICE,
-            # Issue #213 — forward the reference WAV path for zero-shot
-            # cloning. Mirrors the chatterbox branch above; the worker treats
-            # an empty value as "use the built-in voice".
+            # Reference WAV for zero-shot cloning (#213); the worker treats an
+            # empty value as "use the built-in voice".
             "reference_wav": req.reference_wav or "",
             "out": req.out,
         })
@@ -382,14 +337,10 @@ async def speak(req: SpeakRequest):
         "ok": True,
         "path": msg["path"],
         "duration_s": msg.get("duration_s", 0),
-        # Surface PocketTTS' per-call voice substitution (issue #238) so the
-        # controller can log when the requested voice/clone wasn't honoured.
-        # Absent for engines that don't report it (chatterbox).
+        # PocketTTS' per-call voice substitution (#238) so the controller can
+        # log when the requested voice/clone wasn't honoured. Absent for
+        # engines that don't report it.
         "voice_used": msg.get("voice_used"),
         "fell_back": msg.get("fell_back", False),
         "fell_back_reason": msg.get("fell_back_reason"),
     }
-
-
-# NOTE: acoustic analysis (/analyze) was removed from this sidecar — it lives in
-# the standalone `subwave-analyzer` image now. This server is TTS-only.

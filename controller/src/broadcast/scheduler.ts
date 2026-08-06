@@ -8,11 +8,14 @@ import cron from 'node-cron';
 import { config } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import { shuffle } from '../util/shuffle.js';
+import { mapPool } from '../util/async-pool.js';
 import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan } from '../music/show-filter.js';
+import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type VocalMode } from '../music/show-filter.js';
+import { freshnessBiasedOrder } from '../music/airing.js';
+import { recencyWindowsForLibrary } from '../music/recency.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
@@ -33,9 +36,16 @@ import * as stemCacheStore from '../music/stem-cache.js';
 import * as stemBlendStore from './stem-blend.js';
 import * as doctor from '../doctor.js';
 
-const TARGET_POOL = 120;                // divergence locale 2026-08-02 : 30 ne tient pas un show de 4 h
+// Pool size: 40 (was 30). The old non-show weights summed to 32 > 30 and
+// take() hard-stops at the target, so the random top-up below was structurally
+// unreachable on any station with mood tags, a mood playlist and starred
+// tracks — the coast NEVER sampled the library at large. 40 fits every source
+// including the dedicated exploration slot, and a longer coast loop is itself
+// variety (~2.5h of audio per refresh instead of ~2h).
+const TARGET_POOL = 40;
 const MOOD_WEIGHT = 12;          // up to this many mood-tagged tracks per pool
 const PLAYLIST_WEIGHT = 6;       // mood-matched Navidrome playlists
+const EXPLORE_WEIGHT = 8;        // reserved library-wide random / unaired slot
 const RECENT_WEIGHT = 4;         // recently-added albums
 const FREQUENT_WEIGHT = 4;       // frequent / scrobble-favourite albums
 const STARRED_WEIGHT = 6;        // hand-starred tracks
@@ -43,13 +53,18 @@ const AUTO_MAX_PER_ARTIST = Number.MAX_SAFE_INTEGER; // divergence locale 2026-0
 // When a scheduled show pins a genre/era, a dedicated Navidrome-genre source
 // becomes the dominant pool contributor and the off-genre sources shrink by
 // SHOW_NARROW_FACTOR so the show's genre/era actually fills the fallback (#629).
-const SHOW_GENRE_WEIGHT = 14;        // dedicated show-genre source (soft lean)
-const SHOW_GENRE_STRICT_WEIGHT = 24; // strict: this source carries most of the pool
+// Bumped with TARGET_POOL so a show's share of the pool stays ~constant.
+const SHOW_GENRE_WEIGHT = 18;        // dedicated show-genre source (soft lean)
+const SHOW_GENRE_STRICT_WEIGHT = 32; // strict: this source carries most of the pool
 // A show anchored to Navidrome playlist(s): the union becomes the dominant
 // fallback source (soft) or — after the strict end-filter — the whole pool.
-const SHOW_PLAYLIST_WEIGHT = 14;        // dedicated show-playlist source (soft)
-const SHOW_PLAYLIST_STRICT_WEIGHT = 120; // strict: this source carries the pool — 24 étranglait une playlist de 244
+const SHOW_PLAYLIST_WEIGHT = 18;        // dedicated show-playlist source (soft)
+const SHOW_PLAYLIST_STRICT_WEIGHT = 32; // strict: this source carries the pool
 const SHOW_NARROW_FACTOR = 0.5;      // shrink mood/playlist/recent/etc. for shows
+// In-flight Navidrome queries when the show-genre source fans out across a
+// multi-genre show (up to SHOW_FILTER_VALUES_MAX values x 2 fetches each).
+// Matches music/picker.ts — small on purpose, Navidrome is usually a home server.
+const SHOW_GENRE_FETCH_CONCURRENCY = 4;
 
 async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   const out: any[] = [];
@@ -75,12 +90,20 @@ export async function refreshAutoPlaylist() {
 async function refreshAutoPlaylistInner() {
   const ctx = await getFullContext();
   const mood = ctx.dominantMood;
-  // Match the auto-DJ picker's window (dj-agent.pickViaAgent) — 12h. Keyed by
-  // BOTH id and lowercased `title|artist`: a library with duplicate copies of a
-  // song holds N Subsonic ids for it, so an id-only recency filter lets copies
+  // Match the auto-DJ picker's window (dj-agent.pickViaAgent) — the same
+  // library-scaled recencyWindowsForLibrary figure, not a fixed 12h, so the
+  // coast and the live picker agree on what "recent" means. Keyed by BOTH id
+  // and lowercased `title|artist`: a library with duplicate copies of a song
+  // holds N Subsonic ids for it, so an id-only recency filter lets copies
   // #2..N sail into the fallback and re-air a just-played track (issue #874).
   // Mirrors collect() in the picker's tool layer.
-  const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(12);
+  await library.load();
+  const libStats = library.stats();
+  // The MIRROR size, not `total` (TAGGED tracks only) — same reading the two
+  // pick paths use, so the coast's window matches theirs on an untagged library
+  // too rather than reading a 50k catalogue as an empty one.
+  const windows = recencyWindowsForLibrary(libStats.distinctArtists, libStats.mirrorTotal || libStats.total);
+  const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(windows.trackHours);
 
   // The fallback is what airs when the live AI picks pause (e.g. pause-when-empty
   // with zero listeners). When a show is scheduled for this hour, the fallback
@@ -91,12 +114,14 @@ async function refreshAutoPlaylistInner() {
   const showGenres: string[] = show?.genres ?? [];
   const eras = (show?.eras ?? []) as { fromYear: number | null; toYear: number | null }[];
   const showEnergies: string[] = show?.energies ?? [];
-  // A genre or a year window narrows the pool; energy alone only soft-leans
-  // (mirrors picker.hasMusicFilter). Strict (show.filtersStrict) opts EVERY set
-  // filter — mood, genre, era, energy — into a hard filter on the pool.
+  // A genre or a year window narrows the pool; energy or vocals alone only
+  // soft-leans (mirrors picker.hasMusicFilter). Strict (show.filtersStrict) opts
+  // EVERY set filter — mood, genre, era, energy, vocals — into a hard filter on
+  // the pool.
   const narrow = !!(show && (showGenres.length || hasEraBound(eras)));
   const showMoods: string[] = show?.moods ?? [];
-  const strict = !!(show?.filtersStrict && (showGenres.length || showMoods.length || showEnergies.length || hasEraBound(eras)));
+  const showVocals = (show?.vocals ?? '') as VocalMode;
+  const strict = !!(show?.filtersStrict && (showGenres.length || showMoods.length || showEnergies.length || showVocals || hasEraBound(eras)));
 
   // Show playlist anchor: resolve the union once. The fallback must honour it
   // too, so the LLM-free coast (LLM down, budget-hard, zero listeners) still
@@ -171,8 +196,6 @@ async function refreshAutoPlaylistInner() {
   const fromSource = builder.fromSource;
   const take = builder.take;
 
-  await library.load();
-
   // 0. Dedicated show-genre / era source — the dominant contributor whenever a
   // show pins a genre or a year window. Both Navidrome queries filter server-side,
   // so this source is inherently genre/era-pure (no never-starve pollution). Soft
@@ -185,29 +208,41 @@ async function refreshAutoPlaylistInner() {
       // envelope (eraSpan); the genre-tagged sets post-filter to the exact
       // window union (inYearRange).
       const span = eraSpan(eras);
-      const collected: any[] = [];
       const randomSize = strict ? 60 : 40;
       const genreSetSize = strict ? 100 : 60;
-      for (const genreName of genreNames.length ? genreNames : [undefined]) {
-        collected.push(...await subsonic.getRandomSongs({
+      // Two fetches per genre, fanned out with bounded concurrency rather than
+      // awaited in sequence — a show may pin up to SHOW_FILTER_VALUES_MAX (15)
+      // genres, and the size budgets divide so the collected TOTAL is flat
+      // while the round-trip count is not. Mirrors the identical fan-out in
+      // music/picker.ts (§1e); keep the two in step.
+      const targets: (string | undefined)[] = genreNames.length ? genreNames : [undefined];
+      const perGenre = await mapPool(targets, SHOW_GENRE_FETCH_CONCURRENCY, async (genreName) => {
+        const got: any[] = [];
+        got.push(...await subsonic.getRandomSongs({
           size: Math.ceil(randomSize / Math.max(1, genreNames.length)),
           genre: genreName,
           fromYear: span.fromYear ?? undefined,
           toYear: span.toYear ?? undefined,
         }));
         if (genreName) {
-          const g = await subsonic.getSongsByGenre(genreName, { count: Math.ceil(genreSetSize / genreNames.length) });
+          // Sampled: a random page of the genre rather than the same
+          // server-ordered head every refresh (see getSongsByGenreSampled).
+          const g = await subsonic.getSongsByGenreSampled(genreName, { count: Math.ceil(genreSetSize / genreNames.length) });
           const ranged = inYearRange(g, eras);
-          collected.push(...(ranged.length ? ranged : g));
+          got.push(...(ranged.length ? ranged : g));
         }
-      }
+        return got;
+      });
+      const collected: any[] = perGenre.flat();
       // The random fetch used the coarse era envelope — tighten to the exact
       // union (never-starve to the envelope set when the union comes up empty).
       const exact = hasEraBound(eras) ? inYearRange(collected, eras) : collected;
       // Genre/era are server-side native here; enforce() adds the strict
       // mood/energy filters on top (no-op in soft mode).
       const leaned = enforce(preferEnergy(exact.length ? exact : collected, showEnergies));
-      take('show-genre', shuffle(leaned), strict ? SHOW_GENRE_STRICT_WEIGHT : SHOW_GENRE_WEIGHT);
+      // neverStarve: this is the coast's only in-genre contributor and the
+      // strict end-pass never-starves on an empty in-filter set — see TakeOpts.
+      take('show-genre', shuffle(leaned), strict ? SHOW_GENRE_STRICT_WEIGHT : SHOW_GENRE_WEIGHT, { neverStarve: true });
     } catch (err) {
       queue.log('error', `Show-genre fetch failed: ${err.message}`);
     }
@@ -218,7 +253,10 @@ async function refreshAutoPlaylistInner() {
   // fill the pool before the (shrunk) discovery sources. In strict mode the
   // whole pool is filtered to these ids at the end, so this is the universe.
   if (hasPlaylist) {
-    take('show-playlist', shuffle(playlistPool!.tracks), strictPlaylist ? SHOW_PLAYLIST_STRICT_WEIGHT : SHOW_PLAYLIST_WEIGHT);
+    // neverStarve: on a strict-playlist show this source IS the coast's
+    // universe, and the end-filter below never-starves to the full pool when
+    // nothing in-playlist survived — see TakeOpts.
+    take('show-playlist', shuffle(playlistPool!.tracks), strictPlaylist ? SHOW_PLAYLIST_STRICT_WEIGHT : SHOW_PLAYLIST_WEIGHT, { neverStarve: true });
   }
 
   // 1. Mood-tagged from the LLM-built library (only if tagger has run). A
@@ -260,6 +298,22 @@ async function refreshAutoPlaylistInner() {
     }
   }
 
+  // 2b. Exploration slot — a reserved library-wide draw, freshness-ordered
+  // (music/airing.ts) so never-aired tracks lead. Unconditional (unlike the
+  // thin-pool top-up at the bottom, which the old 32-summed weights made
+  // unreachable): the coast is exactly where an unexplored library should
+  // surface, since nothing here costs an LLM call. Skipped for a strict
+  // playlist show (random can't be playlist-filtered); the strict music-filter
+  // end-pass below still drops any off-filter draw on strict shows.
+  if (!strictPlaylist) {
+    try {
+      const wide = await subsonic.getRandomSongs({ size: EXPLORE_WEIGHT * 3 });
+      take('explore', enforce(freshnessBiasedOrder(wide, library.lastAiredInfo(), Date.now())), nz(EXPLORE_WEIGHT));
+    } catch (err) {
+      queue.log('error', `Explore fetch failed: ${err.message}`);
+    }
+  }
+
   // 3. Recently-added albums — surfaces new music without any tagging.
   try {
     const recentAlbums = await subsonic.getRecentlyAddedAlbums({ size: 8 });
@@ -269,9 +323,14 @@ async function refreshAutoPlaylistInner() {
     queue.log('error', `Recent-albums fetch failed: ${err.message}`);
   }
 
-  // 4. Frequent albums — Navidrome's scrobble-backed favourites.
+  // 4. Frequent albums — Navidrome's scrobble-backed favourites. The window
+  // rotates (offset 0/8/16 per refresh): the counts are fed by the station's
+  // own plays, so the offset-less top-8 was a positive-feedback loop pinning
+  // the same albums into every coast. An empty deep window falls back to the top.
   try {
-    const freqAlbums = await subsonic.getFrequentAlbums({ size: 8 });
+    const freqOffset = Math.floor(Math.random() * 3) * 8;
+    let freqAlbums = await subsonic.getFrequentAlbums({ size: 8, offset: freqOffset });
+    if (!freqAlbums.length && freqOffset > 0) freqAlbums = await subsonic.getFrequentAlbums({ size: 8 });
     const tracks = await tracksFromAlbums(shuffle(freqAlbums).slice(0, 4), 2, FREQUENT_WEIGHT * 2);
     take('frequent', enforce(tracks), nz(FREQUENT_WEIGHT));
   } catch (err) {
@@ -348,13 +407,14 @@ async function refreshAutoPlaylistInner() {
       eras,
       moods: showMoods,
       energies: showEnergies,
+      vocals: showVocals,
     }, { starve: false });
     pool.length = 0;
     pool.push(...filtered);
   }
 
   // Excluded playlists (blocklist): drop every track from a blocklisted
-  // playlist. The pick paths (picker.ts / picker-tools.ts) apply this as a HARD
+  // playlist. The pick paths (picker.ts / the picker/ tools) apply this as a HARD
   // filter — an empty pool there just skips the LLM pick and coasts on this
   // auto.m3u. This IS that coast, the last dead-air guard, so it mirrors the
   // strict-playlist block above: never-starve if the blocklist would empty the
@@ -784,10 +844,21 @@ async function cleanup() {
   // operator's byte budget (feature: stem-blend transitions). The analysis
   // pass sweeps after itself too; this catches lazily-added dirs.
   try {
-    const { removed, freedBytes } = await stemCacheStore.sweep();
+    const { removed, freedBytes, failedDirs, overBudgetBytes } = await stemCacheStore.sweep();
     if (removed) {
       queue.log('scheduler',
         `Stem cache: evicted ${removed} track dir(s) (${Math.round(freedBytes / 1_000_000)} MB freed)`);
+    }
+    // A sweep that couldn't reach the budget is an operator problem, not a
+    // no-op (#1257) — say so every hour it persists rather than sitting
+    // silently 170 GB over. The usual cause is the controller container
+    // being unable to delete what the analyzer wrote (ownership/permissions
+    // on state/stems, e.g. a relocated stems mount).
+    if (overBudgetBytes > 0) {
+      const budgetGb = settings.get()?.audio?.stemCacheGb ?? 15;
+      queue.log('error',
+        `Stem cache: still ${(overBudgetBytes / 1024 ** 3).toFixed(1)} GB over its ${budgetGb} GB budget after the sweep` +
+        (failedDirs ? ` — ${failedDirs} dir delete(s) failed; check ownership/permissions on state/stems` : ''));
     }
   } catch (err) {
     queue.log('error', `Stem cache sweep failed: ${err.message}`);

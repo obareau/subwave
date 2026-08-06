@@ -1,30 +1,20 @@
 'use client';
 
-// Unsaved-work guard for an admin panel that batches edits locally and pushes
-// them in one save (the Rundown's week, and anything else that grows the same
-// shape). Two exits are covered:
+// Unsaved-work guard for admin panels that batch edits locally and push them in
+// one save. Two exits are covered: leaving/reloading the tab (the browser's own
+// beforeunload prompt) and in-app link clicks, intercepted in the CAPTURE phase
+// before Next's router sees them and handed to the caller as a href.
 //
-//   - leaving the site / reloading the tab → the browser's own beforeunload
-//     prompt, which is all a page can do there;
-//   - clicking any in-app link (sidebar, breadcrumb, a card) → intercepted in
-//     the CAPTURE phase before Next's router sees it, handed to the caller as
-//     a href so it can ask what to do and navigate itself.
-//
-// Deliberately NOT covered: the browser back button. Trapping it means pushing
-// a decoy history entry, which breaks back for everyone who has nothing
-// pending — a worse trade than the case it saves.
+// Deliberately NOT covered: the browser back button. Trapping it means pushing a
+// decoy history entry, which breaks back for everyone with nothing pending.
 
 import { useEffect, useRef } from 'react';
 
-/**
- * @param active     guard only while there is something to lose.
- * @param onNavigate called with the intercepted in-app destination (path +
- *                   query + hash). The caller owns the prompt and the
- *                   subsequent `router.push`.
- */
+/** `onNavigate` receives the intercepted in-app destination (path + query +
+ *  hash); the caller owns the prompt and the subsequent `router.push`. */
 export function useUnsavedGuard(active: boolean, onNavigate: (href: string) => void): void {
-  // Held in a ref so a caller passing an inline arrow doesn't re-register the
-  // listeners on every render.
+  // A ref so a caller passing an inline arrow doesn't re-register the listeners
+  // on every render.
   const cb = useRef(onNavigate);
   cb.current = onNavigate;
 
@@ -33,14 +23,13 @@ export function useUnsavedGuard(active: boolean, onNavigate: (href: string) => v
 
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault();
-      // Legacy browsers still key off returnValue; the string itself is never
-      // shown (browsers render their own copy).
+      // Legacy browsers still key off returnValue; the string is never shown.
       e.returnValue = '';
     };
 
     const onClick = (e: MouseEvent) => {
-      // Anything but a plain left click is the operator asking for a new tab,
-      // a context menu, or a download — none of which lose the pending work.
+      // Anything but a plain left click means a new tab, context menu or
+      // download, none of which lose the pending work.
       if (e.defaultPrevented || e.button !== 0) return;
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       const target = e.target as Element | null;

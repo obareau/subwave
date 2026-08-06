@@ -6,12 +6,11 @@ import StationFooter from '@/components/landing/StationFooter';
 export const metadata: Metadata = {
   title: 'SUB/WAVE — Community Shows',
   description:
-    'The community show catalog for SUB/WAVE — produced-show templates shared by other stations, installable from any station&rsquo;s admin console.',
+    'The community show catalog for SUB/WAVE: show templates other operators built, installable from any station’s admin console.',
 };
 
-// Shared chrome for the /shows showcase: the broadsheet masthead, the page
-// body in the single full-width broadsheet column, and the station footer.
-// Mirrors app/skills/layout.tsx + app/personas/layout.tsx.
+// Shared chrome for the /shows showcase: masthead, full-width broadsheet
+// column, station footer.
 export default function ShowsLayout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-bg text-ink">

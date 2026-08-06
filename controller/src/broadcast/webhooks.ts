@@ -15,27 +15,13 @@
 
 import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
-
-export const WEBHOOK_EVENTS = [
-  'track.play',          // a track started playing
-  'dj.say',              // station ID / weather / hourly — heavy-ducked voice
-  'dj.link',             // between-track auto-DJ link — light-ducked voice
-  'request.received',    // a listener submitted a request
-] as const;
-
-export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
-
-interface WebhookConfig {
-  id: string;
-  url: string;
-  events: string[];
-  enabled: boolean;
-  authHeader?: string;
-}
+// One definition, shared with the web form — see controller/src/schemas/webhook.ts.
+import { WEBHOOK_EVENTS, type Webhook, type WebhookEvent } from '../schemas/webhook.js';
+export { WEBHOOK_EVENTS, type WebhookEvent };
 
 const TIMEOUT_MS = 5000;
 
-async function postOne(hook: WebhookConfig, body: string) {
+async function postOne(hook: Webhook, body: string) {
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -58,9 +44,9 @@ async function postOne(hook: WebhookConfig, body: string) {
 
 // Fire an event to every enabled, subscribed hook. Non-blocking.
 export function notify(event: WebhookEvent, payload: Record<string, unknown>) {
-  let hooks: WebhookConfig[] = [];
+  let hooks: Webhook[] = [];
   try {
-    hooks = (settings.get()?.webhooks || []) as WebhookConfig[];
+    hooks = (settings.get()?.webhooks || []) as Webhook[];
   } catch {
     return;
   }
@@ -80,7 +66,7 @@ export function notify(event: WebhookEvent, payload: Record<string, unknown>) {
 // Test fire — used by the admin UI's "Test" button. Bypasses the event
 // subscription list so the operator can sanity-check a fresh hook without
 // also flipping the events toggle on first.
-export async function fireTest(hook: WebhookConfig) {
+export async function fireTest(hook: Webhook) {
   await postOne(hook, JSON.stringify({
     event: 'test',
     t: new Date().toISOString(),

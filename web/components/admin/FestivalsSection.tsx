@@ -48,9 +48,8 @@ const EMPTY_FESTIVAL: Festival = {
 const sortFestivals = (list: Festival[]) =>
   [...list].sort((a, b) => a.month - b.month || a.day - b.day);
 
-// Display-only date math (the controller owns the real window logic in
-// getFestivalContext): `active` = today falls inside the ±window, `until` =
-// days to the next occurrence, wrapping the year boundary.
+// Display only — the controller owns the real window logic in
+// getFestivalContext. `until` wraps the year boundary.
 function festivalTiming(f: Festival, now: Date) {
   const dayMs = 86400000;
   const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -72,7 +71,6 @@ export default function FestivalsSection() {
   const [editing, setEditing] = useState<Festival | null>(null);
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
-  // Base id for wiring each field's <Label htmlFor> to its control's id.
   const fieldId = useId();
 
   const load = useCallback(async () => {
@@ -83,13 +81,12 @@ export default function FestivalsSection() {
         values?: { festivals?: unknown };
         tts?: { moods?: unknown };
       } | null;
-      // The controller validates + normalises festivals on every save
-      // (validateFestivalsStrict), so trust the shape as-is here.
+      // validateFestivalsStrict normalises on every save, so trust the shape here.
       const vals = j?.values?.festivals;
       const loaded = Array.isArray(vals) ? (vals as Festival[]) : [];
       setFestivals(sortFestivals(loaded));
-      // Mood vocabulary comes from the server (SHOW_MOODS via tts.moods) so
-      // the dropdown never drifts from what the controller will accept.
+      // Vocabulary comes from the server so the dropdown can't drift from what
+      // the controller will accept.
       const moodVals = j?.tts?.moods;
       setMoods(Array.isArray(moodVals) ? (moodVals as string[]) : []);
       setErr(null);
@@ -177,9 +174,8 @@ export default function FestivalsSection() {
 
   if (!hydrated || needsAuth) return null;
 
-  // Group the (already month/day-sorted) list into month sections, keeping the
-  // original index so a row click edits the right entry. The soonest upcoming
-  // festival gets an "up next" tag; anything inside its window reads "now".
+  // Grouped into month sections, carrying the original index so a row click
+  // edits the right entry.
   const now = new Date();
   const timings = (festivals || []).map(f => festivalTiming(f, now));
   const nextIdx = timings.length
@@ -234,9 +230,8 @@ export default function FestivalsSection() {
                       type="button"
                       disabled={busy}
                       onClick={() => startEdit(idx)}
-                      /* Mobile drops the mood/window facets onto a second row
-                         under the name — three columns leave the name ~170px
-                         at 390px, so long festival names lose their tail. */
+                      /* Mood/window drop to a second row on mobile: three
+                         columns leave the name only ~170px at 390px. */
                       className="grid w-full cursor-pointer grid-cols-[30px_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1 px-1.5 py-2 text-left hover:bg-[var(--ink-soft)] sm:grid-cols-[30px_1fr_auto] sm:gap-y-0"
                     >
                       <span className="mono-num col-start-1 row-start-1 text-[12px] text-muted">
@@ -323,8 +318,8 @@ export default function FestivalsSection() {
                 <Select
                   value={String(editing.month)}
                   onValueChange={v => {
-                    // Clamp the day so switching e.g. Oct 31 → February
-                    // can't leave an impossible date in the form.
+                    // Clamp the day so Oct 31 → February can't leave an
+                    // impossible date in the form.
                     const month = Number(v);
                     setEditing(cur => cur && ({
                       ...cur,

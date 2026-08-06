@@ -30,7 +30,7 @@ const STEPS = [
 
 export default function MakeARequest() {
   return (
-    <EditorialReveal className="bs-section">
+    <EditorialReveal className="bs-section bs-section--tinted bs-section--band">
       <p className="bs-eyebrow">PART FOUR · REQUESTS</p>
       <h2>Phone the station, like you used to.</h2>
       <p className="text-muted">

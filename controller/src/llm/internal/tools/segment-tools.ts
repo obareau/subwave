@@ -1,6 +1,6 @@
 // AI SDK tool library — wraps each on-offer skill's data tool (its tool.mjs)
 // for the segment-director agent (skills/_agent.js) to call before deciding
-// whether to air a between-track segment. The counterpart of picker-tools.ts
+// whether to air a between-track segment. The counterpart of the picker/ tool set
 // (music discovery): that set lets the DJ agent explore the library, these let
 // it look at the world.
 //

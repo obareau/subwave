@@ -3,6 +3,10 @@
 // vocab hash that decides when a re-score is due.
 
 import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
+// Every backfill widening below shares the bpm/key scope's exclusion of tracks
+// that have failed analysis too many times — a widening that forgets it is a
+// scope that re-attempts unanalysable files forever (#1300 bug 3c).
+import { analysisFailureExclusion } from './tracks.js';
 
 // ---------------------------------------------------------------------------
 // Zero-shot audio moods (music/audio-moods.ts) — mood labels derived by scoring
@@ -100,11 +104,12 @@ export function vocalAnalyzedCount(): number {
 // stable resumption, independent of the bpm/key analysis scope so the audio
 // backfill can run on its own cadence. LEFT JOIN where the vector row is absent.
 export function unanalysedAudioIds(limit?: number): string[] {
+  const where = `v.id IS NULL AND ${analysisFailureExclusion('t')}`;
   const q = limit && limit > 0
     ? `SELECT t.id FROM tracks t LEFT JOIN track_audio_vectors v ON v.id = t.id
-       WHERE v.id IS NULL ORDER BY t.id LIMIT ${Math.floor(limit)}`
+       WHERE ${where} ORDER BY t.id LIMIT ${Math.floor(limit)}`
     : `SELECT t.id FROM tracks t LEFT JOIN track_audio_vectors v ON v.id = t.id
-       WHERE v.id IS NULL ORDER BY t.id`;
+       WHERE ${where} ORDER BY t.id`;
   const rows = requireDb().prepare(q).all() as Array<{ id: string }>;
   return rows.map(r => r.id);
 }
@@ -125,10 +130,11 @@ export function unanalysedAudioIds(limit?: number): string[] {
 // === true), or a stale sidecar re-analyses these tracks forever for a
 // guaranteed no-op.
 export function needsVocalIds(limit?: number, includeTailMissing = false): string[] {
-  const where = includeTailMissing
-    ? `vocal_ranges_json IS NULL
-       OR (outro_json IS NOT NULL AND outro_json NOT LIKE '%"vocalRanges"%')`
+  const missing = includeTailMissing
+    ? `(vocal_ranges_json IS NULL
+       OR (outro_json IS NOT NULL AND outro_json NOT LIKE '%"vocalRanges"%'))`
     : `vocal_ranges_json IS NULL`;
+  const where = `${missing} AND ${analysisFailureExclusion()}`;
   const q =
     `SELECT id FROM tracks WHERE ${where} ORDER BY id` +
     (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
@@ -149,7 +155,7 @@ export function needsVocalIds(limit?: number, includeTailMissing = false): strin
 // the budget.
 export function needsStemsIds(limit?: number): string[] {
   const q =
-    `SELECT id FROM tracks WHERE stems_at IS NULL ORDER BY id` +
+    `SELECT id FROM tracks WHERE stems_at IS NULL AND ${analysisFailureExclusion()} ORDER BY id` +
     (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
   const rows = requireDb().prepare(q).all() as Array<{ id: string }>;
   return rows.map(r => r.id);

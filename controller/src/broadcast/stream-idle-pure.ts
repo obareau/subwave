@@ -13,8 +13,12 @@ export interface IdleState {
 
 // Pure transition: current state + (toggle, freshest count, clock) → next
 // state and the telnet action to fire. `count` is null when Icecast couldn't
-// be read. The caller only commits the returned state once the action's
-// telnet call succeeds, so a dropped command self-heals on the next tick.
+// be read — which the caller defines as SUSTAINED unreadability, not a single
+// failed poll (listeners.gatedListenerCount holds the last real reading through
+// a blip; #1256). The fail-open branches below are correct either way; what was
+// wrong was feeding them a null on every transient timeout. The caller only
+// commits the returned state once the action's telnet call succeeds, so a
+// dropped command self-heals on the next tick.
 //
 // Regression-critical branches:
 //   • fail-open — an unknown count can never hold the station silent;

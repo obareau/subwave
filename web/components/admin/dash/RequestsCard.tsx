@@ -1,9 +1,5 @@
 'use client';
 
-// The listener-requests card and one request's row.
-//
-// Part of the dash/ split - see ../DashPanel.tsx.
-
 import type { ReactNode } from 'react';
 import { fmtClock } from '../../../lib/format';
 import type { StationLocale } from '../../../lib/types';
@@ -55,13 +51,10 @@ export function RequestsCard({
   );
 }
 
-// The Likes card (#991) — what the heart button collected: the most-liked
-// tracks in the configured window, then the recent taps. Listener column is
-// the truncated HMAC handle from the controller — never an IP.
+// The Likes card (#991) moved to the Library page's Liked mode in #1253.
 
 function RequestRow({ r, tz, locale }: { r: RequestEntry; tz?: string; locale?: StationLocale }) {
   const ok = r.status === 'resolved';
-  // Matcher breakdown — only the fields that carry a value, joined compactly.
   const trace = [
     r.intent && `intent ${r.intent}`,
     r.mood && `mood ${r.mood}`,
@@ -74,8 +67,7 @@ function RequestRow({ r, tz, locale }: { r: RequestEntry; tz?: string; locale?: 
 
   return (
     <details className="border border-separator-strong">
-      {/* The resolve time is diagnostic detail — it drops on a phone so the
-          requester + request text keep a usable truncation width. */}
+      {/* Resolve time drops on a phone so requester + text keep a usable width. */}
       <summary className="grid cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-2.5 px-2.5 py-2 sm:grid-cols-[auto_1fr_auto_auto]">
         <span className={cn('font-bold', ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
           {ok ? '✓' : '✗'}

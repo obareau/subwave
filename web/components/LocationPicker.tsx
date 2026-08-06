@@ -5,11 +5,9 @@ import type { ChangeEvent, KeyboardEvent } from 'react';
 import { Input } from './ui/input';
 import { cn } from '@/lib/cn';
 
-// Shared location picker — type a city, pick from a dropdown, and the station's
-// name + coordinates (+ IANA timezone, via onPick) fill in one tap. Used by both
-// the admin Station tab and the onboarding wizard. Talks to the controller's
-// unauthenticated GET /geocode proxy (Open-Meteo geocoding). Manual coordinate
-// entry stays available as an always-works fallback for offline boxes.
+// Shared by the admin Station tab and the onboarding wizard. Talks to the
+// controller's unauthenticated GET /geocode proxy (Open-Meteo). Manual
+// coordinate entry stays available as a fallback for offline boxes.
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
@@ -33,9 +31,8 @@ export interface LocationValue {
 interface LocationPickerProps {
   value: LocationValue;
   onChange: (next: LocationValue) => void;
-  // Fires with the full result on selection so a host can use extra fields —
-  // both call sites use it for the picked timezone (admin suggests, onboarding
-  // auto-applies). Omit to ignore.
+  // Fires with the full result so a host can use extra fields; both call sites
+  // use it for the picked timezone. Omit to ignore.
   onPick?: (result: GeocodeResult) => void;
   // Cosmetic only: onboarding uses rounded inputs, the admin shell sharp ones.
   variant?: 'admin' | 'onboarding';
@@ -70,7 +67,7 @@ export function LocationPicker({
 
   const rounded = variant === 'onboarding' ? 'rounded' : '';
 
-  // Debounced geocode lookup. < 2 chars makes no request.
+  // < 2 chars makes no request.
   useEffect(() => {
     const q = query.trim();
     if (q.length < 2) {
@@ -95,8 +92,7 @@ export function LocationPicker({
         })
         .catch((e: unknown) => {
           if (e instanceof DOMException && e.name === 'AbortError') return;
-          // Search is down (offline homelab, Open-Meteo unreachable) — surface a
-          // hint and open the manual fields so config is never blocked.
+          // Search is down. Open the manual fields so config is never blocked.
           setFailed(true);
           setManual(true);
           setOpen(false);
@@ -109,7 +105,6 @@ export function LocationPicker({
     };
   }, [query]);
 
-  // Close the dropdown on an outside click.
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
@@ -152,7 +147,6 @@ export function LocationPicker({
 
   return (
     <div ref={rootRef} className={cn('relative flex flex-col gap-2', className)}>
-      {/* Search box */}
       <div className="relative w-full max-w-[420px]">
         <Input
           type="text"
@@ -217,7 +211,6 @@ export function LocationPicker({
         ) : null}
       </div>
 
-      {/* Current selection summary */}
       {hasValue ? (
         <div className="text-[13px] text-muted-foreground">
           Selected: <span className="text-foreground">{value.locationName || '—'}</span>
@@ -236,7 +229,6 @@ export function LocationPicker({
         </div>
       ) : null}
 
-      {/* Manual entry disclosure — always reachable */}
       <button
         type="button"
         onClick={() => setManual(m => !m)}

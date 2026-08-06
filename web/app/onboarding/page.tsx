@@ -1,11 +1,8 @@
 'use client';
 
-// /setup is the first-run wizard. Once setup is complete it falls through to
-// a short "you're already set up" card with links to the player and to
-// /setup for the deeper documentation.
-//
-// (Force-dynamic — checks the controller's /onboarding/status on every request to
-// avoid serving a stale "needs setup" view after the operator finishes.)
+// The first-run wizard; once setup is complete it falls through to an "already
+// set up" card. Force-dynamic so the controller's /onboarding/status is checked
+// per request and a stale "needs setup" view is never served.
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';

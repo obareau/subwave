@@ -3,11 +3,12 @@
 import Link from 'next/link';
 
 import { AnimatedLink } from '@/components/ui/animated-link';
+import { cn } from '@/lib/cn';
 
-// The Back Pages — the footer as a broadsheet back-page index. Four ruled
+// The Back Pages — the footer as a broadsheet back-page index. Six ruled
 // section panels give the station's secondary destinations (dispatches,
-// stations, skills, personas) real front-of-house billing, then a single
-// colophon strip carries the small print. Copy ends with the press-room
+// stations, skills, personas, shows, apps) real front-of-house billing, then a
+// single colophon strip carries the small print. Copy ends with the press-room
 // "-30-" mark.
 const BACK_PAGES = [
   {
@@ -30,7 +31,7 @@ const BACK_PAGES = [
     no: '03',
     tag: 'The Exchange',
     title: 'Community Skills',
-    teaser: 'Segments operators taught their DJs — take one home.',
+    teaser: 'Segments operators taught their DJs. Take one home.',
     cta: 'Explore the skills',
     href: '/skills',
   },
@@ -38,7 +39,7 @@ const BACK_PAGES = [
     no: '04',
     tag: 'The Green Room',
     title: 'Community Personas',
-    teaser: 'DJs other operators dreamed up — book one for your booth.',
+    teaser: 'DJs other operators dreamed up. Book one for your booth.',
     cta: 'Meet the personas',
     href: '/personas',
   },
@@ -46,9 +47,17 @@ const BACK_PAGES = [
     no: '05',
     tag: 'The Programme Guide',
     title: 'Community Shows',
-    teaser: 'Produced slots operators built — put one on your grid.',
+    teaser: 'Produced slots operators built. Put one on your grid.',
     cta: 'Browse the shows',
     href: '/shows',
+  },
+  {
+    no: '06',
+    tag: 'The Receivers',
+    title: 'Community Apps',
+    teaser: 'Players, bots and clients other people built. Take your pick.',
+    cta: 'Browse the apps',
+    href: '/apps',
   },
 ] as const;
 
@@ -59,20 +68,32 @@ export default function StationFooter({ djName }: { djName?: string }) {
 
       <div className="flex items-baseline justify-between gap-4 py-[7px] text-[10px] tracking-[0.3em] text-muted uppercase">
         <span className="font-bold text-ink">The Back Pages</span>
-        <span className="hidden sm:inline">Reader services · §§ 01–05</span>
+        <span className="hidden sm:inline">Reader services · §§ 01–06</span>
       </div>
 
       <div className="bs-rule" />
 
-      <nav
-        aria-label="Back pages"
-        className="grid divide-y divide-ink/20 lg:grid-cols-5 lg:divide-x lg:divide-y-0"
-      >
-        {BACK_PAGES.map((page) => (
+      {/* Two rows at lg: Dispatches + Stations across the top, the four
+          community catalogs beneath. Six equal columns squeezed the titles to
+          two lines apiece. Rules are drawn per panel off the index rather than
+          with divide-*, which adds a left border to every child but the first —
+          in a wrapping grid that lands one against the grid edge on row two. */}
+      <nav aria-label="Back pages" className="grid lg:grid-cols-4">
+        {BACK_PAGES.map((page, i) => (
           <Link
             key={page.href}
             href={page.href}
-            className="group relative flex flex-col gap-[10px] overflow-hidden px-5 py-6 no-underline transition-colors duration-300 hover:bg-ink/[0.04] lg:first:pl-1 lg:last:pr-1"
+            className={cn(
+              'group relative flex flex-col gap-[10px] overflow-hidden px-5 py-6 no-underline transition-colors duration-300 hover:bg-ink/[0.04]',
+              i > 0 && 'border-t border-ink/20 lg:border-t-0',
+              i < 2 && 'lg:col-span-2',
+              i >= 2 && 'lg:border-t lg:border-ink/20',
+              // Vertical rules everywhere except where a row begins.
+              i !== 0 && i !== 2 && 'lg:border-l lg:border-ink/20',
+              // Outer edges flush with the page gutter.
+              (i === 0 || i === 2) && 'lg:pl-1',
+              (i === 1 || i === 5) && 'lg:pr-1',
+            )}
           >
             <span
               aria-hidden="true"

@@ -1,9 +1,6 @@
 'use client';
 
-// TTY — the station as a live process. Panes and a status line, everything
-// tails: NOW PLAYING, BOOTH (tail -f), UP NEXT, LAST, and a :req prompt.
-// Utilitarian · dense · alive. Design ref: Skins Canvas 1e. Replaces the old
-// bare "terminal" readout (the registry aliases terminal → tty).
+// The registry aliases the retired `terminal` id to this skin (lib/skin.ts).
 
 import { useEffect, useRef, useState } from 'react';
 import { m, steps } from 'motion/react';
@@ -38,19 +35,15 @@ import type { SkinProps } from '../types';
 const PROGRESS_CELLS = 16;
 const VOL_CELLS = 8;
 
-/* Print cadence. 14ms a cell reads as a fast local terminal; past ~32 cells
-   the step compresses so even a very long title lands inside the cap rather
-   than holding the pane for a second. */
+/* Print cadence: 14ms a cell, compressed past ~32 cells so even a very long
+   title lands inside the cap rather than holding the pane for a second. */
 const PRINT_STEP_MS = 14;
 const PRINT_CAP_MS = 450;
 
-/** A line that prints. A terminal doesn't fade text in — it writes it, one
- *  cell at a time — so the reveal is a clip-path wipe stepped to the character
- *  count, not an opacity ramp. Keyed on its own text, so changing the text
- *  remounts and reprints.
- *
- *  There is deliberately no exit animation: a terminal line isn't removed, it
- *  is overwritten. That's also why this needs no AnimatePresence. */
+/** The reveal is a clip-path wipe stepped to the character count, not an
+ *  opacity ramp. Keyed on its own text, so changing the text remounts and
+ *  reprints. No exit animation, deliberately — which is also why this needs no
+ *  AnimatePresence. */
 function Printed({
   text, printing, delay = 0, className, children,
 }: {
@@ -59,14 +52,13 @@ function Printed({
   printing: boolean;
   delay?: number;
   className?: string;
-  /** What to actually render, when the line carries markup (a muted tail, a
-   *  highlight). The wipe reveals whatever is inside. Defaults to `text`. */
+  /** What to render when the line carries markup. Defaults to `text`. */
   children?: React.ReactNode;
 }) {
   const cells = Math.max(text.length, 1);
-  // Not printing (lite mode) means no motion element at all. A zero-duration
-  // transition would still paint `initial` for a frame, and here `initial` is a
-  // full-width clip — a blank line flashing on every track change.
+  // Lite mode means no motion element at all: a zero-duration transition would
+  // still paint `initial` for a frame, and here `initial` is a full-width clip
+  // — a blank line flashing on every track change.
   if (!printing) {
     return <span className={cn('inline-block', className)}>{children ?? text}</span>;
   }
@@ -89,7 +81,7 @@ function Printed({
 
 function Rule({ children }: { children: React.ReactNode }) {
   return (
-    <div className="truncate text-[10px] tracking-[0.22em] text-muted uppercase select-none">
+    <div className="truncate text-[11px] tracking-[0.22em] text-muted uppercase select-none">
       ── {children} ──────────────────
     </div>
   );
@@ -118,7 +110,6 @@ export default function TtySkin(_props: SkinProps) {
   const adjustVolume = useVolumeNudge();
   const like = useTrackLike();
 
-  // :req prompt + :log depth toggle.
   const [reqOpen, setReqOpen] = useState(false);
   const [logDeep, setLogDeep] = useState(false);
   const slip = useRequestSlip({
@@ -141,13 +132,11 @@ export default function TtySkin(_props: SkinProps) {
     { disabled: showTuneIn || reqOpen },
   );
 
-  // The gate's contract is "press any key": while it's up, a printable key
-  // (or Enter) tunes in. Deliberately NOT literally any key — Tab keeps
-  // focus traversal (keyboard users must still be able to leave the gate),
-  // and F-keys/Escape/arrows stay with the browser. A press another shortcut
-  // map already claimed (the shell's s/t cycling calls preventDefault) is
-  // ceded to it, and this handler preventDefaults its own accepts, so one
-  // keypress never both tunes in and cycles.
+  // A printable key or Enter tunes in — deliberately NOT literally any key:
+  // Tab keeps focus traversal (keyboard users must still be able to leave the
+  // gate) and F-keys/Escape/arrows stay with the browser. A press another
+  // shortcut map already claimed is ceded to it, and this handler
+  // preventDefaults its own accepts, so one keypress can't do both.
   useEffect(() => {
     if (!showTuneIn || offline) return;
     const onKey = (e: KeyboardEvent) => {
@@ -168,8 +157,7 @@ export default function TtySkin(_props: SkinProps) {
   const coverId = nowPlaying?.subsonic_id;
 
   // Lite mode's CSS kill can't reach motion — gate the print ourselves. The
-  // skin's own boot log already covers "the terminal is starting", so the
-  // first paint doesn't also print: two boot animations is worse than one.
+  // first paint doesn't print either, because the boot log already animates.
   const mayPrint = useSkinMotion();
   const painted = useRef(false);
   useEffect(() => { painted.current = true; }, []);
@@ -179,9 +167,7 @@ export default function TtySkin(_props: SkinProps) {
     <div className="absolute inset-0 overflow-hidden p-4 font-mono text-[13px] leading-relaxed text-ink sm:p-7">
       <div className="flex h-full w-full flex-col gap-3.5">
 
-        {/* header bar — station line truncates; context is desktop-only so
-            mobile stays one clean row with the theme icon pinned right */}
-        <div className="flex flex-none items-center justify-between gap-x-4 border border-[var(--line)] px-4 py-2.5">
+        <div className="flex flex-none items-center justify-between gap-x-4 border border-ink px-4 py-2.5">
           <div className="min-w-0 truncate text-[13px] tracking-[0.1em]">
             <span className={cn(offline ? 'text-muted' : 'text-[var(--accent)]')}>●</span>{' '}
             <span className="font-bold">{stationName.toUpperCase()}</span>
@@ -197,8 +183,6 @@ export default function TtySkin(_props: SkinProps) {
           </div>
         </div>
 
-        {/* now playing + booth — fills most of the middle; stacked on mobile
-            (now-playing auto, booth fills + scrolls), side-by-side on lg */}
         <div className="grid min-h-0 flex-[2] grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-3.5 lg:grid-cols-[1fr_380px] lg:grid-rows-1">
           <section className="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto border border-[var(--line)] px-5 py-5 sm:px-7">
             <Rule>NOW PLAYING</Rule>
@@ -213,8 +197,7 @@ export default function TtySkin(_props: SkinProps) {
                 </div>
                 {!offline && nowPlaying?.artist && (
                   <div className="text-[15px] tracking-[0.08em] uppercase">
-                    {/* The artist prints after the title finishes — the pane
-                        writes top-down, the way a real one would. */}
+                    {/* Delayed so the artist prints after the title. */}
                     <Printed
                       text={
                         nowPlaying.artist
@@ -298,8 +281,6 @@ export default function TtySkin(_props: SkinProps) {
           </section>
         </div>
 
-        {/* up next + last — last fills + scrolls; stacked on mobile,
-            side-by-side from sm */}
         <div className="grid min-h-0 flex-none grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-3.5 sm:flex-[1] sm:grid-cols-2 sm:grid-rows-1">
           <section className="flex min-h-0 min-w-0 flex-col gap-2.5 border border-[var(--line)] px-5 py-4">
             <Rule>UP NEXT</Rule>
@@ -334,7 +315,6 @@ export default function TtySkin(_props: SkinProps) {
           </section>
         </div>
 
-        {/* :req prompt (in place of the status line while open) */}
         {reqOpen ? (
           <div className="flex flex-none items-baseline gap-3 border border-[var(--accent)] bg-[var(--field)] px-4 py-2.5 text-[12px]">
             <span className="font-bold text-[var(--accent)] select-none">:req ▸</span>
@@ -369,8 +349,7 @@ export default function TtySkin(_props: SkinProps) {
             )}
           </div>
         ) : (
-          /* status line */
-          <div className="flex flex-none flex-wrap items-baseline gap-x-5 gap-y-1 border border-[var(--line)] bg-[var(--field)] px-4 py-2.5 text-[12px] tracking-[0.08em]">
+          <div className="flex flex-none flex-wrap items-baseline gap-x-5 gap-y-1 border border-ink bg-[var(--field)] px-4 py-2.5 text-[12px] tracking-[0.08em]">
             <button
               type="button"
               onClick={handleTune}
@@ -424,11 +403,10 @@ export default function TtySkin(_props: SkinProps) {
             <button
               type="button"
               onClick={() => setLogDeep(d => !d)}
-              className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted uppercase hover:text-ink"
+              className="v3-focus cursor-pointer border-0 bg-transparent p-0 font-bold text-accent-2 uppercase hover:text-ink"
             >
               :log {logDeep ? 'SHORT LOG' : 'FULL LOG'}
             </button>
-            {/* volume floats to the right end of the status line */}
             <span className="ml-auto inline-flex items-baseline gap-1.5">
               <button type="button" aria-label="Volume down" onClick={() => adjustVolume(-0.125)}
                 className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">−</button>
@@ -444,8 +422,7 @@ export default function TtySkin(_props: SkinProps) {
         )}
       </div>
 
-      {/* boot-log gate — halts at "press any key". The tap/keypress is the
-          browser's audio-unblock gesture. */}
+      {/* The tap/keypress is the browser's audio-unblock gesture. */}
       {showOverlay && !offline && (
         <button
           type="button"

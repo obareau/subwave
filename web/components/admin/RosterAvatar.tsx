@@ -1,9 +1,7 @@
 'use client';
 
-// A face for the roster tables — the initials-behind-<img> pattern the slate
-// cards use, so a broken or absent avatar still shows something readable.
-// Deliberately dumb: it takes a resolved src and the initials to fall back to,
-// never a Persona, so shows and DJs can both feed it.
+// Initials sit behind the <img> so a broken or absent avatar still reads. Takes
+// a resolved src rather than a Persona, so shows and DJs can both feed it.
 
 import { cn } from '../../lib/cn';
 
@@ -39,4 +37,3 @@ export function RosterAvatar({ src, initials, size = 'sm', className }: RosterAv
   );
 }
 
-export default RosterAvatar;

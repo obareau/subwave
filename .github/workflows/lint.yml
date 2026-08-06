@@ -66,4 +66,41 @@ jobs:
           npm run gen:themes
           git diff --exit-code ../web/lib/theme-tokens.generated.ts
 
+      # The web schema mirror (web/lib/schemas.generated.ts) is generated from
+      # controller/src/schemas/**. Regenerate and fail on any drift, so a schema
+      # change can't ship without regenerating the mirror the forms validate on.
+      - name: Verify schema mirror is up to date
+        if: matrix.package == 'controller'
+        run: |
+          npm run gen:schemas
+          git diff --exit-code ../web/lib/schemas.generated.ts
+
+      # The drift check above only proves the two sides run the same schema
+      # TEXT. If the packages resolve different zod builds, the schema the form
+      # runs and the schema the route runs can still disagree — the one property
+      # the mirror exists to guarantee. A lone `npm update zod` in either
+      # package is all it takes, so pin the declared ranges to each other.
+      - name: Verify controller and web declare the same zod version
+        if: matrix.package == 'controller'
+        run: |
+          node -e '
+            const c = require("./package.json").dependencies.zod;
+            const w = require("../web/package.json").dependencies.zod;
+            // Both sides reading `dependencies.zod` means a zod that moved to
+            // devDependencies in both packages would compare undefined ===
+            // undefined and pass vacuously — the check would go green having
+            // compared nothing. Demand a declared range before comparing.
+            for (const [pkg, range] of [["controller", c], ["web", w]]) {
+              if (!range) {
+                console.error(`${pkg} does not declare zod in dependencies. The schema mirror is shared runtime code, so both packages must declare zod as a runtime dependency.`);
+                process.exit(1);
+              }
+            }
+            if (c !== w) {
+              console.error(`zod version mismatch: controller ${c} vs web ${w}. The schema mirror is copied text, so both packages must declare the same zod range — update both together.`);
+              process.exit(1);
+            }
+            console.log(`zod ${c} on both sides`);
+          '
+
       - run: npm run lint

@@ -1,18 +1,8 @@
 'use client';
 
-// Station Header — the unified "what's on air + is it healthy" card at the top
-// of /admin/dash. One card: a now-playing title row (track, DJ, show, ON AIR,
-// Skip) over a single status strip of four cells, left to right:
-//   01 Listeners      — analog needle + vermilion peak-hold tick
-//   02 DJ Latency     — analog needle, redlines past 3000 ms
-//   03 TTS Fallback   — inverted linear bar (low = good)
-//   04 On Air         — pilot lamp + stream bitrate, with weather + picker context
-//
-// This merges the old standalone health strip with the on-air hero so Listeners
-// and On-Air are shown once, not twice. Instrument type follows data shape, like
-// a real console. Built to the SUB/WAVE design system (square corners, mono
-// numerals, one accent) through a Braun / Dieter Rams lens; all colour comes
-// from theme tokens so it tracks light + dark.
+// The on-air + health card at the top of /admin/dash: a now-playing title row
+// over a status strip of four instruments (listeners, DJ latency, TTS fallback,
+// on air). All colour comes from theme tokens so it tracks light + dark.
 //
 // The meters animate via a single critically-damped (zeta≈1) rAF loop that
 // writes straight to the DOM — no per-frame re-render. Structure + state styling
@@ -30,9 +20,8 @@ export interface HealthMetrics {
   /** DJ think→speak p95 latency in ms, or null when unknown (stats not loaded) */
   latencyMs: number | null;
   /**
-   * The live DJ-agent deadline in ms — the redline anchor. Past it the agent
-   * times out and falls back to the pool picker. Null until /stats loads, in
-   * which case the gauge uses its built-in default scale.
+   * The live DJ-agent deadline in ms, and the redline anchor. Null until /stats
+   * loads, in which case the gauge uses its built-in default scale.
    */
   latencyDeadlineMs: number | null;
   /** TTS fallback rate as a percentage, or null when unknown */
@@ -49,12 +38,10 @@ const SCALE = {
   ttsBadPct: 25, // fallback above this = redline
 } as const;
 
-// DJ-latency gauge scale. The redline anchors to the live DJ-agent deadline
-// (metrics.latencyDeadlineMs) — past it the agent times out and falls back to
-// the pool picker, so a redlined needle means "hitting fallbacks", not an
-// arbitrary ceiling. The band always sits at a fixed fraction of the sweep, so
-// only the numbers track the model in use, never the gauge geometry. Falls back
-// to 3 s until /stats reports the deadline.
+// The redline anchors to the live DJ-agent deadline, so a redlined needle means
+// "hitting fallbacks" rather than an arbitrary ceiling. The band stays at a
+// fixed fraction of the sweep, so only the numbers track the model in use,
+// never the gauge geometry. Falls back to 3 s until /stats reports a deadline.
 const DEFAULT_LATENCY_REDLINE_MS = 3000;
 const LATENCY_REDLINE_FRACTION = 0.6; // redline begins at 60% of the dial
 function latencyScale(deadlineMs: number | null): { redline: number; max: number } {
@@ -62,7 +49,7 @@ function latencyScale(deadlineMs: number | null): { redline: number; max: number
   return { redline, max: Math.round(redline / LATENCY_REDLINE_FRACTION) };
 }
 
-// ── geometry: a gauge sweeps the TOP semicircle, t=0→left, t=1→right ──
+// A gauge sweeps the TOP semicircle: t=0 → left, t=1 → right.
 const SVGNS = 'http://www.w3.org/2000/svg';
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const rad = (d: number) => (d * Math.PI) / 180;
@@ -82,7 +69,7 @@ function arcPath(cx: number, cy: number, r: number, d0: number, d1: number): str
 // gauge canvas constants (shared by the listeners + latency needles)
 const G = { W: 150, H: 64, cx: 75, cy: 60, rArc: 52, rTickIn: 44, rTickOut: 52, needleLen: 46, tailLen: 10 };
 
-// ── critically-damped spring (zeta = 1): eases, settles, NO overshoot ──
+// Critically-damped spring (zeta = 1): eases, settles, NO overshoot.
 interface Spring {
   x: number;
   v: number;
@@ -112,11 +99,9 @@ function buildGauge(
   svg.setAttribute('viewBox', `0 0 ${G.W} ${G.H}`);
   svg.replaceChildren();
 
-  // base scale arc
   svg.appendChild(
     el('path', { d: arcPath(cx, cy, rArc, 180, 0), fill: 'none', stroke: 'var(--hs-arc)', 'stroke-width': 1.5 }),
   );
-  // redline band on the outer edge
   if (opts.redlineFrom != null) {
     const d0 = tToDeg(opts.redlineFrom);
     svg.appendChild(
@@ -139,7 +124,6 @@ function buildGauge(
       );
     }
   }
-  // peak-hold tick (listeners only)
   let peak: SVGLineElement | null = null;
   if (opts.withPeak) {
     peak = el('line', {
@@ -147,12 +131,13 @@ function buildGauge(
       y1: cy - rTickIn,
       x2: cx,
       y2: cy - rTickOut - 2,
-      stroke: 'var(--accent)',
+      // Second ink so the peak marker reads apart from the accent needle sweep
+      // on two-colour themes.
+      stroke: 'var(--accent-2)',
       'stroke-width': 2.4,
     });
     svg.appendChild(peak);
   }
-  // needle + hub
   const needle = el('g', {});
   needle.appendChild(
     el('line', { x1: cx, y1: cy, x2: cx, y2: cy - needleLen, stroke: 'var(--ink)', 'stroke-width': 2.2, 'stroke-linecap': 'round' }),
@@ -194,7 +179,6 @@ export default function StationHeader({
   const targets = useRef(metrics);
   targets.current = metrics;
 
-  // animated nodes (filled on mount)
   const listenersSvg = useRef<SVGSVGElement>(null);
   const latencySvg = useRef<SVGSVGElement>(null);
   const listenersV = useRef<HTMLSpanElement>(null);
@@ -214,7 +198,7 @@ export default function StationHeader({
       ? buildGauge(latencySvg.current, { redlineFrom: LATENCY_REDLINE_FRACTION })
       : null;
 
-    // needles power up from zero on load (instrument warm-up)
+    // Needles power up from zero on load.
     const sListeners: Spring = { x: 0, v: 0 };
     const sLatency: Spring = { x: 0, v: 0 };
     const sTts: Spring = { x: 0, v: 0 };
@@ -226,13 +210,12 @@ export default function StationHeader({
     const render = () => {
       const t = targets.current;
 
-      // listeners
       lG?.setNeedle(sListeners.x / SCALE.listenersMax);
       lG?.setPeak(sPeak.x / SCALE.listenersMax);
       if (listenersV.current) listenersV.current.textContent = String(Math.round(sListeners.x));
       if (peakV.current) peakV.current.textContent = String(Math.round(sPeak.x));
 
-      // latency — scale (redline + full-scale) tracks the live agent deadline
+      // Redline and full-scale track the live agent deadline.
       const { redline: latRedline, max: latMax } = latencyScale(t.latencyDeadlineMs);
       aG?.setNeedle(sLatency.x / latMax);
       const redlined = sLatency.x >= latRedline;
@@ -249,7 +232,6 @@ export default function StationHeader({
                 : 'nominal';
       }
 
-      // tts inverted bar
       const ttsPct = sTts.x;
       if (fill.current) {
         fill.current.className =
@@ -290,7 +272,6 @@ export default function StationHeader({
 
   return (
     <section className="card border-ink">
-      {/* now-playing header row */}
       <div className="stack-mobile grid grid-cols-[1fr_auto] items-center gap-6 border-b border-ink p-[18px]">
         <div>
           {np?.title ? (
@@ -313,16 +294,11 @@ export default function StationHeader({
         </div>
       </div>
 
-      {/* Unified status strip. Four instruments at 140–196px can't sit in one
-          390px row, so on a phone the flex rail becomes a 2-up grid and folds
-          to two rows; from sm: up it is byte-for-byte the original single row.
-          The `!` utilities are required because the `.hs-*` rules in
-          globals.css are unlayered and would otherwise outrank Tailwind's
-          utility layer regardless of specificity. Cell dividers are re-flowed
-          the same way `.strip-mobile` does it: no left rule on the cell that
-          starts row 2, a top rule on both cells of that row. */}
+      {/* Four instruments at 140–196px can't sit in one 390px row, so on a phone
+          the flex rail becomes a 2-up grid. The `!` utilities are required
+          because the `.hs-*` rules in globals.css are unlayered and would
+          otherwise outrank Tailwind's utility layer regardless of specificity. */}
       <div className="hs-strip !grid !grid-cols-2 sm:!flex">
-        {/* 01 — listeners needle */}
         <div className="hs-cell !min-w-0 sm:!min-w-[140px]">
           <div className="hs-head">
             <div className="hs-lbl">
@@ -343,7 +319,6 @@ export default function StationHeader({
           </div>
         </div>
 
-        {/* 02 — DJ latency needle */}
         <div className="hs-cell !min-w-0 sm:!min-w-[140px]">
           <div className="hs-head">
             <div className="hs-lbl">
@@ -367,7 +342,6 @@ export default function StationHeader({
           </div>
         </div>
 
-        {/* 03 — TTS fallback inverted bar */}
         <div className="hs-cell !min-w-0 !border-t !border-l-0 !border-t-separator-strong sm:!min-w-[140px] sm:!border-t-0 sm:!border-l">
           <div className="hs-head">
             <div className="hs-lbl">
@@ -394,7 +368,6 @@ export default function StationHeader({
           </div>
         </div>
 
-        {/* 04 — On Air pilot lamp + station context (weather · picker) */}
         <div className="hs-cell hs-lamp !min-w-0 !border-t !border-t-separator-strong sm:!min-w-[196px] sm:!border-t-0">
           <div className="hs-head">
             <div className="hs-lbl">

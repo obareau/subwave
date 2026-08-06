@@ -1,11 +1,8 @@
-/* ============================================================================
-   SUB/WAVE — Library Observatory · right-rail panels
-   Ported from the prototype's panels.jsx. StatsView aggregates recompute from
-   the filtered set; the Dossier renders one inspected track — header/strip from
-   the in-hand node (instant), enrichment + embeddings + mix-next from the lazy
-   detail fetch. Embedding fingerprints use the real learned vectors when the
-   server returns them, falling back to a deterministic seed otherwise.
-   ============================================================================ */
+/* Library Observatory — right-rail panels. StatsView aggregates recompute
+   from the filtered set. The Dossier draws its header/strip from the in-hand
+   node (instant) and enrichment/embeddings/mix-next from the lazy detail
+   fetch. Fingerprints use the real learned vectors when the server returns
+   them, else a deterministic seed. */
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
@@ -23,7 +20,7 @@ import {
   type TrackDetail,
 } from './data';
 
-// ---- small primitives ------------------------------------------------------
+// small primitives
 function Bar({ label, value, max, accent }: { label: string; value: number; max: number; accent?: boolean }) {
   const pct = max ? Math.round((value / max) * 100) : 0;
   return (
@@ -62,7 +59,7 @@ export function Card({
   );
 }
 
-// ---- Camelot key wheel -----------------------------------------------------
+// Camelot key wheel
 function KeyWheel({ list }: { list: ObsTrack[] }) {
   const counts = useMemo(() => {
     const m: Record<string, number> = {};
@@ -131,7 +128,7 @@ function KeyWheel({ list }: { list: ObsTrack[] }) {
   );
 }
 
-// ---- BPM histogram (tempo river) -------------------------------------------
+// BPM histogram (tempo river)
 function TempoRiver({ list }: { list: ObsTrack[] }) {
   const bins = useMemo(() => {
     const edges = [60, 80, 90, 100, 110, 120, 128, 140, 160, 200];
@@ -164,7 +161,7 @@ function TempoRiver({ list }: { list: ObsTrack[] }) {
   );
 }
 
-// ---- Loudness histogram (integrated LUFS) ----------------------------------
+// Loudness histogram (integrated LUFS)
 function LoudnessRiver({ list }: { list: ObsTrack[] }) {
   const bins = useMemo(() => {
     // Lower edges, in LUFS. Quieter masters on the left, hotter on the right.
@@ -199,11 +196,9 @@ function LoudnessRiver({ list }: { list: ObsTrack[] }) {
   );
 }
 
-// ---- Song shape — per-track acoustic timeline ------------------------------
-// One shared time axis (0…duration) across three lanes: the pace curve (with
-// structural section boundaries + the intro marker), the vocal-presence lane,
-// and the key bands. Positions are percent-based HTML so they stay crisp at any
-// panel width; only the pace curve itself is SVG.
+// Song shape — one shared time axis (0…duration) across three lanes: pace
+// curve, vocal presence, key bands. Positions are percent-based HTML so they
+// stay crisp at any panel width; only the pace curve is SVG.
 function SongShape({ detail, durationSec }: { detail: TrackDetail; durationSec: number | null }) {
   const d = detail.track;
   const pace = d.pace ?? [];
@@ -211,7 +206,7 @@ function SongShape({ detail, durationSec }: { detail: TrackDetail; durationSec: 
   const vocal = d.vocalRanges; // null = not analysed, [] = instrumental
   const keys = d.keyRanges ?? [];
 
-  // Total span: prefer real duration, else the furthest analysed endMs.
+  // Prefer real duration, else the furthest analysed endMs.
   const spans = [...pace, ...structure, ...(vocal ?? []), ...keys];
   const total = Math.max(1, durationSec != null ? durationSec * 1000 : 0, ...spans.map((s) => s.endMs));
   const pct = (ms: number) => Math.max(0, Math.min(100, (ms / total) * 100));
@@ -222,7 +217,6 @@ function SongShape({ detail, durationSec }: { detail: TrackDetail; durationSec: 
     return <span className="t-caption ad-muted">no acoustic analysis</span>;
   }
 
-  // Pace area path in a 0..100 × 0..100 viewBox (stretched to the lane).
   let pacePath = '';
   if (pace.length) {
     const pts = pace.map((p) => {
@@ -324,7 +318,7 @@ function SongShape({ detail, durationSec }: { detail: TrackDetail; durationSec: 
   );
 }
 
-// ---- Embedding fingerprint -------------------------------------------------
+// Embedding fingerprint
 function Fingerprint({
   vector,
   seed,
@@ -365,7 +359,7 @@ function Fingerprint({
   );
 }
 
-// ---- Meter -----------------------------------------------------------------
+// Meter
 function Meter({ value, label, cells = 20, display }: { value: number; label: string; cells?: number; display?: string }) {
   const on = Math.round(value * cells);
   return (
@@ -381,9 +375,7 @@ function Meter({ value, label, cells = 20, display }: { value: number; label: st
   );
 }
 
-// ============================================================================
-//  STATS VIEW  (library overview, recomputes from filtered list)
-// ============================================================================
+// STATS VIEW — library overview, recomputed from the filtered list.
 export function StatsView({ stats, list, filtered }: { stats: ObservatoryStats; list: ObsTrack[]; filtered: boolean }) {
   const moods = useMemo(() => tally(list, (t) => t.moods).slice(0, 8), [list]);
   const genres = useMemo(() => tally(list, (t) => t.genre), [list]);
@@ -491,9 +483,7 @@ export function StatsView({ stats, list, filtered }: { stats: ObservatoryStats; 
   );
 }
 
-// ============================================================================
-//  DOSSIER  (one inspected track — the full record)
-// ============================================================================
+// DOSSIER — one inspected track, full record.
 export function Dossier({
   track,
   detail,
@@ -509,8 +499,7 @@ export function Dossier({
   mixNodes: ObsTrack[];
   onSelect: (t: ObsTrack) => void;
   onClose: () => void;
-  // Push this track to the live broadcast queue. Absent on the mock/showcase
-  // dossier, which hides the button entirely.
+  // Absent on the mock/showcase dossier, which hides the button entirely.
   onQueue?: (t: ObsTrack) => Promise<{ ok: boolean; message: string }>;
 }) {
   const dur = (s: number | null) => (s == null ? '—' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);

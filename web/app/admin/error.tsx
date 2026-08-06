@@ -6,21 +6,17 @@ import { Card } from '@/components/admin/ui';
 import { Button } from '@/components/ui/button';
 import { V3Alert } from '@/components/ui/alert';
 
-// Admin-scoped error boundary. It nests inside app/admin/layout.tsx, which
-// renders AdminShell — so when a panel throws, the console's own chrome (nav,
-// sign-in state) stays mounted and only the panel area is replaced. Without
-// this file the throw would bubble to app/error.tsx and take the whole console
-// down to the marketing-styled error page, which is both jarring and less
-// useful: the operator loses the nav they need to get to a working panel.
+// Admin-scoped error boundary, nested inside app/admin/layout.tsx so a throwing
+// panel leaves AdminShell's chrome (nav, sign-in state) mounted. Without this
+// file the throw bubbles to app/error.tsx and takes the console down to the
+// marketing-styled page, losing the nav the operator needs.
 //
-// Admin panels talk to the controller from the browser and already handle their
-// own fetch failures inline; what reaches this boundary is a render-time throw,
-// so the copy points at that rather than at "the controller is down".
+// Panels handle their own fetch failures inline, so what reaches this boundary
+// is a render-time throw and the copy says so.
 //
-// `reset()` re-renders without re-fetching; `router.refresh()` re-runs the
-// server render. Panels are client components that fetch on mount, so reset()
-// alone is usually enough here — refresh() is included so a stale RSC payload
-// can't pin the error in place.
+// `reset()` re-renders without re-fetching and is usually enough (panels fetch
+// on mount); `router.refresh()` is included so a stale RSC payload can't pin the
+// error in place.
 
 export default function AdminError({
   error,
@@ -57,8 +53,8 @@ export default function AdminError({
           variant="accent"
           size="sm"
           onClick={() => {
-            // Re-run the server render (router.refresh) *and* clear the error
-            // boundary (reset) — reset alone re-renders the same failed tree.
+            // Re-run the server render AND clear the boundary: reset alone
+            // re-renders the same failed tree.
             setRetrying(true);
             router.refresh();
             reset();

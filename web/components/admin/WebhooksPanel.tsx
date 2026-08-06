@@ -1,30 +1,38 @@
 'use client';
 
-// Webhooks — /admin/webhooks. Outbound HTTP POSTs to operator-configured
-// endpoints on station events. See controller/src/broadcast/webhooks.ts
-// for the fan-out + the documented payload shapes.
+// Webhooks. See controller/src/broadcast/webhooks.ts for the fan-out and the
+// documented payload shapes.
 
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
+import { Controller, useFieldArray } from 'react-hook-form';
+import { z } from 'zod';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
+import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
+import {
+  webhooksSchema,
+  WEBHOOKS_LIMIT,
+  type Webhook,
+  type WebhookEvent,
+} from '@/lib/schemas.generated';
 import { Input } from '../ui/input';
-import { Label } from '../ui/label';
+import { Field, FieldLabel, FieldDescription, FieldError } from '@/components/ui/field';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { Card, Btn, Pill, Eyebrow, Toggle } from './ui';
 
-interface Webhook {
-  id: string;
-  url: string;
-  events: string[];
-  enabled: boolean;
-  authHeader: string;       // 'set' sentinel from the server when a value is stored.
-}
+// The form owns the list; the patch shape the route accepts is wider.
+const formSchema = z.object({ webhooks: webhooksSchema });
+type FormValues = z.input<typeof formSchema>;
+// A row as the FORM sees it. This is z.input, so `enabled` and `authHeader`
+// are optional here — the schema .default()s them — even though blank() and
+// every server response populate both.
+type WebhookRow = FormValues['webhooks'][number];
 
 interface WebhooksResponse {
-  events: string[];
+  events: WebhookEvent[];
   webhooks: Webhook[];
   trackPlayListenerGated?: boolean;
 }
@@ -34,7 +42,7 @@ function clientMintId() {
   return 'wh_' + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
-function blank(events: string[]): Webhook {
+function blank(events: WebhookEvent[]): WebhookRow & { id: string } {
   return {
     id: clientMintId(),
     url: '',
@@ -44,17 +52,8 @@ function blank(events: string[]): Webhook {
   };
 }
 
-function valid(h: Webhook): boolean {
-  if (!/^https?:\/\//.test(h.url.trim())) return false;
-  if (h.url.trim().length > 500) return false;
-  if (!h.events.length) return false;
-  return true;
-}
-
-// ── Reference examples ──────────────────────────────────────────────────────
 // Every payload below mirrors what broadcast/webhooks.ts actually POSTs. All
-// carry `event` + `t` (ISO timestamp); the rest is event-specific. Kept inline
-// so an operator can wire a relay without reading the controller source.
+// carry `event` + `t` (ISO timestamp); the rest is event-specific.
 
 interface PayloadDoc {
   event: string;
@@ -65,13 +64,14 @@ interface PayloadDoc {
 const PAYLOADS: PayloadDoc[] = [
   {
     event: 'track.play',
-    blurb: 'A track started. By default always delivered; enable “Gate track.play on listeners” below to skip when nobody is tuned in (fail-closed on unknown count). `source` is "auto" (the playlist), "ai" (picker agent) or "request"; `artist`/`album`/`requestedBy` may be null; `listeners` is included when the gate is on.',
+    blurb: 'A track started. By default always delivered; enable “Gate track.play on listeners” below to skip when nobody is tuned in (fail-closed on unknown count). `sourceTrackId` is the id in your music backend (Subsonic/Navidrome), so a relay can resolve the exact library item without matching on artist+title — null when the track came through without one. `source` is a different thing: how it got queued — "auto" (the playlist), "ai" (picker agent) or "request". `artist`/`album`/`requestedBy` may be null; `listeners` is included when the gate is on.',
     json: `{
   "event": "track.play",
   "t": "2026-06-02T19:04:12.880Z",
   "title": "Teardrop",
   "artist": "Massive Attack",
   "album": "Mezzanine",
+  "sourceTrackId": "4f2c1a9b8e3d",
   "source": "auto",
   "requestedBy": null,
   "listeners": 1
@@ -217,11 +217,20 @@ function ExamplesSection() {
 
 export default function WebhooksPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [events, setEvents] = useState<string[] | null>(null);
-  const [hooks, setHooks] = useState<Webhook[] | null>(null);
+  const [events, setEvents] = useState<WebhookEvent[] | null>(null);
   const [trackPlayListenerGated, setTrackPlayListenerGated] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const form = useZodForm(formSchema, { webhooks: [] });
+  // keyName defaults to 'id' — which would CLOBBER our webhook's own `id`
+  // field. Renaming RHF's internal key is mandatory here, not cosmetic.
+  const { fields, append, remove } = useFieldArray({
+    control: form.control,
+    name: 'webhooks',
+    keyName: '_rhfKey',
+  });
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
@@ -233,7 +242,8 @@ export default function WebhooksPanel() {
         const j = (await r.json()) as WebhooksResponse;
         if (cancelled) return;
         setEvents(j.events);
-        setHooks(j.webhooks || []);
+        form.reset({ webhooks: j.webhooks || [] });
+        setLoaded(true);
         setTrackPlayListenerGated(!!j.trackPlayListenerGated);
       } catch (e) {
         if (cancelled) return;
@@ -241,31 +251,40 @@ export default function WebhooksPanel() {
       }
     })();
     return () => { cancelled = true; };
-  }, [hydrated, needsAuth, adminFetch]);
+  }, [hydrated, needsAuth, adminFetch, form]);
 
-  const save = async (next: Webhook[]) => {
+  const save = form.handleSubmit(async (values) => {
     setBusy(true);
     try {
       const r = await adminFetch('/webhooks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ webhooks: next }),
+        body: JSON.stringify({ webhooks: values.webhooks }),
       });
-      const j = (await r.json().catch(() => ({}))) as { webhooks?: Webhook[]; error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setHooks(j.webhooks || []);
+      const j = (await r.json().catch(() => ({}))) as {
+        webhooks?: Webhook[];
+        error?: string;
+        fieldErrors?: Record<string, string>;
+      };
+      if (!r.ok) {
+        // A rule only the server can check still lands on the right input.
+        applyServerFieldErrors(form, j.fieldErrors);
+        throw new Error(j.error || `failed (${r.status})`);
+      }
+      // Re-seed from the server response so redacted authHeaders come back as
+      // the 'set' sentinel rather than the value we just sent.
+      form.reset({ webhooks: j.webhooks || [] });
       notify.ok('Webhooks saved.');
     } catch (e) {
       notify.err(`Save failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
     }
-  };
+  });
 
-  // The gate persists on its own the moment it's flipped (like the skills
-  // toggles) — it must not ride the hooks Save button, which an invalid
-  // draft row would disable. Doesn't touch `hooks`, so unsaved row edits
-  // survive a toggle.
+  // The gate persists the moment it's flipped: it must not ride the hooks Save
+  // button, which an invalid draft row would disable. Doesn't touch `hooks`, so
+  // unsaved row edits survive a toggle.
   const saveGate = async (next: boolean) => {
     setBusy(true);
     try {
@@ -305,15 +324,13 @@ export default function WebhooksPanel() {
       </div>
     );
   }
-  if (!hooks || !events) {
+  if (!loaded || !events) {
     return (
       <div className="grid gap-4">
         <Card title="Webhooks"><SkeletonRows rows={3} /></Card>
       </div>
     );
   }
-
-  const allValid = hooks.every(valid);
 
   return (
     <div className="grid gap-4">
@@ -330,21 +347,21 @@ export default function WebhooksPanel() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3 bg-[var(--ink-softer)] p-3.5">
-          <span className="caption">{hooks.length} hook{hooks.length === 1 ? '' : 's'}</span>
+          <span className="caption">{fields.length} hook{fields.length === 1 ? '' : 's'}</span>
           <span className="caption text-vermilion">
-            {hooks.filter(h => h.enabled).length} enabled
+            {form.watch('webhooks').filter(h => h.enabled).length} enabled
           </span>
           <span className="ml-auto" />
           <Btn
             sm
-            onClick={() => setHooks([...hooks, blank(events)])}
-            disabled={hooks.length >= 16}
+            onClick={() => append(blank(events))}
+            disabled={fields.length >= WEBHOOKS_LIMIT}
           >Add</Btn>
           <Btn
             sm
             tone="accent"
-            onClick={() => save(hooks)}
-            disabled={!allValid || busy}
+            onClick={save}
+            disabled={!form.formState.isValid || busy}
           >{busy ? 'Saving…' : 'Save'}</Btn>
         </div>
       </section>
@@ -368,84 +385,139 @@ export default function WebhooksPanel() {
         </div>
       </Card>
 
-      {hooks.length === 0 && (
+      {fields.length === 0 && (
         <Card title="No webhooks yet">
           <EmptyState
             title="No webhooks yet"
             description="Add one to push now-playing and station events out to other services."
-            action={<Btn sm onClick={() => setHooks([...hooks, blank(events)])}>Add webhook</Btn>}
+            action={<Btn sm onClick={() => append(blank(events))}>Add webhook</Btn>}
           />
         </Card>
       )}
 
-      {hooks.map((h, i) => {
-        const update = (patch: Partial<Webhook>) => {
-          const next = [...hooks];
-          next[i] = { ...h, ...patch };
-          setHooks(next);
-        };
-        const remove = () => setHooks(hooks.filter((_, j) => j !== i));
-        const toggleEvent = (ev: string) => {
-          const has = h.events.includes(ev);
-          update({ events: has ? h.events.filter(e => e !== ev) : [...h.events, ev] });
+      {fields.map((f, i) => {
+        const row = form.watch(`webhooks.${i}`);
+        const rowErrors = form.formState.errors.webhooks?.[i];
+        // `enabled` is optional in z.input because the schema defaults it to
+        // true; blank() and the server response always set it, so the ?? here
+        // just re-states that default rather than papering over a real gap.
+        const enabled = row.enabled ?? true;
+        // Keyed off _rhfKey, not the array index: reordering or removing a row
+        // must not hand a different row the ids a screen reader is already
+        // pointing at.
+        const urlAria = fieldAria(`wh-url-${f._rhfKey}`, rowErrors?.url);
+        const authAria = fieldAria(`wh-auth-${f._rhfKey}`, rowErrors?.authHeader, {
+          hasDescription: true,
+        });
+        const eventsAria = fieldAria(`wh-events-${f._rhfKey}`, rowErrors?.events);
+        const toggleEvent = (ev: WebhookEvent) => {
+          const has = row.events.includes(ev);
+          form.setValue(
+            `webhooks.${i}.events`,
+            has ? row.events.filter(e => e !== ev) : [...row.events, ev],
+            { shouldValidate: true, shouldDirty: true },
+          );
         };
         return (
           <Card
-            key={h.id}
-            /* A webhook URL is one long unbreakable token; `.card-head` is a
-               flex row with no wrapping of its own, so let the title break
-               inside instead of pushing the head past the card. */
+            key={f._rhfKey}
+            /* A webhook URL is one long unbreakable token and `.card-head` is a
+               flex row that doesn't wrap, so break inside the title instead. */
             title={
-              h.url
-                ? <span className="break-all">{h.url}</span>
+              row.url
+                ? <span className="break-all">{row.url}</span>
                 : <span className="text-muted italic">(new webhook)</span>
             }
             right={
               <>
-                <Pill tone={h.enabled ? 'accent' : 'default'} dot={h.enabled}>
-                  {h.enabled ? 'enabled' : 'disabled'}
+                <Pill tone={enabled ? 'accent' : 'default'} dot={enabled}>
+                  {enabled ? 'enabled' : 'disabled'}
                 </Pill>
-                <Toggle on={h.enabled} onClick={() => update({ enabled: !h.enabled })} ariaLabel="Enable webhook" />
+                <Toggle
+                  on={enabled}
+                  onClick={() => form.setValue(`webhooks.${i}.enabled`, !enabled, { shouldDirty: true })}
+                  ariaLabel="Enable webhook"
+                />
               </>
             }
           >
             <div className="grid gap-3">
-              <div>
-                <Label className="caption">URL</Label>
+              <Field data-invalid={urlAria.invalid}>
+                <FieldLabel className="caption" {...urlAria.labelProps}>URL</FieldLabel>
                 <Input
-                  value={h.url}
-                  onChange={e => update({ url: e.target.value })}
+                  {...form.register(`webhooks.${i}.url`)}
+                  {...urlAria.controlProps}
                   placeholder="https://discord.com/api/webhooks/…"
                   aria-label="Webhook URL"
                   spellCheck={false}
                 />
-              </div>
-              <div>
-                <Label className="caption">Authorization header (optional)</Label>
-                <Input
-                  value={h.authHeader === 'set' ? '' : h.authHeader}
-                  placeholder={h.authHeader === 'set' ? '(stored, leave blank to keep)' : 'Bearer …'}
-                  onChange={e => update({ authHeader: e.target.value })}
-                  aria-label="Authorization header"
-                  spellCheck={false}
+                <FieldError
+                  {...urlAria.errorProps}
+                  errors={rowErrors?.url ? [rowErrors.url] : undefined}
                 />
-                <div className="mt-1 text-[10px] text-muted">
+              </Field>
+
+              <Field data-invalid={authAria.invalid}>
+                <FieldLabel className="caption" {...authAria.labelProps}>
+                  Authorization header (optional)
+                </FieldLabel>
+                {/* Controller, not register: the 'set' sentinel must RENDER as
+                    blank while remaining the stored form value, so the display
+                    value diverges from the field value. Spreading register()
+                    and overriding value/onChange would strand RHF's own
+                    onChange and make this a controlled input inside an
+                    uncontrolled registration. */}
+                <Controller
+                  control={form.control}
+                  name={`webhooks.${i}.authHeader`}
+                  render={({ field }) => (
+                    <Input
+                      {...authAria.controlProps}
+                      ref={field.ref}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      value={field.value === 'set' ? '' : (field.value ?? '')}
+                      onChange={e => field.onChange(e.target.value)}
+                      placeholder={field.value === 'set' ? '(stored, leave blank to keep)' : 'Bearer …'}
+                      aria-label="Authorization header"
+                      spellCheck={false}
+                      // Opaque secret, so `off` — the convention every other
+                      // credential box in admin/ follows. Left at the browser
+                      // default, a password manager reads this as the site's
+                      // own login: it offers to fill it, and offers to UPDATE
+                      // the saved password when the form submits.
+                      autoComplete="off"
+                    />
+                  )}
+                />
+                <FieldDescription {...authAria.descriptionProps} className="mt-1 text-[10px]">
                   Sent verbatim as the <code>Authorization</code> header. Stored at rest in <code>settings.json</code>.
-                </div>
-              </div>
-              <div>
-                <Label className="caption">Events</Label>
+                </FieldDescription>
+                <FieldError
+                  {...authAria.errorProps}
+                  errors={rowErrors?.authHeader ? [rowErrors.authHeader] : undefined}
+                />
+              </Field>
+
+              {/* No single labelable control here, so the Field itself is the
+                  named group (it already carries role="group") and each chip
+                  reports its own on/off via aria-pressed. */}
+              <Field data-invalid={eventsAria.invalid} {...eventsAria.groupProps}>
+                <FieldLabel asChild className="caption" {...eventsAria.labelledByProps}>
+                  <span>Events</span>
+                </FieldLabel>
                 <div className="mt-1 flex flex-wrap gap-2">
                   {events.map(ev => {
-                    const on = h.events.includes(ev);
+                    const on = row.events.includes(ev);
                     return (
                       <Pill
                         key={ev}
                         tone={on ? 'accent' : 'default'}
                         dot={on}
                         onClick={() => toggleEvent(ev)}
-                        // These pills are the event picker, not decoration —
-                        // give them a thumb-sized target on a phone.
+                        pressed={on}
+                        // These pills are the event picker, so they need a
+                        // thumb-sized target on a phone.
                         className="min-h-9 cursor-pointer sm:min-h-0"
                       >
                         {ev}
@@ -453,13 +525,18 @@ export default function WebhooksPanel() {
                     );
                   })}
                 </div>
-              </div>
+                <FieldError
+                  {...eventsAria.errorProps}
+                  errors={rowErrors?.events ? [rowErrors.events] : undefined}
+                />
+              </Field>
+
               <div className="mt-1 flex items-center gap-2">
-                <Btn sm tone="accent" onClick={() => fireTest(h.id)} disabled={!h.url}>
+                <Btn sm tone="accent" onClick={() => fireTest(row.id!)} disabled={!row.url}>
                   Send test
                 </Btn>
                 <span className="ml-auto" />
-                <Btn sm tone="danger" onClick={remove}>Remove</Btn>
+                <Btn sm tone="danger" onClick={() => remove(i)}>Remove</Btn>
               </div>
             </div>
           </Card>

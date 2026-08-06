@@ -1,18 +1,13 @@
 import { ImageResponse } from 'next/og';
 
-// The social share card, served at /og. 1200×630 is the canonical Open Graph
-// size honoured by X/Twitter, Slack, iMessage, Discord, LinkedIn, Facebook.
+// The social share card, served at /og. 1200x630 is the canonical Open Graph
+// size honoured by X, Slack, iMessage, Discord, LinkedIn, Facebook.
 //
-// This is a plain route handler, *not* the `opengraph-image` file convention.
-// The convention auto-injects an <meta og:image> whose URL Next rebuilds from
-// `metadataBase` — and Next drops metadataBase on the force-dynamic homepage,
-// pinning it to a localhost origin. Serving the PNG from a normal route lets
-// app/layout.js emit an absolute <meta og:image> itself (see SITE_URL there),
-// which survives untouched.
-//
-// Built with next/og rather than a bundled PNG so the card stays in sync with
-// the broadsheet aesthetic — same palette as app/icon.js and the PWA install
-// screenshots (app/screenshots/[variant]/route.js).
+// A plain route handler, NOT the `opengraph-image` file convention: that
+// auto-injects an <meta og:image> whose URL Next rebuilds from `metadataBase`,
+// and Next drops metadataBase on the force-dynamic homepage, pinning it to a
+// localhost origin. From a normal route, app/layout.js can emit an absolute
+// <meta og:image> itself and it survives untouched.
 
 export const contentType = 'image/png';
 export const dynamic = 'force-static';
@@ -38,7 +33,6 @@ export function GET() {
           boxSizing: 'border-box',
         }}
       >
-        {/* Masthead rule */}
         <div
           style={{
             display: 'flex',
@@ -59,7 +53,6 @@ export function GET() {
           </div>
         </div>
 
-        {/* Headline */}
         <div
           style={{
             flex: 1,
@@ -93,7 +86,6 @@ export function GET() {
           </div>
         </div>
 
-        {/* Footer rule */}
         <div
           style={{
             display: 'flex',

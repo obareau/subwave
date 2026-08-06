@@ -1,9 +1,5 @@
 'use client';
 
-// The tab strip across the top of the library panel.
-//
-// Part of the library/ split - see ../LibraryPanel.tsx.
-
 import type { ReactNode } from 'react';
 import { Search, Ban, Music, LayoutGrid, History } from 'lucide-react';
 import { cn } from '../../../lib/cn';
@@ -22,11 +18,9 @@ export function Tabs({ tab, setTab }: {
     { id: 'blocked', name: 'Blocked', sub: 'never plays', icon: <Ban size={17} /> },
   ];
   return (
-    // The strip is a nowrap `overflow-x:auto` scroller (globals.css). At 390px
-    // five tabs are ~700px, so only two are ever in view and the rest read as
-    // clipped. Below sm: the subtitles drop, the padding tightens and the strip
-    // wraps — three tabs a line, nothing hidden. sm: hands it all back to the
-    // CSS. (`!` because `.admin-root .lib-*` outranks a bare utility.)
+    // The strip is a nowrap `overflow-x:auto` scroller (globals.css), and at 390px the
+    // five tabs run ~700px, so below sm: it wraps instead and the subtitles drop.
+    // `!` because `.admin-root .lib-*` outranks a bare utility.
     <div className="lib-tabs !flex-wrap sm:!flex-nowrap">
       {items.map(it => (
         <button key={it.id} type="button" className={cn('lib-tab !px-2.5 sm:!px-[18px]', tab === it.id && 'on')} onClick={() => setTab(it.id)}>
@@ -40,8 +34,4 @@ export function Tabs({ tab, setTab }: {
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// browse filters
-// ---------------------------------------------------------------------------
 

@@ -210,7 +210,7 @@ export async function buildCandidatePool(
   for (const genre of (knobs.genres || []).slice(0, 6)) {
     try {
       const tag = (await subsonic.resolveGenreName(genre)) || genre;
-      pools.push(normMany(await subsonic.getSongsByGenre(tag, { count: 40 }), `genre:${genre}`, 0.5));
+      pools.push(normMany(await subsonic.getSongsByGenreSampled(tag, { count: 40 }), `genre:${genre}`, 0.5));
     } catch { /* ignore */ }
   }
 

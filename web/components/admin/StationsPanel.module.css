@@ -1,6 +1,5 @@
-/* Transmitter-rack animations for the Stations page (Stations.dc.html design).
-   Scoped here because Tailwind utilities can't declare keyframes, and the
-   admin's no-inline-style rule applies to the JSX, not co-located modules. */
+/* Stations page animations. Scoped here because Tailwind utilities can't
+   declare keyframes, and the no-inline-style rule applies to the JSX only. */
 
 .blink {
   animation: blink 1.1s steps(1) infinite;

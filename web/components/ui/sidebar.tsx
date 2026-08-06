@@ -26,9 +26,8 @@ import {
 const SIDEBAR_COOKIE_NAME = "sidebar_state"
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
-// Rail widths (16rem / 3rem icon / 18rem mobile) are set as Tailwind arbitrary
-// custom-property utilities on the wrappers below rather than an inline
-// `style` prop, which the repo's lint forbids (issue #50).
+// Rail widths are Tailwind arbitrary custom-property utilities rather than an
+// inline `style` prop, which the repo's lint forbids (issue #50).
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
@@ -73,8 +72,6 @@ const SidebarProvider = React.forwardRef<
     const isMobile = useIsMobile()
     const [openMobile, setOpenMobile] = React.useState(false)
 
-    // This is the internal state of the sidebar.
-    // We use openProp and setOpenProp for control from outside the component.
     const [_open, _setOpen] = React.useState(defaultOpen)
     const open = openProp ?? _open
     const setOpen = React.useCallback(
@@ -86,20 +83,17 @@ const SidebarProvider = React.forwardRef<
           _setOpen(openState)
         }
 
-        // This sets the cookie to keep the sidebar state.
         document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
       },
       [setOpenProp, open]
     )
 
-    // Helper to toggle the sidebar.
     const toggleSidebar = React.useCallback(() => {
       return isMobile
         ? setOpenMobile((open) => !open)
         : setOpen((open) => !open)
     }, [isMobile, setOpen, setOpenMobile])
 
-    // Adds a keyboard shortcut to toggle the sidebar.
     React.useEffect(() => {
       const handleKeyDown = (event: KeyboardEvent) => {
         if (
@@ -115,8 +109,6 @@ const SidebarProvider = React.forwardRef<
       return () => window.removeEventListener("keydown", handleKeyDown)
     }, [toggleSidebar])
 
-    // We add a state so that we can do data-state="expanded" or "collapsed".
-    // This makes it easier to style the sidebar with Tailwind classes.
     const state = open ? "expanded" : "collapsed"
 
     const contextValue = React.useMemo<SidebarContextProps>(
@@ -216,7 +208,6 @@ const Sidebar = React.forwardRef<
         data-variant={variant}
         data-side={side}
       >
-        {/* This is what handles the sidebar gap on desktop */}
         <div
           className={cn(
             "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
@@ -233,7 +224,6 @@ const Sidebar = React.forwardRef<
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
               : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
-            // Adjust the padding for floating and inset variants.
             variant === "floating" || variant === "inset"
               ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)_+_1rem_+2px)]"
               : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
@@ -506,12 +496,10 @@ const SidebarMenuItem = React.forwardRef<
 ))
 SidebarMenuItem.displayName = "SidebarMenuItem"
 
-/* Newsprint retune — same shadcn structure/data-attrs/behavior, restyled to
-   the console's bordered nav-item cards: 1px --line border on --card-bg fill,
-   sharp corners, 11px uppercase letter-spaced labels. Hover firms the border
-   to ink and darkens the card fill. The active state is transparent + text-bg
-   so the motion layoutId ink fill (rendered inside the item as a sibling span)
-   shows through; the button only owns the ink border + inverted text. */
+/* Newsprint retune: same shadcn structure, data-attrs and behavior, restyled.
+   The active state is transparent + text-bg so the motion layoutId ink fill
+   (a sibling span inside the item) shows through; the button owns only the ink
+   border and inverted text. */
 const sidebarMenuButtonVariants = cva(
   "peer/menu-button relative flex w-full items-center gap-2 overflow-hidden rounded-none border border-line bg-[var(--card-bg)] p-2 text-left text-[11px] tracking-[0.16em] uppercase ring-sidebar-ring transition-colors outline-none group-has-[[data-sidebar=menu-action]]/menu-item:pr-8 group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2 hover:border-ink hover:bg-[color-mix(in_oklab,var(--card-bg)_90%,var(--ink))] focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:border-ink data-[active=true]:bg-transparent data-[active=true]:text-bg [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
   {
@@ -664,8 +652,8 @@ const SidebarMenuSkeleton = React.forwardRef<
           data-sidebar="menu-skeleton-icon"
         />
       )}
-      {/* Fixed 70% width — the stock component randomised this per instance,
-          but Math.random() during render trips the repo's react purity rule. */}
+      {/* Fixed 70%: the stock component randomises this per instance, but
+          Math.random() during render trips the repo's react purity rule. */}
       <Skeleton
         className="h-4 max-w-[70%] flex-1"
         data-sidebar="menu-skeleton-text"

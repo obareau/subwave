@@ -21,8 +21,8 @@ claude mcp add --transport http subwave https://your-station/api/mcp \
   --header "Authorization: Basic $(printf '%s' "$ADMIN_USER:$ADMIN_PASS" | base64)"
 ```
 
-The admin **Connect → MCP** tab hands you that command with your station's URL already filled in. Claude Desktop and Claude Code both work, and there's still a local stdio server if you'd rather not expose the endpoint. For the alert trick, call `subwave_dj_announce` with `mode: raw` so nothing gets paraphrased, and `sfx: airhorn`.
+The admin **Connect → MCP** tab hands you that command with your station's URL already filled in. Claude Desktop and Claude Code both work, and there's still a local stdio server if you'd rather not expose the endpoint. Every tool is documented in the manual's [Agent Access](/manual/mcp) page. For the alert trick, call `subwave_dj_announce` with `mode: raw` so nothing gets paraphrased, and `sfx: airhorn`.
 
 ## Why it helps
 
-The station already runs itself; this gives your other automations a proper way in. A weather watcher, a calendar bot, a home server that wants to say the backup finished: anything that can speak MCP can now put a voice on your air, airhorn included, with the same guardrails the admin panel uses.
+The station already runs itself; this gives your other automations a proper way in. A weather watcher, a calendar bot, a home server that wants to say the backup finished: anything that can speak MCP can now put a voice on your air, airhorn included, with the same guardrails the admin panel uses. The community is building on the same API too; see what's already out there at [/apps](/apps).

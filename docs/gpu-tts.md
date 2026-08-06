@@ -5,6 +5,11 @@ CPU it pegs every core and still renders slower than real time, so a chatty
 station can fall behind. If you have an NVIDIA GPU, there are two ways to put it
 to work.
 
+> **Not Chatterbox?** If you just want the DJ to speak through a TTS server you
+> already run — any engine, any language, on any host — that's the **Remote**
+> engine, and it needs no rebuild and no OpenAI compatibility. See
+> [docs/custom-tts.md](custom-tts.md).
+
 > **Not TTS?** Library *analysis* (CLAP "sounds-like" + Demucs vocals) has its
 > own GPU path — the `docker-compose.analyzer-gpu.yml` overlay, no rebuild
 > needed. See [docs/tts-heavy.md → Heavy analysis on an NVIDIA GPU](tts-heavy.md#heavy-analysis-on-an-nvidia-gpu-cuda).
@@ -208,6 +213,10 @@ page in the in-app manual for the cloning workflow).
   and select it by name.
 - **Want SUB/WAVE to manage a reference WAV per persona, plus paralinguistic
   tags and daypart speed?** Native route, with the custom CUDA build.
+
+- **Want a different engine entirely** — a language Chatterbox and Kokoro don't
+  cover, or a server you already run? Neither route: use the **Remote** engine
+  ([docs/custom-tts.md](custom-tts.md)).
 
 Either way the DJ logic is untouched; this only changes *where* the Chatterbox
 voice is rendered.

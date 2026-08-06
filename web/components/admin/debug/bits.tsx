@@ -1,10 +1,5 @@
 'use client';
 
-// The small display primitives every debug card is built from: health cells,
-// key/value tables, JSON blocks, collapsible call sections and filter chips.
-//
-// Part of the debug/ split - see ../DebugPanel.tsx.
-
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { cn } from '../../../lib/cn';
@@ -17,9 +12,8 @@ export function HealthCell({ label, status, v, sub }: { label: string; status: '
       : status === 'idle' || status === 'off' ? 'bg-muted'
         : 'bg-[var(--danger)]';
   return (
-    // min-w-0 lets the 1fr strip column shrink below the value's min-content
-    // width, so an unbroken token (openrouter:openai/gpt-5-mini) wraps via
-    // break-words instead of spilling into the neighbouring cell.
+    // min-w-0 lets the 1fr column shrink below min-content, so an unbroken token
+    // (openrouter:openai/gpt-5-mini) wraps instead of spilling into the next cell.
     <div className="grid min-w-0 gap-0.5 border-l border-separator-strong px-3.5 py-3">
       <div className="flex items-center gap-1.5">
         <span className={cn('size-1.5 rounded-full', tone)} />
@@ -63,10 +57,6 @@ function KvRow({ k, val }: { k: string; val: unknown }) {
   );
 }
 
-// Per-mount status chip: green when Icecast has a live source, red when the
-// mount is enabled in settings but no source is attached (encoder didn't
-// connect / needs a mixer restart), muted when intentionally disabled.
-
 export function JsonBlock({ value }: { value: unknown }) {
   const code = typeof value === 'string' ? value : JSON.stringify(value ?? {}, null, 2);
   return (
@@ -80,8 +70,6 @@ export function JsonBlock({ value }: { value: unknown }) {
   );
 }
 
-// Body text for a call section: JSON payloads get a highlighted CodeBlock
-// with copy, prose renders as-is.
 export function JsonOrText({ text }: { text: string }) {
   const pretty = prettyMaybeJson(text);
   return pretty !== text ? <JsonBlock value={pretty} /> : <>{text}</>;
@@ -96,10 +84,8 @@ interface CallSectionProps {
 }
 
 export function CallSection({ label, count, preview, tone, children }: CallSectionProps) {
-  // Children of a closed <details> still MOUNT — and with a 120-entry ring
-  // whose bodies now hold shiki CodeBlocks, eager mounting would tokenize
-  // every collapsed row. Mirror the element's open state and only mount the
-  // body once the section is actually expanded.
+  // Children of a closed <details> still MOUNT, and eager mounting would tokenize a
+  // shiki CodeBlock for every one of the ring's 120 collapsed rows.
   const [open, setOpen] = useState(false);
   return (
     <details
@@ -141,8 +127,7 @@ export function FilterChip({ active, onClick, children }: FilterChipProps) {
       type="button"
       onClick={onClick}
       className={cn(
-        // Comfortable 36px target on a phone; from sm: up it collapses back to
-        // the original dense inline-block chip.
+        // 36px tap target on a phone; dense inline-block chip from sm: up.
         'inline-flex min-h-9 cursor-pointer items-center border border-separator-strong px-2 py-0.5 text-[10px] tracking-[0.08em] uppercase sm:inline-block sm:min-h-0',
         active ? 'bg-vermilion text-bg' : 'bg-transparent text-muted',
       )}

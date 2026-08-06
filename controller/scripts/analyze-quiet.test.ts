@@ -12,6 +12,7 @@
 
 import assert from 'node:assert/strict';
 import { quietGateDecision, type QuietState } from '../src/music/analyze-quiet-pure.js';
+import { gatedCount } from '../src/broadcast/listeners.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -96,6 +97,49 @@ async function main() {
     const after = quietGateDecision(during.state, { enabled: true, count: 3, now: T0 + WINDOW, quietAfterMs: WINDOW });
     assert.equal(after.proceed, false);
     assert.equal(after.state.quietSince, null);
+  });
+
+  // ── #1256: the count reaching this gate is gated, not raw ─────────────────
+  // The branches above are all correct; what mattered was the INPUT. This gate
+  // is the third fail-open-on-unknown reader in the codebase, and its fail-open
+  // runs the OPPOSITE way from the other two: unknown means PROCEED, so a
+  // single timed-out poll started a heavy DSP pass over a listener's head.
+  // probeListenerCount() now returns gatedCount(...) off the tagger child's own
+  // module state, so these two must be tested together the way stream-idle.test
+  // pairs gatedCount with nextIdleState.
+  console.log('\nquietGateDecision fed through listeners.gatedCount (#1256):');
+
+  const LIMIT = 4;   // STALE_STATUS_LIMIT
+
+  await test('a blip while someone is listening no longer starts the pass', () => {
+    // The child polled 3 listeners, then one poll times out. On the raw count
+    // this was null → proceed:true → Demucs on a live station.
+    const count = gatedCount(null, 3, 1, LIMIT);
+    const r = quietGateDecision(FRESH, { enabled: true, count, now: T0, quietAfterMs: WINDOW });
+    assert.equal(r.proceed, false);
+    assert.equal(r.state.quietSince, null);
+  });
+
+  await test('a blip in an empty room does not restart the quiet window', () => {
+    const start = quietGateDecision(FRESH, { enabled: true, count: 0, now: T0, quietAfterMs: WINDOW });
+    const blip = quietGateDecision(start.state, {
+      enabled: true, count: gatedCount(null, 0, 1, LIMIT), now: T0 + 30_000, quietAfterMs: WINDOW,
+    });
+    assert.equal(blip.state.quietSince, T0);   // clock held, not reset to the blip
+    assert.equal(blip.proceed, false);         // window still draining
+  });
+
+  await test('a sustained outage still fails open, exactly as before', () => {
+    const count = gatedCount(null, 3, LIMIT, LIMIT);
+    assert.equal(count, null);
+    const r = quietGateDecision(FRESH, { enabled: true, count, now: T0, quietAfterMs: WINDOW });
+    assert.equal(r.proceed, true);
+  });
+
+  await test('the child\'s very first probe still reads unknown', () => {
+    // lastGoodCount is null until the child's first successful poll — boot
+    // behaviour is deliberately unchanged.
+    assert.equal(gatedCount(null, null, 1, LIMIT), null);
   });
 
   process.exit(failures ? 1 : 0);

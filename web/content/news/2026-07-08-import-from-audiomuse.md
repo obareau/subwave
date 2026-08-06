@@ -10,7 +10,7 @@ Plenty of you turned up already having tagged your whole library in AudioMuse-AI
 
 ## What's new
 
-A small standalone tool lives under `tools/audiomuse-import`. Point it at your AudioMuse instance and it reads the analysis you already have and writes it into SUB/WAVE's library. Both apps happen to key tracks by the same Navidrome song id, so the match is exact, no guessing by filename. It works even on a fresh SUB/WAVE with an empty library.
+A small standalone tool lives under `tools/audiomuse-import`. Point it at your AudioMuse instance and it reads the analysis you already have and writes it into SUB/WAVE's library. Watch the coverage climb on the [Library page](/news/your-dj-knows-your-library) as it lands. Both apps happen to key tracks by the same Navidrome song id, so the match is exact, no guessing by filename. It works even on a fresh SUB/WAVE with an empty library.
 
 ## How to use it
 
@@ -24,7 +24,7 @@ AUDIOMUSE_URL=http://your-audiomuse:8000 node import.mjs
 
 By default it only fills in blanks, so anything you've already tagged in SUB/WAVE stays put. Add `--dry-run` to see what it would do first, or `--overwrite` to let AudioMuse's data win everywhere.
 
-What comes across: moods, BPM, musical key (as Camelot), energy, and genre. What stays behind: the audio embeddings and the ending and structure data, because SUB/WAVE measures those with a different model than AudioMuse does. So run `npm run analyze` once afterwards to layer the transition and "sounds like" data on top.
+What comes across: moods, BPM, musical key (as Camelot), energy, and genre. What stays behind: the audio embeddings and the ending and structure data, because SUB/WAVE measures those with a different model than AudioMuse does. So run `npm run analyze` once afterwards to layer the transition and "sounds like" data on top ([Acoustic Analysis](/manual/analysis) in the manual explains what that pass measures, and it's what [DJ-mode mixing](/news/dj-mode-mixes) runs on).
 
 ## Why it helps
 

@@ -37,11 +37,116 @@ export interface SongMeta {
   year?: number | string | null;
   genres?: string[] | null;
   genre?: string | null;
+  // The year the track's ERA is judged by — resolved by the CALLER via
+  // show-filter.resolveEraYear (original year wins; a compilation's plain
+  // year is untrusted), never raw `year`. Word-formed into an `Era: 1990s`
+  // line: the head line's "(2013)" digits embed as near-arbitrary tokens,
+  // while the decade as a WORD gives era-similarity something to grab — and
+  // for reissues it's the true era, where the digits are the reissue's.
+  eraYear?: number | null;
 }
 
 export interface TrackEnrichment {
   lastfmTags?: string[] | null;
   lyricExcerpt?: string | null;
+}
+
+// Measured acoustics from the analyzer pass (#1246). Deliberately NOT the
+// tagger's own `moods` / `energy`: those are decided AFTER this text is
+// embedded, by voting over the KNN graph built FROM these vectors
+// (tag-library.ts phases 1→3), so feeding them back in is circular and on a
+// fresh library they don't exist yet. Everything here comes off the waveform
+// instead, before any of that.
+export interface TrackAcoustics {
+  bpm?: number | null;
+  musicalKey?: string | null;      // Camelot code, e.g. '8A'
+  // Zero-shot CLAP moods (music/audio-moods.ts) — the mood vocabulary scored
+  // against the track's audio vector, so these are how it SOUNDS, never what
+  // its title suggests. Heavy-tier only; absent on a lean analyzer.
+  audioMoods?: string[] | null;
+  // Vocal-presence ranges (tracks.vocal_ranges). [] = measured instrumental,
+  // non-empty = has vocals, null/undefined = not computed. Only the MINORITY
+  // marker is written ('instrumental'); vocal tracks get no word, because a
+  // word carried by ~80% of a library clusters nothing.
+  vocalRanges?: unknown[] | null;
+  // The pace curve is deliberately NOT an input. An energy word was tried and
+  // backed out: the curve's practical range is ~0.02–0.5 (measured mean 0.09
+  // across a fully-analysed library), so any fixed threshold stamps one word
+  // on ~everything ("calm" on 99.5% of tracks, contradicting CLAP's
+  // "energetic" in the same line), and library-relative thresholds would make
+  // the text non-deterministic. CLAP's mood vocabulary already carries energy
+  // words measured from sound; the raw mean stays LLM-facing (picker payload).
+}
+
+// Bump when the shape of formatTrackText's output changes in a way that moves
+// vectors. Recorded in embedding_meta.text_format so an index built under an
+// older shape is detectable (library-coverage.embeddingFormatStale) instead of
+// silently mixing two text shapes in one KNN space. Legacy rows read as 1.
+//
+//   1  head line + Last.fm tags + lyric excerpt
+//   2  ... + the Sound: descriptor line (audio moods, tempo band, key mode,
+//      instrumental marker) + the Era: decade line (#1246)
+export const EMBED_TEXT_VERSION = 2;
+
+// Tempo as a word, not a number: an embedding model reads "uptempo" as a
+// musical property and "128" as an arbitrary token, so the band is the part
+// that carries meaning. Ranges follow the ordinary DJ vocabulary rather than
+// anything clever — the goal is a coarse axis that isn't the artist's name.
+function tempoWord(bpm: number): string | null {
+  if (!Number.isFinite(bpm) || bpm <= 0) return null;   // 0 = unknown, never "very slow"
+  if (bpm < 80) return 'slow tempo';
+  if (bpm < 105) return 'mid-tempo';
+  if (bpm < 130) return 'upbeat tempo';
+  return 'fast tempo';
+}
+
+// The analyzer stores a Camelot code ('8A'), which embeds as a meaningless
+// token. The musically-legible half of it is the mode: 'A' = minor, 'B' =
+// major. The number is the tonic (which key), and two tracks sharing a tonic
+// are no more alike in mood than two sharing a BPM digit — so it stays out.
+// The wheel only has positions 1–12; anything else ('0A', '13B') isn't a
+// Camelot code and contributes nothing rather than a fabricated mode.
+function keyModeWord(camelot: string): string | null {
+  const m = /^\s*(?:[1-9]|1[0-2])\s*([AB])\s*$/i.exec(camelot);
+  if (!m) return null;
+  return m[1].toUpperCase() === 'A' ? 'minor key' : 'major key';
+}
+
+// The descriptor words for a track's measured sound, in a stable order (the
+// same input must always produce the same vector). Empty when nothing has been
+// analysed — the caller then omits the line entirely rather than embedding a
+// bare "Sound:" label, which would be pure noise repeated across every
+// un-analysed track and would cluster THEM together.
+export function soundDescriptors(acoustics?: TrackAcoustics | null): string[] {
+  if (!acoustics) return [];
+  const words: string[] = [];
+  // Audio moods first — real vocabulary words, the strongest musical signal
+  // available here, and the one thing in this line that distinguishes two
+  // tracks at the same tempo in the same mode.
+  for (const m of acoustics.audioMoods ?? []) {
+    const t = String(m || '').trim();
+    if (t) words.push(t);
+  }
+  const tempo = acoustics.bpm != null ? tempoWord(Number(acoustics.bpm)) : null;
+  if (tempo) words.push(tempo);
+  const mode = acoustics.musicalKey ? keyModeWord(acoustics.musicalKey) : null;
+  if (mode) words.push(mode);
+  // [] is a MEASUREMENT ("no vocals found"), null is its absence — only the
+  // measured-instrumental case speaks (see the interface note).
+  if (Array.isArray(acoustics.vocalRanges) && acoustics.vocalRanges.length === 0) {
+    words.push('instrumental');
+  }
+  return words;
+}
+
+// The Era line's decade word ('1990s'). Input is the RESOLVED era year
+// (show-filter.resolveEraYear) — callers must never pass raw `year`, which on
+// a compilation is the compilation's own release date. Sub-millennium years
+// are junk tags (TDRC=0007 and friends), not ancient recordings.
+export function decadeWord(eraYear?: number | null): string | null {
+  const y = Number(eraYear);
+  if (!Number.isFinite(y) || y < 1000) return null;
+  return `${Math.floor(y / 10) * 10}s`;
 }
 
 export function isAvailable(): boolean {
@@ -99,7 +204,21 @@ export function resolveEmbeddingDim(): number {
 //   "Snoop Dogg — Slid Off · Missionary (2024) [Hip-Hop]
 //    Last.fm: chill, west-coast, smooth, late-night
 //    Lyrics: I slid off, ain't been the same since the call dropped..."
-export function formatTrackText(song: SongMeta, enrich?: TrackEnrichment | null): string {
+//
+// With measured acoustics (v2, #1246 — present as soon as the analyzer has run,
+// which needs no API key and no LLM call), plus the resolved era as a decade
+// word:
+//   "... Sound: smooth, late-night, mid-tempo, minor key
+//        Era: 2020s"
+//
+// Every optional line is omitted when its signal is absent, never emitted
+// empty: a constant "Sound:" label on un-analysed tracks would be noise shared
+// by all of them, which clusters exactly the tracks it says nothing about.
+export function formatTrackText(
+  song: SongMeta,
+  enrich?: TrackEnrichment | null,
+  acoustics?: TrackAcoustics | null,
+): string {
   // All genre tags, comma-joined — multi-genre tracks embed with their full
   // tag set so genre-adjacent similarity reflects every tag, not just genres[0].
   const genre = song.genres?.length ? song.genres.join(', ') : song.genre;
@@ -114,6 +233,20 @@ export function formatTrackText(song: SongMeta, enrich?: TrackEnrichment | null)
     const trimmed = enrich.lyricExcerpt.slice(0, LYRIC_EXCERPT_CHARS).replace(/\s+/g, ' ').trim();
     if (trimmed) lines.push(`Lyrics: ${trimmed}`);
   }
+  // Measured sound (#1246). Without this — and with Last.fm tags off by default
+  // for keyless installs, and lyrics matching only a small share of a library —
+  // the vector for most tracks IS the head line, so cosine similarity over it
+  // ranks by artist/album TEXT while presenting itself to the picker as mood
+  // similarity: every track by one artist shares an artist string and so
+  // self-clusters, and "Nick Drake" sits next to "Drake". This line is the
+  // cheapest musical signal that exists before the tagger has decided anything.
+  const sound = soundDescriptors(acoustics);
+  if (sound.length) lines.push(`Sound: ${sound.join(', ')}`);
+  // Era as a word (#1246). Label-derived, not measured — which is why it gets
+  // its own line instead of riding Sound:, and why labelOnlyVectorCount
+  // deliberately does NOT treat it as musical signal.
+  const decade = decadeWord(song.eraYear);
+  if (decade) lines.push(`Era: ${decade}`);
   return lines.join('\n');
 }
 
@@ -163,6 +296,36 @@ export function resolveIndexTextMode(
   if (stored) return stored;
   if (vectorCount > 0) return 'plain';
   return preferredTextMode();
+}
+
+// What text format the index as a whole should be RECORDED as, given what's
+// already in it (#1246). Mirrors resolveIndexTextMode above, and answers a
+// question with the same shape: the meta row describes the vectors that exist,
+// not the recipe the current build happens to use.
+//
+// A normal forward run embeds only tracks that have no vector yet, so an
+// existing index becomes a MIX — old rows at the stored format, new rows at the
+// current one. Recording the current version there would erase the only signal
+// that a re-embed is worth running, so the stored (older) format wins and the
+// advisory stays up until a reseed genuinely rebuilds everything. An empty
+// index has nothing to be inconsistent with, so it adopts the current format —
+// which is why a fresh install never sees the advisory at all.
+//
+// A stored format NEWER than this build (a downgraded controller) clamps to
+// this build's version for the same mixed-index reason: this run embeds any
+// new vectors at ITS shape, so the oldest shape now present is its own — and
+// recording it means the newer controller, once restored, sees the mix and
+// raises the advisory again.
+//
+// `reseed` is the one case that rewrites every vector, so it always adopts.
+export function resolveIndexTextFormat(
+  stored: number | null | undefined,
+  vectorCount: number,
+  reseed = false,
+): number {
+  if (reseed) return EMBED_TEXT_VERSION;
+  if (vectorCount > 0) return Math.min(stored ?? 1, EMBED_TEXT_VERSION);
+  return EMBED_TEXT_VERSION;
 }
 
 // Pure prefix application, exported for tests. `prefixes` defaults to the

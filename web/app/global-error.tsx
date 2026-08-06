@@ -5,23 +5,15 @@ import { useEffect } from 'react';
 // Last-resort boundary: catches throws in the ROOT layout itself, which
 // app/error.tsx cannot (error.js never wraps the layout in its own segment).
 //
-// This file REPLACES the root layout when it renders, which has three
-// consequences that shape everything below:
-//   1. It must supply its own <html> and <body>.
-//   2. globals.css is imported by the root layout, so none of it is available —
-//      no bs- classes, no Tailwind, no CSS custom properties. Styles are
-//      self-contained in the <style> block, using the real palette values
-//      copied from globals.css so this still reads as SUB/WAVE.
-//   3. The theme-init script lives in the root layout too, so the stored theme
-//      preference can't be read here. The palette follows the OS colour scheme
-//      via prefers-color-scheme instead, which is the closest honest match.
+// It REPLACES the root layout when it renders, so: it must supply its own
+// <html>/<body>; globals.css is unavailable (no Tailwind, no bs- classes, no
+// custom properties — hence the self-contained <style> block with palette
+// values copied from globals.css); and the theme-init script is gone too, so
+// the palette follows prefers-color-scheme instead of the stored preference.
 //
 // Metadata exports aren't supported in a client component, so the tab title is
-// set with React's <title>.
-//
-// Styles go in a <style> element rather than style props: the repo's eslint
-// config forbids inline styles, and a stylesheet is the right shape for
-// media-query-driven theming anyway.
+// set with React's <title>. Styles are a <style> element because eslint forbids
+// inline styles.
 
 const CSS = `
   :root {
@@ -127,9 +119,9 @@ export default function GlobalError({
             stream is very likely still on air.
           </p>
           <div className="ge-actions">
-            {/* No router here — the root layout is gone, so a full document
-                reload is the only reliable recovery. reset() is still offered
-                first in case the failure was transient. */}
+            {/* No router here: the root layout is gone, so a full document
+                reload is the only reliable recovery. reset() is offered first in
+                case the failure was transient. */}
             <button type="button" className="ge-btn" onClick={() => reset()}>
               Try again
             </button>

@@ -27,17 +27,20 @@ export interface StationFeed {
   state: StationState;
   session: SessionPayload;
   /** Epoch ms when the current track became AUDIBLE to this listener, null
-   *  before the first poll. Consumers derive elapsed/progress from it locally
-   *  (useElapsed) so the per-second tick doesn't re-render the whole player
-   *  tree.
-   *
+   *  before the first poll. Consumers derive elapsed/progress locally
+   *  (useElapsed) so the per-second tick doesn't re-render the player tree.
    *  Listener-time, not broadcast-time: the server stamps startedAt at the live
-   *  edge, but Icecast bursts `stream.bufferSeconds` of audio on connect so
-   *  everyone hears that far behind it. This carries the offset already added,
-   *  which is why it can briefly sit in the future — useElapsed clamps at 0, so
-   *  the clock holds 0:00 until the track actually starts instead of banking
-   *  the buffer as elapsed time (issue #1114). */
+   *  edge but Icecast bursts `stream.bufferSeconds` on connect, so this carries
+   *  the offset already added and can briefly sit in the future — useElapsed
+   *  clamps at 0 rather than banking the buffer as elapsed (issue #1114). */
   trackStartedAt: number | null;
+  /** Whether the station is configured to serve `/stream.opus`, or null before
+   *  the first poll. This is the SETTING, not a live mount probe — it needs a
+   *  mixer restart to take effect, so it can read true while the mount is still
+   *  404ing. The player must not upgrade to the Opus mount on codec support
+   *  alone — Opus is off by default, so the mount 404s and playback sits on
+   *  "acquiring" until the error handler pins MP3 back (issue #1300, bug 5). */
+  opusEnabled: boolean | null;
   /** Station IANA timezone (e.g. "Europe/London"), or null before first poll.
    *  Render on-air timestamps in this zone so they match what the DJ speaks
    *  (issue #418). */
@@ -49,10 +52,9 @@ const EMPTY_STATE: StationState = { upcoming: [], history: [], djLog: [] };
 const EMPTY_SESSION: SessionPayload = { session: null, messages: [] };
 const OFFLINE_CONFIRM_POLLS = 4;
 
-// Only commit a freshly-parsed payload when it differs from what's already in
-// state — returning `prev` from the updater skips the re-render, so a quiet
-// poll tick costs nothing. Server JSON keeps stable key order, making the
-// stringify comparison reliable (and cheap at a few KB every 5s).
+// Returning `prev` from the updater skips the re-render, so a quiet poll tick
+// costs nothing. Server JSON keeps stable key order, so the stringify compare is
+// reliable (and cheap at a few KB every 5s).
 function setIfChanged<T>(setter: Dispatch<SetStateAction<T>>, next: T): void {
   setter(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
 }
@@ -61,18 +63,12 @@ function setIfChanged<T>(setter: Dispatch<SetStateAction<T>>, next: T): void {
 // hidden (with an immediate refetch on return). Single source of truth for
 // "what's on air right now".
 //
-// The listener offset comes from the advertised stream.bufferSeconds. This
-// used to prefer a per-tab measurement (usePlayer.getListenerLagMs, being
-// `buffered.end − currentTime`) on the theory that a byte-sized burst meant a
-// different depth per mount. Two things killed that: the burst is now sized in
-// SECONDS per mount server-side, so every mount already lands on
-// bufferSeconds; and the measurement never described the offset in the first
-// place. `buffered` reports only the window the browser has DEMUXED — Chrome
-// keeps the connect burst in an internal cache it never exposes — so it read
-// ~2.3s while the listener was genuinely ~22s behind, flipping every title
-// about 20s early. Measured against the server's own live-edge stamp with a
-// tone marker: true offset 22.5s, buffered.end − currentTime 2.25s, advertised
-// bufferSeconds 22s.
+// The listener offset is the advertised stream.bufferSeconds, full stop. Do not
+// go back to a per-tab `buffered.end − currentTime` measurement: `buffered`
+// reports only the DEMUXED window (Chrome keeps the connect burst in an internal
+// cache it never exposes), so it read 2.25s while the listener was genuinely
+// 22.5s behind, flipping every title ~20s early. The burst is also sized in
+// SECONDS per mount server-side now, so every mount lands on bufferSeconds.
 export function useStationFeed(): StationFeed {
   const client = useStationClient();
   const [nowPlaying, setNowPlaying] = useState<NowPlayingTrack | null>(null);
@@ -85,17 +81,17 @@ export function useStationFeed(): StationFeed {
   const [state, setState] = useState<StationState>(EMPTY_STATE);
   const [session, setSession] = useState<SessionPayload>(EMPTY_SESSION);
   const [trackStartedAt, setTrackStartedAt] = useState<number | null>(null);
+  const [opusEnabled, setOpusEnabled] = useState<boolean | null>(null);
   const [timezone, setTimezone] = useState<string | null>(null);
   const [locale, setLocale] = useState<StationLocale>('en-GB');
   const lastTrackKeyRef = useRef<string | null>(null);
   const offlinePollsRef = useRef(0);
-  // Listener buffer depth, in ms. Lives in a ref (not state) so the polling
-  // effect never re-subscribes when it arrives — it only needs the latest value
-  // at tick time. 0 until the first payload lands, which degrades to the old
+  // Listener buffer depth in ms. A ref, not state, so the polling effect never
+  // re-subscribes when it arrives. 0 until the first payload lands, degrading to
   // live-edge behaviour rather than guessing an offset.
   const leadMsRef = useRef(0);
-  // Pending track switch: a track whose metadata has arrived but whose audio
-  // hasn't reached this listener yet. Held here until it's audible.
+  // Holds a track whose metadata has arrived but whose audio hasn't reached this
+  // listener yet, until it's audible.
   const promoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -107,31 +103,26 @@ export function useStationFeed(): StationFeed {
           client.session(),
         ]);
         const np = npRes.nowPlaying;
-        // Refresh the buffer depth before it's used below. Clamped to a sane
-        // window: a bad value here would either park the clock in the far
+        // Clamped: a bad value here would either park the clock in the far
         // future or wind it back past the track start.
         const bufSec = npRes.stream?.bufferSeconds;
         if (typeof bufSec === 'number' && Number.isFinite(bufSec)) {
           leadMsRef.current = Math.min(Math.max(bufSec, 0), 60) * 1000;
         }
         const trackKey = np ? `${np.title}\u0000${np.artist}` : null;
-        // Prefer the queue's authoritative start time over "first seen by this
-        // client": a tab that was hidden at the transition (or a poll that hit
-        // a torn now-playing.json read and flipped through null) would stamp
-        // Date.now() mid-track, dragging elapsed/remaining/progress minutes
-        // behind the broadcast. Guarded to the matching track and to plausible
-        // values (a skewed server clock in the future falls back to first-seen).
+        // Prefer the queue's start time over "first seen by this client": a tab
+        // hidden at the transition (or a poll that flipped through null on a torn
+        // now-playing.json read) would stamp Date.now() mid-track and drag the
+        // clock minutes behind. Guarded to the matching track and to plausible
+        // values — a server clock skewed into the future falls back to first-seen.
         const cur = (stRes as StationState & { current?: { title?: string; startedAt?: string } }).current;
         let serverStart = NaN;
         if (np?.title && cur && cur.title === np.title && cur.startedAt) {
           const t = Date.parse(cur.startedAt);
           if (Number.isFinite(t) && t <= Date.now()) serverStart = t;
         }
-        // Shift into listener-time. serverStart is the live edge; the audio
-        // reaches this listener leadMs later, so that's when the track is
-        // genuinely "now playing" for them (issue #1114). leadMs is the burst
-        // depth the server advertises, which is what every mount now bursts —
-        // see the note above on why the old per-tab measurement was wrong.
+        // Shift into listener-time: serverStart is the live edge, and the audio
+        // reaches this listener leadMs later (issue #1114).
         const leadMs = leadMsRef.current;
         const audibleAt = Number.isFinite(serverStart) ? serverStart + leadMs : Date.now();
 
@@ -144,18 +135,15 @@ export function useStationFeed(): StationFeed {
           };
           const wait = audibleAt - Date.now();
           // Promote immediately when the audio is already out (wait <= 0), when
-          // the stream drops (nothing to stay in sync with), or on the very
-          // first payload — a cold load has no earlier track to keep showing,
-          // so showing the incoming one is the best available answer. The clock
-          // is still right in that case because trackStartedAt carries the
-          // offset and useElapsed clamps at 0.
+          // the stream drops, or on the first payload — a cold load has no
+          // earlier track to keep showing. The clock stays right there because
+          // trackStartedAt carries the offset and useElapsed clamps at 0.
           if (wait <= 0 || trackKey == null || lastTrackKeyRef.current == null) {
             if (promoteTimerRef.current) clearTimeout(promoteTimerRef.current);
             commit();
           } else {
-            // Re-armed on every poll while the switch is pending, so the wait
-            // is always recomputed against the freshest server stamp rather
-            // than drifting on a stale one.
+            // Re-armed on every poll while the switch is pending, so the wait is
+            // recomputed against the freshest server stamp rather than drifting.
             if (promoteTimerRef.current) clearTimeout(promoteTimerRef.current);
             promoteTimerRef.current = setTimeout(commit, wait);
           }
@@ -184,6 +172,11 @@ export function useStationFeed(): StationFeed {
             if (offlinePollsRef.current >= OFFLINE_CONFIRM_POLLS) setStreamOnline(false);
           }
         }
+        // Which mounts are actually live. Only an explicit boolean counts — an
+        // older controller omits the key, and "unknown" must not read as "on".
+        if (typeof npRes.stream?.opusEnabled === 'boolean') {
+          setIfChanged<boolean | null>(setOpusEnabled, npRes.stream.opusEnabled);
+        }
         if (typeof npRes.llmTokens === 'number') setIfChanged<number | null>(setLlmTokens, npRes.llmTokens);
         if (typeof npRes.timezone === 'string' && npRes.timezone) setTimezone(npRes.timezone);
         if (npRes.locale === 'en-US' || npRes.locale === 'en-GB') setLocale(npRes.locale);
@@ -202,5 +195,5 @@ export function useStationFeed(): StationFeed {
     };
   }, [client]);
 
-  return { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone, locale };
+  return { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale };
 }

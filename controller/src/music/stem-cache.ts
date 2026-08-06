@@ -20,8 +20,13 @@ export function stemsRoot(): string {
 
 export function dirFor(trackId: string): string {
   // Track ids are Navidrome UUID-ish tokens; guard the join anyway so a
-  // hostile id can never escape the cache root.
-  return path.join(stemsRoot(), path.basename(String(trackId)));
+  // hostile id can never escape the cache root. basename() strips path
+  // separators but returns "." / ".." verbatim, and path.join(root, "..")
+  // would resolve to the PARENT of the cache root — so neutralise any
+  // empty or dot-only name to a safe in-root token first.
+  let safe = path.basename(String(trackId));
+  if (safe === '' || /^\.+$/.test(safe)) safe = '_';
+  return path.join(stemsRoot(), safe);
 }
 
 export function stemPath(trackId: string, window: StemWindow, stem: string): string {
@@ -55,11 +60,49 @@ export function budgetBytes(): number {
 }
 
 // Rough on-disk cost of one track's cached stem set (head 40s + tail 20s, four
-// FLACs each) — the ~25 MB the admin UI quotes. Only used to SIZE a backfill,
+// FLACs each) — the ceiling the admin UI quotes. Only used to SIZE a backfill,
 // never to account for real usage (that walks the dirs), so an approximation
 // is fine: being a few MB out changes how many tracks a night targets, nothing
-// that can corrupt the cache.
+// that can corrupt the cache. Real-world caches average well under this
+// (~13 MB/track over 53k tracks in the #1257 report — stem FLACs are mostly
+// quiet channels and compress hard, and head-only sets are smaller still), so
+// once the cache holds enough dirs to be representative the MEASURED average
+// takes over (estimateTrackBytes below) and this stays the cold-start guess.
 export const APPROX_TRACK_BYTES = 25 * 1024 ** 2;
+
+// How many dirs the cache needs before its own average outranks the guess —
+// a handful of outliers must not swing the backfill sizing.
+export const MEASURED_MIN_DIRS = 50;
+
+// Floor for the measured average: a cache polluted by failed/near-empty dirs
+// would otherwise report a tiny per-track cost and size a backfill far past
+// what the budget really holds.
+const MIN_TRACK_BYTES = 8 * 1024 ** 2;
+
+// Pure sizing seam (pinned by scripts/stem-cache-sweep.test.ts): what one
+// cached track costs, given what's actually on disk.
+export function estimateTrackBytes(totalBytes: number, dirCount: number): number {
+  if (dirCount < MEASURED_MIN_DIRS) return APPROX_TRACK_BYTES;
+  return Math.max(MIN_TRACK_BYTES, Math.round(totalBytes / dirCount));
+}
+
+// Pure per-track gate for the analysis pass (#1257): stems ride along with
+// EVERY analysis when the cache is on (the separation is paid for anyway),
+// but the ride-alongs must not grow the cache past the operator's budget —
+// that's how a 500 GB budget ended up holding 674 GB. A track whose dir
+// already exists is a REWRITE (no net-new bytes), so it never needs a slot;
+// a net-new dir spends one.
+export function stemWriteDecision(opts: {
+  cacheOn: boolean;
+  slotsLeft: number;
+  hasExistingDir: boolean;
+}): { want: boolean; consumesSlot: boolean } {
+  if (!opts.cacheOn) return { want: false, consumesSlot: false };
+  if (opts.hasExistingDir) return { want: true, consumesSlot: false };
+  return opts.slotsLeft > 0
+    ? { want: true, consumesSlot: true }
+    : { want: false, consumesSlot: false };
+}
 
 // One walk of the cache root -> per-dir bytes + newest mtime. Shared by the
 // sweep and the usage report so the two can never disagree about what's on
@@ -93,8 +136,18 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
   return dirs;
 }
 
+// One-scan usage summary — bytes on disk, dirs on disk, and the per-track
+// cost estimate those two imply. Callers that need more than one of these
+// must use this rather than the singles below, or they pay (and can race)
+// a 50k-dir walk per figure.
+export async function usage(): Promise<{ bytes: number; dirs: number; estTrackBytes: number }> {
+  const scanned = await scanDirs();
+  const bytes = scanned.reduce((n, d) => n + d.bytes, 0);
+  return { bytes, dirs: scanned.length, estTrackBytes: estimateTrackBytes(bytes, scanned.length) };
+}
+
 export async function usageBytes(): Promise<number> {
-  return (await scanDirs()).reduce((n, d) => n + d.bytes, 0);
+  return (await usage()).bytes;
 }
 
 // How many track dirs are on disk RIGHT NOW — the doctor's coverage number.
@@ -103,7 +156,18 @@ export async function usageBytes(): Promise<number> {
 // has evicted anything — or a separation failed — the stamp count overstates
 // what a blend can actually hit. This counts hittable dirs instead.
 export async function cachedTrackCount(): Promise<number> {
-  return (await scanDirs()).length;
+  return (await usage()).dirs;
+}
+
+// The track ids that have a stem dir on disk — one readdir, no per-dir walk.
+// The analysis pass snapshots this to tell a rewrite (dir exists, costs no
+// budget slot) from net-new growth; see stemWriteDecision.
+export async function cachedTrackIdSet(): Promise<Set<string>> {
+  try {
+    return new Set(await readdir(stemsRoot()));
+  } catch {
+    return new Set(); // no cache dir yet
+  }
 }
 
 // How many more tracks the budget can hold, approximately. The stem backfill
@@ -111,12 +175,15 @@ export async function cachedTrackCount(): Promise<number> {
 // minutes later is hours of Demucs time for nothing, which is what made the
 // feature look broken on a library bigger than the budget ("it will only ever
 // cache the last 600 songs"). 0 = cache full, so the backfill stands down and
-// says so rather than churning.
+// says so rather than churning. Sized off the cache's own measured average
+// once it has one (estimateTrackBytes) — the fixed 25 MB guess ran ~2x
+// pessimistic in the field (#1257).
 // `budget` defaults to the operator's setting; an explicit value mirrors
 // sweep(budget) so the two can be reasoned about (and tested) together.
 export async function headroomTracks(budget = budgetBytes()): Promise<number> {
-  const free = budget - (await usageBytes());
-  return free <= 0 ? 0 : Math.floor(free / APPROX_TRACK_BYTES);
+  const u = await usage();
+  const free = budget - u.bytes;
+  return free <= 0 ? 0 : Math.floor(free / u.estTrackBytes);
 }
 
 // Byte-budget LRU sweep: newest track-dirs (by max file mtime — a re-analysis
@@ -124,14 +191,29 @@ export async function headroomTracks(budget = budgetBytes()): Promise<number> {
 // operator's budget (settings.audio.stemCacheGb). No existing LRU utility in
 // the repo — byte accounting follows archives.pruneOlderThan, the sweep shape
 // follows piper.cleanupOldVoices.
-export async function sweep(budget = budgetBytes()): Promise<{ removed: number; freedBytes: number }> {
+//
+// Failures must ride the RESULT, not vanish (#1257): a per-dir rm error is
+// swallowed here by design (retry next sweep), but when EVERY delete fails —
+// e.g. the stems mount isn't deletable by the controller container — the old
+// shape returned {removed: 0}, which both call sites read as "nothing to do".
+// A 500 GB budget sat at 674 GB for a week with zero operator signal.
+// `failedDirs` counts dirs whose delete threw this sweep; `overBudgetBytes`
+// is how far the cache still overhangs the budget after it — either being
+// non-zero is the call sites' cue to say so out loud.
+export async function sweep(budget = budgetBytes()): Promise<{
+  removed: number;
+  freedBytes: number;
+  failedDirs: number;
+  overBudgetBytes: number;
+}> {
   const dirs = await scanDirs();
   let total = dirs.reduce((n, d) => n + d.bytes, 0);
-  if (total <= budget) return { removed: 0, freedBytes: 0 };
+  if (total <= budget) return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0 };
 
   dirs.sort((a, b) => a.mtimeMs - b.mtimeMs); // oldest first
   let removed = 0;
   let freedBytes = 0;
+  let failedDirs = 0;
   for (const d of dirs) {
     if (total <= budget) break;
     try {
@@ -139,7 +221,7 @@ export async function sweep(budget = budgetBytes()): Promise<{ removed: number; 
       total -= d.bytes;
       freedBytes += d.bytes;
       removed += 1;
-    } catch { /* best-effort — retry next sweep */ }
+    } catch { failedDirs += 1; /* best-effort — retry next sweep */ }
   }
-  return { removed, freedBytes };
+  return { removed, freedBytes, failedDirs, overBudgetBytes: Math.max(0, total - budget) };
 }

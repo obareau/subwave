@@ -1,8 +1,3 @@
-// Shapes and the fixed vocabularies the dashboard offers: say kinds and modes,
-// the manual segment buttons, and the listener-table sort keys.
-//
-// Part of the dash/ split - see ../DashPanel.tsx.
-
 import { clientLabel, type ListenerConnection } from '../../../lib/clientLabel';
 import type { SessionTurn } from '../../../lib/types';
 import type {
@@ -26,15 +21,10 @@ export const SAY_MODES = [
   { id: 'styled', label: 'Styled' },
 ];
 
-// Canned prompts for the manual voice box, in station voice. Written as
-// instructions (they shine with mode=styled — the DJ rewrites them in persona,
-// though raw works too). Clicking one FILLS the textarea; nothing goes to air
-// until the operator hits send. This set is the zero-latency initial render
-// and the fallback when the controller has no generated batch — the ↻ button
-// swaps in fresh LLM-written ones via /generate/say-suggestions. The
-// controller keeps the canonical copy of these six as the generator's style
-// anchors (llm/internal/prompts/generate.ts SAY_SUGGESTION_EXAMPLES); keep
-// the two lists in step.
+// Fallback prompts for the manual voice box, used until /generate/say-suggestions
+// returns a batch. The controller keeps a canonical copy of these six as the
+// generator's style anchors (llm/internal/prompts/generate.ts
+// SAY_SUGGESTION_EXAMPLES); keep the two lists in step.
 export const SAY_SUGGESTIONS = [
   'Tease the weather like it’s a rumour you can’t quite confirm.',
   'Do a station ID like you suspect nobody’s listening — and you’re fine with it.',
@@ -78,9 +68,8 @@ export interface DashStatus {
   locale?: StationLocale;
 }
 
-// Subset of /stats (admin) the health strip reads: DJ p95 latency + the TTS
-// fallback rate, both since-boot rollups. Polled slower than live status since
-// they move slowly and the endpoint is heavier.
+// Subset of /stats (admin) the health strip reads. Polled slower than live
+// status: the figures move slowly and the endpoint is heavier.
 export interface HealthStats {
   llm?: { count?: number; latency?: { p95?: number }; agentTimeoutMs?: number };
   tts?: { count?: number; fallbackRate?: number | null };
@@ -97,8 +86,7 @@ export interface ConnectionsState {
   connections: ListenerConnection[];
 }
 
-// One resolved/failed listener request, as returned by GET /requests. Mirrors
-// the durable record written by the controller's request-log.
+// Mirrors the durable record the controller's request-log writes (GET /requests).
 export interface RequestEntry {
   t?: string;
   requester?: string;
@@ -121,32 +109,12 @@ export interface RequestEntry {
   message?: string | null;
 }
 
-// Listener likes (#991), as returned by GET /likes — the heart button's
-// admin review surface.
-interface LikeTopEntry {
-  track?: { id?: string; title?: string; artist?: string } | null;
-  count?: number;
-  lastLikedAt?: string;
-}
-interface LikeRecentEntry {
-  songId?: string;
-  title?: string;
-  artist?: string;
-  album?: string;
-  likedAt?: string;
-  listener?: string;
-}
-export interface LikesPayload {
-  totals?: { total?: number; songs?: number };
-  top?: LikeTopEntry[];
-  recent?: LikeRecentEntry[];
-}
+// Likes left the dash in #1253 — they live on the Library page's Liked mode now.
+// GET /likes still serves the totals + top + recent shape for API callers.
 
-// Hide the host portion of an IP so a glance at the screen doesn't expose a
-// listener's full address. IPv4 drops the last octet, IPv6 keeps the first two
-// groups (the routing prefix) and masks the rest. The raw IP is still in the
-// row's title attribute and one toggle away — this is a display default, not
-// redaction.
+// Hide the host portion so a glance at the screen doesn't expose a listener's full
+// address: IPv4 drops the last octet, IPv6 keeps the routing prefix. A display
+// default, not redaction — the raw IP is still in the row's title attribute.
 export function maskIp(ip: string): string {
   if (!ip) return '—';
   if (ip.includes('.')) return ip.replace(/\.\d+$/, '.×');
@@ -163,8 +131,7 @@ export interface SortState {
   dir: 'asc' | 'desc';
 }
 
-// Sort connections by the active column. `client` sorts on the friendly label
-// (what the operator actually sees), everything else on the raw field.
+// `client` sorts on the friendly label the operator sees, everything else raw.
 export function sortConnections(
   rows: ListenerConnection[],
   { key, dir }: SortState,

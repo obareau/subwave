@@ -9,7 +9,7 @@ import { pageMeta } from '@/lib/seo';
 export const metadata = pageMeta({
   title: 'SUB/WAVE — Community Skills',
   description:
-    'The community skill catalog — prompt-only DJ segments shared by other stations. Browse them here, then install any from your station&rsquo;s admin console.',
+    'The community skill catalog: prompt-only DJ segments other operators wrote and sent in. Read the briefs here, install them from your own admin console.',
   path: '/skills',
 });
 
@@ -18,14 +18,13 @@ export const metadata = pageMeta({
 export const dynamic = 'force-dynamic';
 
 const REPO = 'https://github.com/perminder-klair/subwave';
-// Submission opens a GitHub Issue Form in the community catalog repo (no fork, no
-// YAML). A workflow there turns the issue into a one-file PR; the catalog
-// rebuilds on merge. Mirrors the /stations add flow.
+// Submission opens a GitHub Issue Form in the community catalog repo; a workflow
+// turns it into a one-file PR and the catalog rebuilds on merge.
 const SUBMIT_URL = skillSubmitUrl();
 const DOCS_URL = `${REPO}/blob/main/docs/custom-skills.md`;
 
-// Catalog-backed regions, each reading the one in-flight promise rather than
-// calling the loader itself — see the note in app/shows/page.tsx.
+// Each region reads the one in-flight promise rather than calling the loader
+// itself — see the note in app/shows/page.tsx.
 
 async function SkillsStat({ skills }: { skills: Promise<CommunitySkill[]> }) {
   const count = (await skills).length;
@@ -44,8 +43,8 @@ async function SkillsGrid({ skills }: { skills: Promise<CommunitySkill[]> }) {
   if (list.length === 0) {
     return (
       <p className="bs-news-empty">
-        No community skills to show yet — the catalog may still be loading, or this station
-        hasn&rsquo;t shipped one. Be the first to{' '}
+        Nothing in the skill catalog yet, or this station hasn&rsquo;t caught up with it. Be the
+        first to{' '}
         <AnimatedLink href={SUBMIT_URL} className="bs-link">
           share a skill
         </AnimatedLink>
@@ -69,13 +68,13 @@ export default function CommunitySkillsIndex() {
   return (
     <article>
       <header className="bs-news-hero">
-        <p className="bs-eyebrow">THE WORKSHOP</p>
+        <p className="bs-eyebrow">THE EXCHANGE</p>
         <h1>Community Skills.</h1>
         <p>
-          A skill is an autonomous segment the AI DJ can air between tracks — a short brief
-          telling it what to say, and when to stay quiet. These are shared by the community and
-          ship with every station. Browse them here, then install the ones you like from your
-          own admin console.
+          A skill is a segment the DJ can air between tracks. You write a short brief saying
+          what to cover and when to stay quiet; the DJ writes the actual words at air time,
+          around whatever is playing. Every one below came from another operator, and they
+          ship with every station.
         </p>
       </header>
 
@@ -84,7 +83,7 @@ export default function CommunitySkillsIndex() {
       </Suspense>
 
       <div className="bs-station-cta">
-        <p className="bs-station-cta-copy">Made a segment worth sharing? Add it to the catalog.</p>
+        <p className="bs-station-cta-copy">Taught your DJ something good? Send the brief in.</p>
         <AnimatedLink href={SUBMIT_URL} variant="arrow" className="bs-station-cta-link">
           Share a skill
         </AnimatedLink>
@@ -98,9 +97,9 @@ export default function CommunitySkillsIndex() {
       </Suspense>
 
       <p className="bs-stations-report">
-        Installing is a two-tap job in your station&rsquo;s admin: open{' '}
-        <strong>Skills → Community</strong>, then <strong>Install</strong>. Every skill arrives
-        disabled so you can read the brief and enable it on your own terms.
+        To install, open <strong>Skills → Community</strong> in your station&rsquo;s admin and
+        hit <strong>Install</strong>. Every skill arrives switched off, so you can read the
+        brief before the DJ ever airs it.
       </p>
     </article>
   );

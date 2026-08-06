@@ -53,6 +53,22 @@ to front. Use `docker/Caddyfile` as the reference route table to replicate.
 docker compose -f docker-compose.byo.yml up -d
 ```
 
+**Route the whole `/stream*` family, not just `/stream.mp3`.** The web image
+is baked for same-origin paths, and everything the proxy doesn't send to
+Icecast falls through to the Next.js catch-all and 404s. On one hostname:
+
+| Path | Upstream | Notes |
+|---|---|---|
+| `/stream.mp3` `/stream.opus` `/stream.flac` `/stream.aac` | Icecast `:7702` | Opus/FLAC/AAC are off by default but **still need routing** — enabling one in admin must not also need a proxy edit. Disable response buffering on these (Caddy `flush_interval -1`, nginx `proxy_buffering off`) or the audio arrives in lumps. |
+| `/listen.pls` `/listen.m3u` | Icecast `:7702` | Playlist files for hardware radios / VLC. Served at the **root**, not under `/api`. |
+| `/api/*` | Controller `:7701` | Strip the `/api` prefix (Caddy `handle_path`). |
+| `/api/listener-auth` | — | Return 404 at the edge. Icecast calls it directly over the internal network; exposed publicly it's an unthrottled password oracle (#478). |
+| everything else | Web `:7700` | |
+
+A path-prefix rule matching `^/stream` covers the first row and any mount
+added later. Splitting the player across two hostnames is a different job —
+it needs a web rebuild with `NEXT_PUBLIC_*` pointing at each.
+
 ### `docker-compose.dev.yml` — local development
 
 For local hacking. Spins up **3 containers** (Icecast + Liquidsoap +
@@ -210,11 +226,68 @@ Everything that survives `docker compose down` lives in `state/`:
 | `voice/` | Controller | TTS WAVs rendered for each spoken segment |
 | `archive/` | Liquidsoap | Hourly MP3 archive (`YYYY-MM-DD/HH-00.mp3`) |
 | `logs/` | Controller + Liquidsoap | Event logs |
+| `stems/` | Analyzer | Cached Demucs stem windows for stem-blend transitions — byte-budgeted by `audio.stemCacheGb` (Settings → Transitions) |
+| `transitions/` | Analyzer | Rendered stem-blend clips (swept after ~1h) |
 | `next.txt`, `say.txt`, `intro.txt`, `auto.m3u`, `now-playing.json` | Controller ⇄ Liquidsoap | File-based IPC (see `CLAUDE.md`) |
 
 Back up `state/` to back up everything. Don't `git clean -dffx` without
 checking — `state/` lives inside the repo by default (`STATE_DIR=./state`)
 and contains all of the above.
+
+### Putting the stem cache or the archive on another disk
+
+`stems/` and `archive/` are the two dirs that grow without bound — the stem
+cache to whatever `audio.stemCacheGb` allows (up to 1 TB), the archive by
+about 1.4 GB a day at 128 kbps. Both are usually the reason someone wants
+part of `state/` on a bigger, cheaper disk.
+
+There is no setting for this, by design: the paths are derived from the state
+dir (`stemsRoot()` is `<state>/stems`), so **the supported move is a bind
+mount at the same path**. Add it to every service that already mounts the
+state volume:
+
+```yaml
+# docker-compose.override.yml
+services:
+  broadcast:
+    volumes:
+      - /mnt/bigdisk/subwave-stems:/var/sub-wave/stems
+  controller:
+    volumes:
+      - /mnt/bigdisk/subwave-stems:/var/sub-wave/stems
+  analyzer:
+    volumes:
+      - /mnt/bigdisk/subwave-stems:/var/sub-wave/stems
+```
+
+Three things to know before you do it:
+
+- **Mount it in the controller *and* the analyzer, at the identical path.**
+  The controller hands the analyzer a filesystem *path*, not audio (the same
+  handoff that makes a remote analyzer need a matching mount — see
+  ["Running the analyzer on another machine"](tts-heavy.md)). A stems mount
+  that only one of them can see fails every write.
+- **Ownership sorts itself out on boot.** A fresh bind mount lands root-owned
+  and the analyzer runs as uid 10001, so it could not write there. The
+  broadcast entrypoint now opens `stems/` and `transitions/` to mode 777 on
+  every boot, exactly as it already did for `voice/`, `sfx/` and the rest.
+- **A mount that refuses `chmod` no longer stops the station.** Read-only
+  binds, some NFS exports and exFAT/NTFS disks won't take the permission
+  change. That used to abort the broadcast entrypoint before Icecast started,
+  which compose reported as `dependency failed to start: container
+  sub-wave-broadcast is unhealthy` and nothing else (#1300 bug 10). It now
+  warns, naming the path, and boots:
+
+  ```
+  broadcast: WARNING state dir /var/sub-wave/stems is mode 755 and chmod could not
+  change it — the controller and analyzer containers write there as other uids;
+  chown/chmod it on the host
+  ```
+
+  Fix it on the host (`chown -R 10001 /mnt/bigdisk/subwave-stems`, or mount
+  the share with the right `uid=`/`gid=` options) — a stem cache the analyzer
+  can't write just means transitions fall back to a plain crossfade, but the
+  same warning on `voice/` or `logs/` is worth acting on.
 
 ---
 

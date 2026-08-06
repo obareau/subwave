@@ -1,22 +1,15 @@
-# Caddy edge router for the SUB/WAVE all-in-one image (docker/Dockerfile.aio).
-#
-# Unlike the split-stack docker/Caddyfile, every backend lives in THIS SAME
-# container, so the upstreams are loopback addresses rather than compose service
-# names. The route table is otherwise identical: one origin on :80, split by URL
-# prefix. The single host port the Unraid template maps points here.
-#
-# No Cloudflare trusted_proxies block — the AIO is aimed at LAN / self-hosted
-# use behind whatever reverse proxy the operator already runs (or none at all).
+# Caddy edge for the all-in-one image (docker/Dockerfile.aio). Same route
+# table as the split-stack docker/Caddyfile, but every backend is loopback in
+# this same container. No Cloudflare trusted_proxies block — the AIO is aimed
+# at LAN / behind whatever proxy the operator already runs.
 {
 	auto_https off
 }
 
 :80 {
-	# /stream.mp3 + /stream.opus + /stream.flac + /stream.aac — Icecast (served by
-	# liquidsoap → icecast on 7702). Opus/FLAC/AAC are opt-in and off by default,
-	# but they must still be listed here or they fall through to the Next.js
-	# catch-all below and 404. flush_interval -1 keeps the never-ending audio
-	# body live.
+	# Icecast mounts. Opus/FLAC/AAC are off by default but must be listed or
+	# they fall through to the catch-all and 404. flush_interval -1 keeps the
+	# never-ending audio body live.
 	@streams path /stream.mp3 /stream.opus /stream.flac /stream.aac
 	handle @streams {
 		reverse_proxy 127.0.0.1:7702 {
@@ -29,25 +22,20 @@
 		}
 	}
 
-	# /api/listener-auth — NOT reachable from the internet. Icecast is in this
-	# same container and calls the controller directly on localhost:7701 (see
-	# supervisor.sh render_icecast), so the edge never needs to carry it.
-	# Through /api/* it was an unthrottled oracle for the shared
-	# privacy.password that /api/station-auth rate-limits. Kept in lockstep
-	# with docker/Caddyfile.
+	# Icecast's URL-auth callback — NOT reachable from the internet (password
+	# oracle otherwise; icecast calls the controller on loopback directly).
+	# Kept in lockstep with docker/Caddyfile.
 	handle /api/listener-auth {
 		respond 404
 	}
 
-	# /api/* — controller REST API (prefix stripped so its routes stay at root).
+	# Controller REST API (prefix stripped so its routes stay at root).
 	handle_path /api/* {
 		reverse_proxy 127.0.0.1:7701
 	}
 
-	# /listen.pls + /listen.m3u — one-paste tune-in files (VLC, Sonos, hardware).
-	# Served by the controller at its root (NOT under /api), so use a plain handle
-	# with no path stripping. Without this they fall through to the catch-all
-	# below and 404.
+	# One-paste tune-in files — served by the controller at its root (NOT under
+	# /api), so plain handle, no path stripping.
 	@listen path /listen.pls /listen.m3u
 	handle @listen {
 		reverse_proxy 127.0.0.1:7701

@@ -1,10 +1,5 @@
 'use client';
 
-// The state-directory file listing - the file-based IPC surface, as seen from
-// the controller.
-//
-// Part of the debug/ split - see ../DebugPanel.tsx.
-
 import { fmtSize } from '../../../lib/format';
 import { cn } from '../../../lib/cn';
 import type { FilesValue } from './types';

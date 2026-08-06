@@ -4,21 +4,15 @@ import type { ReactNode } from 'react';
 import { V3Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 
-/* Shared error state for the admin console. One look for the "a fetch failed"
-   panel, standardized on V3Alert (tone="error") with an optional Retry — the
-   same shape the admin error boundary (app/admin/error.tsx) already uses.
-   Replaces the three competing patterns the panels grew: the bare
-   `<div class="text-[var(--danger)]">controller error: {err}</div>`, the
-   accent `<p>{err}</p>`, and the assorted hand-rolled V3Alert callouts.
-
-   `error` is the raw controller message (rendered quietly under the body);
-   `onRetry` re-runs the panel's own fetch (panels own their retry logic). */
+/* Shared "a fetch failed" panel for the admin console, on V3Alert
+   (tone="error") with an optional Retry — the same shape the admin error
+   boundary (app/admin/error.tsx) uses. `error` is the raw controller message;
+   panels own their own retry logic. */
 export interface ErrorStateProps {
-  /** Callout heading. Defaults to the controller-unreachable framing. */
+  /** Defaults to the controller-unreachable framing. */
   title?: ReactNode;
-  /** Human explanation; a sensible default is shown when omitted. */
   children?: ReactNode;
-  /** The raw error string/message from the controller, shown de-emphasised. */
+  /** Raw controller message, shown de-emphasised. */
   error?: ReactNode;
   onRetry?: () => void;
   retrying?: boolean;

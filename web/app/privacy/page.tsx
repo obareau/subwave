@@ -5,6 +5,9 @@ export const metadata = pageMeta({
   description:
     'How the SUB/WAVE player apps handle your data: no account, no analytics, no trackers. Stations are stored on your device; playback connects straight to the station you choose.',
   path: '/privacy',
+  // Legal pages bind this operator, so they stay self-canonical even though
+  // the text is identical everywhere — see PageScope in lib/seo.ts.
+  scope: 'station',
 });
 
 // Render per-request so the canonical/og:url pick up the runtime SITE_URL — a

@@ -5,6 +5,9 @@ export const metadata = pageMeta({
   description:
     'The plain terms for using the SUB/WAVE apps and the public station: the software is provided as is, and each station operator is responsible for the music they broadcast and any licences it needs.',
   path: '/terms',
+  // Legal pages bind this operator, so they stay self-canonical even though
+  // the text is identical everywhere — see PageScope in lib/seo.ts.
+  scope: 'station',
 });
 
 // Render per-request so the canonical/og:url pick up the runtime SITE_URL — a

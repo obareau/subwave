@@ -11,16 +11,10 @@ export interface AnimatedLinkProps
   extends Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> {
   href: string;
   children: React.ReactNode;
-  /**
-   * underline — sliding underline on hover (origin flips right→left).
-   * arrow     — external-style underline + arrow that lifts in on hover.
-   * highlight — block-fill sweep behind the text (mix-blend-difference).
-   */
   variant?: AnimatedLinkVariant;
   className?: string;
 }
 
-/** Detect links that should leave the SPA / open externally. */
 function isExternal(href: string): boolean {
   return /^(https?:|mailto:|tel:)/.test(href);
 }
@@ -64,13 +58,9 @@ const VARIANT_CLASSES: Record<AnimatedLinkVariant, string> = {
   ),
 };
 
-/**
- * Animated text link. Renders a Next.js <Link> for internal routes and a plain
- * <a> (with safe rel) for external/mailto/tel targets, so client-side routing
- * still works where it should.
- *
- * Adapted from Skiper UI's Skiper40 (https://gxuri.in) — an inspired rebuild.
- */
+/** Renders a Next.js <Link> for internal routes and a plain <a> (with safe
+ *  rel) for external/mailto/tel targets, so client-side routing still applies
+ *  where it should. Adapted from Skiper UI's Skiper40 (https://gxuri.in). */
 export function AnimatedLink({
   href,
   children,
@@ -113,4 +103,3 @@ export function AnimatedLink({
   );
 }
 
-export default AnimatedLink;

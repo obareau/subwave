@@ -16,13 +16,14 @@ export const router = express.Router();
 // ---------------------------------------------------------------------------
 // POST /settings/tts/preview — synthesize a short sample in an EXPLICIT engine +
 // voice (not the on-air persona) so the admin "Play sample" button can audition
-// a voice/speed before saving. Body: { engine, voice?, cloudProvider?, speed?,
-// lang?, language?, text?, voiceSettings? } — `language` is the persona's
+// a voice/speed before saving. Body: { engine, voice?, cloudProvider?, cloudModel?, speed?,
+// lang?, language?, text?, voiceSettings?, fishSettings? } — `language` is the persona's
 // free-text on-air language; when set (and no explicit text), the sample
 // sentence is rendered in that language. voiceSettings carries UNSAVED ElevenLabs
 // slider values (issue #696) so the operator can tune the expressive knobs by
-// ear before saving; synthesizeSample clamps them like settings.update() does.
-// On success streams the rendered WAV (audio/wav). On a synth
+// ear before saving; fishSettings does the same for temperature/top-p/latency.
+// synthesizeSample clamps them like settings.update() does.
+// On success returns the rendered audio (WAV locally, MP3 for managed cloud). On a synth
 // failure — e.g. the tts-heavy sidecar is down or no cloud key — returns 422
 // with { ok, message } instead of silently falling back to Piper, so the
 // operator sees why. The temp WAV is unlinked once sent.
@@ -33,12 +34,24 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
   if (!engine || !tts.ENGINES.includes(engine)) {
     return res.status(400).json({ ok: false, message: `Unknown engine: ${engine || '(none)'}` });
   }
+  // A closed picker/button aborts its browser request. Carry that cancellation
+  // through Express into the provider call so a discarded Fish preview does
+  // not continue as an invisible metered synthesis. `close` on the response
+  // fires for client disconnects (the deprecated `req 'aborted'` event is
+  // redundant with it) and also after a normal send, where writableEnded
+  // makes the abort a no-op.
+  const previewAbort = new AbortController();
+  const abortOnDisconnect = () => {
+    if (!res.writableEnded) previewAbort.abort();
+  };
+  res.once('close', abortOnDisconnect);
   let filePath: string | null = null;
   try {
     filePath = await tts.synthesizeSample({
       engine,
       voice: typeof body.voice === 'string' ? body.voice : '',
       cloudProvider: typeof body.cloudProvider === 'string' ? body.cloudProvider : 'openai',
+      cloudModel: typeof body.cloudModel === 'string' ? body.cloudModel : undefined,
       speed: typeof body.speed === 'number' ? body.speed : undefined,
       lang: typeof body.lang === 'string' ? body.lang : undefined,
       language: typeof body.language === 'string' ? body.language : undefined,
@@ -46,14 +59,21 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
       voiceSettings: (body.voiceSettings && typeof body.voiceSettings === 'object')
         ? body.voiceSettings
         : undefined,
+      fishSettings: (body.fishSettings && typeof body.fishSettings === 'object')
+        ? body.fishSettings
+        : undefined,
+      signal: previewAbort.signal,
     });
     const buf = await readFile(filePath);
     // Local engines render WAV; cloud (ElevenLabs) renders MP3. Set the type
     // from the actual extension so the browser <audio> gets the right MIME.
     res.type(extname(filePath) || '.wav').send(buf);
   } catch (err: unknown) {
-    res.status(422).json({ ok: false, message: (err as { message?: string })?.message || 'Preview synthesis failed' });
+    if (!previewAbort.signal.aborted && !res.destroyed) {
+      res.status(422).json({ ok: false, message: (err as { message?: string })?.message || 'Preview synthesis failed' });
+    }
   } finally {
+    res.off('close', abortOnDisconnect);
     if (filePath) unlink(filePath).catch(() => {});
   }
 });
@@ -64,10 +84,9 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
 // free-text box the operator fills from memory. The TTS twin of
 // /settings/llm/models.
 //
-// Two discoverable providers: `openai-compatible` (probes a few conventional
-// paths on the operator's own server — /v1/audio/voices isn't in the OpenAI
-// spec, so there's no single right answer) and `elevenlabs` (a real API, and
-// the one that matters most since cloned voices can never be hardcoded).
+// Discoverable providers: `openai-compatible` probes conventional endpoints,
+// while `elevenlabs` and `fish-audio` query their managed account catalogues.
+// This matters for cloned/custom voices that can never be hardcoded.
 // `openai` publishes no list endpoint; its curated UI list is already complete.
 //
 // `baseUrl` rides in on the query so the operator can discover against a URL
@@ -93,8 +112,18 @@ router.get('/settings/tts/voices', requireAdmin, async (req, res) => {
   // to that provider's env var from state/secrets.env.
   const envKey = provider === 'elevenlabs'
     ? process.env.ELEVENLABS_API_KEY
-    : process.env.OPENAI_API_KEY;
-  const settingsKey = provider === cloud.provider ? cloud.apiKey : '';
+    : provider === 'fish-audio'
+      ? process.env.FISH_API_KEY
+      : provider === 'openai-compatible'
+        ? ''
+        : process.env.OPENAI_API_KEY;
+  // Fish never reads the legacy shared inline key slot; credentials remain in
+  // state/secrets.env (or the controller process environment) only.
+  const settingsKey = provider === 'openai-compatible'
+    ? cloud.compatApiKey || (cloud.provider === 'openai-compatible' ? cloud.apiKey : '')
+    : provider !== 'fish-audio' && provider === cloud.provider
+      ? cloud.apiKey
+      : '';
   const apiKey = (settingsKey || envKey || '').trim();
 
   // Backstop only — listVoices runs its own per-provider budget (10s managed,

@@ -59,7 +59,41 @@ export interface ProviderCapabilities {
   // reasoning-disabled model instance for forced-tool legs (see languageModel's
   // forceNoThink opt). Everyone else suppresses per-call and leaves this false.
   reasoningConstructionOnly?: boolean;
+  // How many FREE discovery steps the tool-loop agent gets before `done` is
+  // forced (gatedDiscoveryPrepareStep in strategy/agent.ts). Absent → DISCOVERY_STEPS_MIN.
+  //
+  // This is the loop-shape knob, and it is per-provider for the same reason
+  // objectStrategy is: the ceiling that keeps a local GGUF model compliant is
+  // not the ceiling a frontier model needs. The forced-tool providers emit
+  // schema-valid objects WITHOUT exploring and ignore `toolChoice` when several
+  // tools are visible, so they keep the single cornered discovery call that was
+  // the global value. Native-strategy providers honour tool_choice and reason
+  // across results, so they get room to seed, refine, and cross-check.
+  //
+  // Widening this does NOT widen the number of `done` attempts: the effective
+  // step cap is derived as `discoverySteps + 1`, so the main run always makes
+  // exactly ONE forced-done attempt before handing off to agent.ts's recovery
+  // cascade — which is the invariant the GLM finding in dj-agent/agents.ts
+  // depends on (extra done steps grow an "I already declined" trail and make
+  // compliance worse, so the rescue is recovery, never more steps).
+  discoverySteps?: number;
 }
+
+// Floor and ceiling on the discovery budget. The floor is the historical global
+// value (COMMIT_AFTER_STEPS = 1) and is what every forced-tool provider keeps.
+// The ceiling exists because each step is a separate billable model call that
+// counts against settings.llm.dailyTokenCap, and because all legs of a pick
+// share ONE wall-clock deadline (settings.llm.agentTimeoutMs) — a budget tall
+// enough to exhaust the deadline in discovery would starve the recovery legs
+// that actually rescue a failed run.
+export const DISCOVERY_STEPS_MIN = 1;
+export const DISCOVERY_STEPS_MAX = 5;
+
+// The discovery budget for providers that honour tool_choice and reason across
+// tool results. Three leaves room for the shape the one-call ceiling forbids:
+// seed from the on-air track, refine on what came back, then cross-check a
+// second axis (sound vs text) before committing.
+const NATIVE_DISCOVERY_STEPS = 3;
 
 const NONE = (): ReasoningLevel | undefined => undefined;
 
@@ -89,6 +123,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // forced tools while reasoning.
     reasoningLevel: ({ modelId, reasoning }) =>
       /^(o\d|gpt-5)/i.test(modelId) ? (reasoning ? 'medium' : 'minimal') : undefined,
+    discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
   // openai-compatible targets self-hosted llama.cpp / vLLM / LM Studio — the
   // same local GGUF model class as ollama and locca, which emit a schema-valid
@@ -127,6 +162,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // provider owns its own id space.
     reasoningLevel: ({ reasoning, forceNoThink }) =>
       (reasoning && !forceNoThink ? 'medium' : 'none'),
+    discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
   google: {
     objectStrategy: 'native',
@@ -145,6 +181,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // forceNoThink not factored — Gemini permits forced tools while reasoning.
     reasoningLevel: ({ modelId, reasoning }) =>
       (reasoning || /(^|\/)gemma-/i.test(modelId) ? undefined : 'none'),
+    discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
   deepseek: {
     objectStrategy: 'native',
@@ -156,6 +193,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // 'medium' up to 'high' server-side).
     reasoningLevel: ({ reasoning, forceNoThink }) =>
       (reasoning && !forceNoThink ? undefined : 'none'),
+    discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
   // OpenRouter reads `reasoning` ONLY from model-construction settings, not
   // per-call options, so the thinking knob can't live here — it's wired in
@@ -166,7 +204,13 @@ const CAPS: Record<string, ProviderCapabilities> = {
   // picker. Verified on @openrouter/ai-sdk-provider v3.0.0: it declares spec v4
   // but never reads callOptions.reasoning — construction stays the only channel
   // until upstream implements the translation.
-  openrouter: { objectStrategy: 'native', repeatPenaltyApplies: false, reasoningLevel: NONE, reasoningConstructionOnly: true },
+  openrouter: {
+    objectStrategy: 'native',
+    repeatPenaltyApplies: false,
+    reasoningLevel: NONE,
+    reasoningConstructionOnly: true,
+    discoverySteps: NATIVE_DISCOVERY_STEPS,
+  },
   // Requesty is an OpenAI-compatible gateway built via createOpenAI with
   // name:'requesty', so the top-level level resolves through the same openai
   // code path — 'minimal' lands as reasoning_effort:'minimal', the exact bytes
@@ -180,6 +224,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
     repeatPenaltyApplies: false,
     reasoningLevel: ({ reasoning, forceNoThink }) =>
       (reasoning && !forceNoThink ? undefined : 'minimal'),
+    discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
   // Vercel AI Gateway serializes the full call options — including the top-level
   // reasoning level — to the downstream provider, so 'none' suppresses whatever
@@ -194,6 +239,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
     repeatPenaltyApplies: false,
     reasoningLevel: ({ modelId, reasoning, forceNoThink }) =>
       ((reasoning && !forceNoThink) || /(^|\/)gemma-/i.test(modelId) ? undefined : 'none'),
+    discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
 };
 
@@ -214,6 +260,60 @@ export function capabilitiesFor(provider: string | undefined): ProviderCapabilit
 // True when the active provider needs the tool-call structured-output path.
 export function needsToolCallObject(cfg: any): boolean {
   return capabilitiesFor(cfg?.provider).objectStrategy === 'tool';
+}
+
+// How many free discovery steps this leg gets before `done` is forced.
+//
+// The operator's `settings.llm.discoverySteps` wins when set, because the
+// descriptor can only know what a PROVIDER generally does — it cannot know which
+// model that provider is serving. The two cases the override exists for run in
+// opposite directions: a small local model behind an openai-compatible endpoint
+// that copes fine with several rounds, and a frontier-provider id that turns out
+// to wander when given them. `0` (the default) means "follow the descriptor",
+// so an untouched install behaves exactly as if the setting did not exist.
+//
+// Read off the leg's cfg, not from settings, so this stays a pure function of
+// its argument (the whole module's contract) and so the primary and fallback
+// legs resolve independently — the fallback may be a different provider running
+// a different model, which is the same reason toolChoice and numCtx are per-leg.
+//
+// Clamped to [MIN, MAX] on both paths, so neither a bad descriptor edit nor a
+// hand-edited settings.json can land outside the band — never zero after the
+// auto sentinel is resolved (which would force `done` at step 0 and corner the
+// model into fabricating an id with an empty `seen` map) and never unbounded.
+export function discoveryStepsFor(cfg: any): number {
+  const override = cfg?.discoverySteps;
+  if (Number.isFinite(override as number) && (override as number) > 0) {
+    return clampDiscoverySteps(override as number);
+  }
+  const declared = capabilitiesFor(cfg?.provider).discoverySteps;
+  if (!Number.isFinite(declared as number)) return DISCOVERY_STEPS_MIN;
+  return clampDiscoverySteps(declared as number);
+}
+
+function clampDiscoverySteps(n: number): number {
+  return Math.min(DISCOVERY_STEPS_MAX, Math.max(DISCOVERY_STEPS_MIN, Math.floor(n)));
+}
+
+// The tool-loop step cap for a gated discovery run: every discovery step plus
+// the ONE forced-done step that follows them. Deriving the cap rather than
+// taking the caller's keeps the "exactly one forced-done attempt per run"
+// invariant true at any budget — see the discoverySteps note above.
+export function gatedMaxStepsFor(cfg: any): number {
+  return discoveryStepsFor(cfg) + 1;
+}
+
+// The discovery budget actually in force for ONE djAgent run. followProvider
+// is the agent's own opt-in (providerDiscoveryBudget on the definition): the
+// pick/request agents pass true and follow the descriptor + operator override
+// above; every other caller keeps the historical single cornered step. The
+// opt-in exists because a caller's pinned step cap can itself be load-bearing
+// — the segment director's `maxSteps: 2` (skills/_agent.ts) documents a run
+// burning the FULL agentTimeoutMs when its loop silently grew — so the
+// per-provider widening reaches only the agents it was designed and tested
+// for, never every agent on the provider.
+export function runDiscoverySteps(cfg: any, followProvider: boolean): number {
+  return followProvider ? discoveryStepsFor(cfg) : DISCOVERY_STEPS_MIN;
 }
 
 // The tool_choice value to send when SUB/WAVE wants to FORCE a tool call (the

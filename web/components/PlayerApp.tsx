@@ -1,11 +1,10 @@
 'use client';
 
-// The player entry point, kept as a stable import for the routes and the
-// landing showcase. Renders the shell, which resolves the active skin from
+// Player entry point. Renders the shell, which resolves the active skin from
 // the registry (operator default on /state, listener localStorage override).
 //
 // Install-level page effects (first-run redirect, audience beacon) live in
-// player/PlayerPageEffects, mounted by the full-page routes — never by
+// player/PlayerPageEffects, mounted by the full-page routes and never by
 // showcase embeds.
 
 import PlayerShell from './player/PlayerShell';

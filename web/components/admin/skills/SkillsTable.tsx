@@ -1,8 +1,7 @@
 'use client';
 
-// Skills roster as a dense table — the "list" half of the cards/list toggle on
-// /admin/skills. Same contract as the slate cards: the row opens the edit
-// sheet, and the enable switch and Run now pad still act in place.
+// The "list" half of the cards/list toggle on /admin/skills. Same contract as the
+// slate cards: the row opens the edit sheet, and the switch and Run now act in place.
 
 import { useMemo } from 'react';
 import { cn } from '../../../lib/cn';
@@ -51,8 +50,8 @@ export function SkillsTable({
       sortMode: 'az',
       sortAria: 'ascending',
       render: (s) => (
-        // No wrapping in the row — a pill dropping to a second line would
-        // inflate the row height and undo the point of the list.
+        // A pill dropping to a second line would inflate the row height and undo
+        // the point of the list.
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate font-extrabold text-ink">{s.label || s.name}</span>
           {s.custom && <Pill className="text-[8px]">custom</Pill>}
@@ -69,8 +68,8 @@ export function SkillsTable({
       key: 'brief',
       label: 'Brief',
       // `w-full` claims the table's slack and `max-w-0` lets the inner span
-      // truncate instead of widening the column — the pair is what makes
-      // truncation work at all in an auto-layout table.
+      // truncate; the pair is what makes truncation work at all in an auto-layout
+      // table.
       className: 'hidden lg:table-cell w-full max-w-0',
       render: (s) => (
         <span className="block truncate text-muted italic" title={s.description || ''}>

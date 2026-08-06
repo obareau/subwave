@@ -6,7 +6,7 @@ author: The SUB/WAVE desk
 excerpt: The tts-heavy sidecar ships CPU-only, but with a small rebuild you can move Chatterbox onto an nvidia card for faster voice synthesis. Here is the index swap, the compose change, and the one caveat.
 ---
 
-The heavy TTS sidecar ships CPU-only on purpose. The PyTorch wheels inside it are the CPU build, which keeps the image from ballooning by several gigabytes. That is the right default for most boxes. But if you just moved your Docker host to a machine with a real nvidia card, you can put Chatterbox on it and get faster voice synthesis. It takes a small rebuild.
+The [heavy TTS sidecar](/news/heavy-tts-setup-guide) ships CPU-only on purpose. The PyTorch wheels inside it are the CPU build, which keeps the image from ballooning by several gigabytes. That is the right default for most boxes. But if you just moved your Docker host to a machine with a real nvidia card, you can put Chatterbox on it and get faster voice synthesis. It takes a small rebuild.
 
 ## What you're changing
 
@@ -52,4 +52,6 @@ The worker logs which device it loaded on. Look for `loading ChatterboxTurboTTS 
 
 ## One caveat
 
-Only Chatterbox follows `TTS_HEAVY_DEVICE`. PocketTTS and the audio analyzer stay on the CPU no matter what. So this is worth doing if Chatterbox is your DJ voice, where it is the heaviest of the engines and the card buys you the most. On PocketTTS it changes nothing.
+Only Chatterbox follows `TTS_HEAVY_DEVICE`. PocketTTS and the audio analyzer stay on the CPU no matter what. So this is worth doing if Chatterbox is your [DJ voice](/manual/voices), where it is the heaviest of the engines and the card buys you the most. On PocketTTS it changes nothing.
+
+*Update: the analyzer has since grown [a CUDA image of its own](/news/analyzer-on-the-gpu), no Dockerfile edit required, so the acoustic side of the load can move to the card too.*

@@ -60,8 +60,10 @@ import {
   clampBudgetSoftPct,
   clampDailyTokenCap,
   clampMaxOutputTokens,
+  clampDiscoverySteps,
   clampNoRepeatWindow,
   clampNumCtx,
+  clampRepeatPenalty,
   clampTtsGain,
   clampTtsSpeed,
   coerceGuestPersonaIds,
@@ -84,11 +86,14 @@ import {
   coerceMaxTrackSeconds,
   rawMaxTrackSec,
 } from './settings/defaults.js';
+import { validateCompatParams } from './settings/compat-params.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
+  normalizeArchiveRetentionDays,
   normalizeDjPrompts,
   normalizePersonaArray,
+  normalizeTtsFallback,
   normalizeSchedule,
   normalizeScheduleOverride,
   normalizeShows,
@@ -104,6 +109,7 @@ import {
   validateScheduleOverrideStrict,
   validateScheduleStrict,
   validateShowsStrict,
+  validateTtsBlock,
   validateWeatherMoodsStrict,
   validateWebhooksStrict,
 } from './settings/validate.js';
@@ -152,7 +158,9 @@ export {
   SEED_PERSONAS,
   SHOWS_LIMIT,
   SHOW_ENERGY,
+  SHOW_FILTER_VALUES_MAX,
   SHOW_MOODS,
+  SHOW_TOPIC_MAX,
   SOUL_MAX,
   TONE_DIALS,
   TTS_CLOUD_PROVIDERS,
@@ -165,8 +173,10 @@ export {
   WEATHER_CONDITIONS,
   WEATHER_MOOD_DEFAULTS,
   clampMaxOutputTokens,
+  clampDiscoverySteps,
   clampTtsGain,
   clampTtsSpeed,
+  coerceShowVocals,
   normalizeDial,
   personaToneDirectives,
 } from './settings/vocab.js';
@@ -373,10 +383,9 @@ export async function load() {
           ? stored.archive.enabled
           : DEFAULTS.archive.enabled,
       bitrate: archiveBitrate,
-      retentionDays:
-        Number.isInteger(stored.archive?.retentionDays) && stored.archive.retentionDays >= 0
-          ? stored.archive.retentionDays
-          : DEFAULTS.archive.retentionDays,
+      // Bounded default with the keep-forever upgrade guard — a pre-existing
+      // enabled archive without a stored value stays at 0, never pruned.
+      retentionDays: normalizeArchiveRetentionDays(stored.archive),
     },
     stream: {
       opusEnabled:
@@ -479,8 +488,8 @@ export async function load() {
     theme: {
       // We only validate the *shape* here. The active id might reference a
       // theme file that's since been removed; the public /themes endpoint
-      // and getTheme() both fall back to the default id when that happens, so
-      // a stale id doesn't break the UI.
+      // falls back to the default id when that happens, so a stale id doesn't
+      // break the UI.
       active:
         typeof stored.theme?.active === 'string' && stored.theme.active.trim()
           ? stored.theme.active.trim()
@@ -579,6 +588,12 @@ export async function load() {
       defaultEngine: TTS_ENGINES.includes(stored.tts?.defaultEngine)
         ? stored.tts.defaultEngine
         : DEFAULTS.tts.defaultEngine,
+      // Operator-chosen rescue slot. Reuses the persona voice-slot normaliser
+      // so the per-engine voice rules can't drift between the two; only the
+      // `enabled` flag is extra. Absent/non-boolean coerces to the default
+      // (off), so an upgrade from a settings.json written before this key
+      // existed keeps today's chain byte-for-byte.
+      fallback: normalizeTtsFallback(stored.tts?.fallback),
       // Stored as a plain boolean; coerce missing/non-boolean (older saves) to
       // the default. See DEFAULTS.tts.heavyEnabled for the semantics.
       heavyEnabled:
@@ -622,7 +637,7 @@ export async function load() {
         enabled:
           typeof stored.tts?.cloud?.enabled === 'boolean'
             ? stored.tts.cloud.enabled
-            : !!stored.tts?.cloud?.apiKey,
+            : !!(stored.tts?.cloud?.apiKey || stored.tts?.cloud?.compatApiKey),
         provider: TTS_CLOUD_PROVIDERS.includes(stored.tts?.cloud?.provider)
           ? stored.tts.cloud.provider
           : DEFAULTS.tts.cloud.provider,
@@ -634,7 +649,21 @@ export async function load() {
           typeof stored.tts?.cloud?.voice === 'string' && stored.tts.cloud.voice.trim()
             ? stored.tts.cloud.voice.trim()
             : DEFAULTS.tts.cloud.voice,
-        apiKey: typeof stored.tts?.cloud?.apiKey === 'string' ? stored.tts.cloud.apiKey : '',
+        // Migrate the old shared slot into the dedicated compatibility slot
+        // only when it was saved under the compatibility provider. Managed
+        // provider keys remain legacy-readable but can no longer cross over.
+        apiKey:
+          stored.tts?.cloud?.provider !== 'openai-compatible'
+          && typeof stored.tts?.cloud?.apiKey === 'string'
+            ? stored.tts.cloud.apiKey
+            : '',
+        compatApiKey:
+          typeof stored.tts?.cloud?.compatApiKey === 'string'
+            ? stored.tts.cloud.compatApiKey
+            : stored.tts?.cloud?.provider === 'openai-compatible'
+              && typeof stored.tts?.cloud?.apiKey === 'string'
+              ? stored.tts.cloud.apiKey
+              : '',
         baseUrl:
           typeof stored.tts?.cloud?.baseUrl === 'string'
             ? stored.tts.cloud.baseUrl.trim()
@@ -658,6 +687,34 @@ export async function load() {
           typeof stored.tts?.cloud?.voiceUseSpeakerBoost === 'boolean'
             ? stored.tts.cloud.voiceUseSpeakerBoost
             : DEFAULTS.tts.cloud.voiceUseSpeakerBoost,
+        // Fish Audio controls — lenient load for hand-edited/older settings.
+        // Only the Fish provider sends these fields on the wire.
+        temperature:
+          typeof stored.tts?.cloud?.temperature === 'number' && Number.isFinite(stored.tts.cloud.temperature)
+            ? clamp01(stored.tts.cloud.temperature)
+            : DEFAULTS.tts.cloud.temperature,
+        topP:
+          typeof stored.tts?.cloud?.topP === 'number' && Number.isFinite(stored.tts.cloud.topP)
+            ? clamp01(stored.tts.cloud.topP)
+            : DEFAULTS.tts.cloud.topP,
+        latency:
+          ['low', 'normal', 'balanced'].includes(stored.tts?.cloud?.latency)
+            ? stored.tts.cloud.latency
+            : DEFAULTS.tts.cloud.latency,
+        // Extra openai-compatible body fields. This block composes tts.cloud
+        // field by field rather than spreading DEFAULTS, so a key missing here
+        // is a key that survives a save but vanishes on the next restart —
+        // params would quietly stop applying and nothing would say why.
+        // Lenient like the Fish knobs above: an invalid hand-edited list drops
+        // to none rather than throwing, because settings.load() failing means
+        // the controller doesn't boot at all.
+        compatParams: (() => {
+          try {
+            return validateCompatParams(stored.tts?.cloud?.compatParams);
+          } catch {
+            return [];
+          }
+        })(),
       },
       remote: {
         url:
@@ -699,11 +756,18 @@ export async function load() {
       // Clamp to a sane band: 0 disables (Ollama default), else [2048, 131072].
       // Non-numeric/NaN falls back to the default. Floored to an integer.
       numCtx: clampNumCtx(stored.llm?.numCtx, DEFAULTS.llm.numCtx),
+      // Clamped to [1.0, 2.0]; 1.0 = off. This block does NOT spread DEFAULTS,
+      // so a field missing HERE is written to settings.json by update() and then
+      // silently dropped on the next cold load — which is exactly what happened
+      // to repeat_penalty between #918 and #1327: the operator's configured
+      // value survived in memory for that process, vanished on restart, and
+      // llama.cpp fell back to its own 1.0 default with nothing in the logs.
+      repeatPenalty: clampRepeatPenalty(stored.llm?.repeatPenalty, DEFAULTS.llm.repeatPenalty),
       pickerAgent:
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
           : DEFAULTS.llm.pickerAgent,
-      // Clamped to [0, 290] (≤ the 300-entry sidecar cap); pre-field
+      // Clamped to [0, 1000] (≤ the 2500-entry sidecar cap); pre-field
       // settings.json picks up the config/env-seeded default.
       noRepeatWindow: clampNoRepeatWindow(stored.llm?.noRepeatWindow, DEFAULTS.llm.noRepeatWindow),
       requestWebResolve:
@@ -724,6 +788,10 @@ export async function load() {
       // Per-call output cap (issue #712) — pre-existing settings.json lacks the
       // field and picks up the 0 default (= built-in per-strategy defaults).
       maxOutputTokens: clampMaxOutputTokens(stored.llm?.maxOutputTokens, DEFAULTS.llm.maxOutputTokens),
+      // Discovery-round override — pre-existing settings.json lacks the field
+      // and picks up the 0 default (= follow the provider capability table), so
+      // an upgraded install behaves exactly as it did before the setting existed.
+      discoverySteps: clampDiscoverySteps(stored.llm?.discoverySteps, DEFAULTS.llm.discoverySteps),
       exemptRequests:
         typeof stored.llm?.exemptRequests === 'boolean'
           ? stored.llm.exemptRequests
@@ -753,6 +821,8 @@ export async function load() {
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
           numCtx: clampNumCtx(fb.numCtx, DEFAULTS.llm.fallback.numCtx),
+          repeatPenalty: clampRepeatPenalty(fb.repeatPenalty, DEFAULTS.llm.fallback.repeatPenalty),
+          discoverySteps: clampDiscoverySteps(fb.discoverySteps, DEFAULTS.llm.fallback.discoverySteps),
         };
       })(),
     },
@@ -1236,7 +1306,7 @@ export async function update(patch) {
       // A stale active theme (a retired built-in renamed in 58c3782b, or a
       // custom theme that isn't on disk) falls back to the built-in default
       // rather than failing the save — same tolerance as shows[].themeId above
-      // and the serve-time getTheme() fallback, and the same precedent as the
+      // and the serve-time fallback in GET /themes, and the same precedent as the
       // activeDjPromptId reset. Throwing here aborted the whole restore for any
       // install whose active theme id had since been retired (issue #917).
       next.theme.active = (await isValidThemeId(v)) ? v : DEFAULT_THEME_ID;
@@ -1365,6 +1435,29 @@ export async function update(patch) {
       }
       next.tts.enabled = t.enabled;
     }
+    if (t.fallback !== undefined) {
+      const fb = t.fallback || {};
+      if (fb.enabled !== undefined && typeof fb.enabled !== 'boolean') {
+        throw new Error('tts.fallback.enabled must be a boolean');
+      }
+      // Same strict validator every persona voice slot goes through, so the
+      // per-engine voice rules are enforced identically — `where` names the
+      // full path, so a bad value reads `tts.fallback.voice must ...`.
+      // Deliberately NO cross-field rule of the llm.fallback
+      // "openai-compatible needs baseUrl" kind: a cloud fallback whose provider
+      // has no key simply fails engineUsable() and is skipped at rescue time,
+      // which degrades to the local floor rather than blocking the save.
+      const slot = validateTtsBlock(
+        { ...next.tts.fallback, ...fb },
+        'tts.fallback',
+      );
+      next.tts.fallback = {
+        enabled: fb.enabled !== undefined ? fb.enabled : next.tts.fallback.enabled,
+        engine: slot.engine,
+        voice: slot.voice,
+        cloudProvider: slot.cloudProvider,
+      };
+    }
     if (t.heavyEnabled !== undefined) {
       if (typeof t.heavyEnabled !== 'boolean') {
         throw new Error('tts.heavyEnabled must be a boolean');
@@ -1417,6 +1510,7 @@ export async function update(patch) {
     }
     if (t.cloud !== undefined) {
       const c = t.cloud || {};
+      const savedCloudProvider = next.tts.cloud.provider;
       if (c.enabled !== undefined) {
         next.tts.cloud.enabled = !!c.enabled;
       }
@@ -1428,7 +1522,9 @@ export async function update(patch) {
       }
       if (c.model !== undefined) {
         const v = String(c.model).trim();
-        if (v.length < 1 || v.length > 100) throw new Error('tts.cloud.model must be 1-100 chars');
+        if (v.length < 1 || v.length > 100 || /[\r\n]/.test(v)) {
+          throw new Error('tts.cloud.model must be 1-100 chars with no line breaks');
+        }
         next.tts.cloud.model = v;
       }
       if (c.voice !== undefined) {
@@ -1451,6 +1547,17 @@ export async function update(patch) {
       // round-tripped settings form doesn't overwrite the real key.
       if (c.apiKey !== undefined && c.apiKey !== 'set') {
         next.tts.cloud.apiKey = String(c.apiKey);
+      } else if (c.provider !== undefined && c.provider !== savedCloudProvider) {
+        // The shared inline slot belongs to the provider that created it. A
+        // provider transition without an explicit replacement must clear it,
+        // otherwise a managed key can be forwarded to an arbitrary compatible
+        // URL (or a compatibility bearer can be reinterpreted as managed).
+        next.tts.cloud.apiKey = '';
+      }
+      // Dedicated compatibility bearer. Unlike the legacy shared slot, this
+      // may safely persist while another managed provider is selected globally.
+      if (c.compatApiKey !== undefined && c.compatApiKey !== 'set') {
+        next.tts.cloud.compatApiKey = String(c.compatApiKey);
       }
       if (c.baseUrl !== undefined) {
         const v = String(c.baseUrl).trim();
@@ -1480,6 +1587,37 @@ export async function update(patch) {
       }
       if (c.voiceUseSpeakerBoost !== undefined) {
         next.tts.cloud.voiceUseSpeakerBoost = !!c.voiceUseSpeakerBoost;
+      }
+      // Fish Audio synthesis controls. Clamp numeric knobs like the existing
+      // ElevenLabs sliders; reject an unknown enum so a typo cannot silently
+      // turn into a provider-side 422 and a different fallback voice.
+      if (c.temperature !== undefined) {
+        const n = Number(c.temperature);
+        next.tts.cloud.temperature = Number.isFinite(n) ? clamp01(n) : DEFAULTS.tts.cloud.temperature;
+      }
+      if (c.topP !== undefined) {
+        const n = Number(c.topP);
+        next.tts.cloud.topP = Number.isFinite(n) ? clamp01(n) : DEFAULTS.tts.cloud.topP;
+      }
+      if (c.latency !== undefined) {
+        if (!['low', 'normal', 'balanced'].includes(c.latency)) {
+          throw new Error('tts.cloud.latency must be one of: low, normal, balanced');
+        }
+        next.tts.cloud.latency = c.latency;
+      }
+      // Extra openai-compatible body fields (issue #1317). Rejected rather than
+      // clamped: unlike a slider, a bad param name or type is a request the
+      // server 4xxs, which mid-show means a silent drop to a local fallback
+      // voice. The rule is shared with the send path — see
+      // settings/compat-params.ts.
+      if (c.compatParams !== undefined) {
+        next.tts.cloud.compatParams = validateCompatParams(c.compatParams);
+      }
+      // Fish credentials live only in process env/state/secrets.env. Clear the
+      // legacy inline compatibility slot on every Fish save so a later provider
+      // switch cannot reinterpret a stale bearer as OpenAI/ElevenLabs.
+      if (next.tts.cloud.provider === 'fish-audio') {
+        next.tts.cloud.apiKey = '';
       }
       // An OpenAI-compatible TTS server has no canonical endpoint — refuse to
       // save the provider without one. Mirrors the LLM-side check below.
@@ -1810,9 +1948,11 @@ export async function update(patch) {
       // Throw rather than silently ignore, matching analyzeQuietMinutes below.
       // Swallowing an out-of-range value meant the admin UI showed a saved
       // budget the sweep was never using.
+      // Ceiling raised 500 → 1000 (#1257): at the measured ~13 MB/track a
+      // 500 GB budget stops short of a ~50k-track library.
       const gb = Number(au.stemCacheGb);
-      if (!Number.isFinite(gb) || gb < 1 || gb > 500) {
-        throw new Error('audio.stemCacheGb must be between 1 and 500');
+      if (!Number.isFinite(gb) || gb < 1 || gb > 1000) {
+        throw new Error('audio.stemCacheGb must be between 1 and 1000');
       }
       next.audio.stemCacheGb = gb;
     }

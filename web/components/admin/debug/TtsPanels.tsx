@@ -1,9 +1,5 @@
 'use client';
 
-// TTS routing (which engine voices which kind) and the recent-call list.
-//
-// Part of the debug/ split - see ../DebugPanel.tsx.
-
 import { useState } from 'react';
 import { V3Alert } from '../../ui/alert';
 import { Pill } from '../ui';
@@ -53,10 +49,8 @@ export function TtsRouting({ tts }: { tts: DebugTts }) {
   );
 }
 
-// Per-call TTS log — the raw speak() ring from the controller, rendered with
-// the same expandable-row pattern as the LLM / Subsonic call lists. A row in
-// danger tone means the call failed outright; an "↳ from <engine>" note means
-// the segment still aired but not through the engine the persona asked for.
+// The raw speak() ring. Danger tone means the call failed outright; "↳ from <engine>"
+// means the segment aired, just not through the engine the persona asked for.
 function TtsCallList({ calls }: { calls: TtsCall[] }) {
   const [filter, setFilter] = useState('all');
   const kinds = Array.from(new Set(calls.map(c => c.kind).filter(Boolean) as string[]));
@@ -83,10 +77,8 @@ function TtsCallList({ calls }: { calls: TtsCall[] }) {
         )}
         {shown.map((c, i) => (
           <details key={i} className="border border-separator-strong">
-            {/* minmax(0,1fr) (not a bare 1fr): an unbroken kind/preview word
-                would otherwise set the track's min-content floor and push the
-                trailing ms/clock cells out past the card's clipped edge on a
-                phone. */}
+            {/* minmax(0,1fr), not 1fr: an unbroken kind/preview word would set the
+                track's min-content floor and push the ms/clock cells off the card. */}
             <summary className="grid cursor-pointer grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] items-center gap-2 px-2.5 py-2 sm:gap-2.5">
               <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
                 {c.ok ? '✓' : '✗'}
@@ -134,9 +126,8 @@ function TtsCallList({ calls }: { calls: TtsCall[] }) {
   );
 }
 
-// Session roles are station-specific (dj / track / segment / listener…) — only
-// user/assistant map straight through; everything else renders as "system"
-// with the original role·kind kept visible as a label chip.
+// Session roles are station-specific (dj / track / segment / listener…); only
+// user/assistant map straight through, the rest render as "system".
 export function mapChatRole(role?: string): 'user' | 'assistant' | 'system' {
   return role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : 'system';
 }

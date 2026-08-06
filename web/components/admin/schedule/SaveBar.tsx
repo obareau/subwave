@@ -1,17 +1,10 @@
 'use client';
 
-// The unsaved-edits bar — the Rundown's save affordance of record.
-//
-// Every edit on this screen (board click, drag, ×, sentence editor) is a LOCAL
-// write; nothing reaches the controller until the week is saved. The header's
-// "Save the week" is the only other place that says so, and it scrolls out of
-// view the moment the operator drops into the 7 × 24 board — which is exactly
-// where the edits happen. So the same action follows them down the page: this
-// strip is `sticky bottom-0`, pinned to the viewport for as long as the week
-// differs from the server, and gone the instant it doesn't.
-//
-// It's the last child of the panel's flex column, so it also occupies real
-// layout space at the end of the page — it never permanently covers content.
+// The unsaved-edits bar. Every edit on the Rundown is a LOCAL write, and the
+// header's "Save the week" scrolls out of view the moment the operator drops into
+// the board, so this strip is `sticky bottom-0` for as long as the week differs
+// from the server. It is the last child of the panel's flex column, so it also
+// occupies real layout space and never permanently covers content.
 
 import { AnimatePresence, m } from 'motion/react';
 import { useEffect, useState } from 'react';

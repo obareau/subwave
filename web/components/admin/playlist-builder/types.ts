@@ -1,8 +1,6 @@
 'use client';
 
 // Shapes, vocab and the small formatters the playlist builder shares.
-//
-// Part of the playlist-builder/ split - see ../PlaylistBuilderPanel.tsx.
 
 
 export const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
@@ -30,9 +28,8 @@ export const BPM_STEP = 5;
 export const YEAR_MIN = 1950;                            // release year: 1950 → current year
 export const YEAR_MAX = new Date().getFullYear();
 
-// Bar palette for the energy graph — theme-aware mixes rather than the mock's
-// light-theme hexes, so dark mode keeps the same low/med/high contrast. Raw
-// values feed SVG `fill` attributes; the class twins style HTML swatches.
+// Theme-aware mixes, so dark mode keeps the same low/med/high contrast. Raw values
+// feed SVG `fill` attributes; the class twins style HTML swatches.
 export const EN_LOW = 'color-mix(in oklab, var(--ink) 22%, var(--bg))';
 export const EN_MED = 'color-mix(in oklab, var(--ink) 80%, var(--bg))';
 export const EN_HIGH = 'var(--accent)';
@@ -58,8 +55,8 @@ export interface DraftTrack {
 export interface SeedChip { id: string; title: string; artist: string }
 export interface PlaylistSummary { id: string; name: string; songCount: number; synced?: boolean; lastSyncedAt?: string | null }
 
-// Loose shape for /dj/search rows and /playlists/:id entries — the controller
-// returns Subsonic-derived fields with varying key names across endpoints.
+// Loose: the controller returns Subsonic-derived fields with varying key names
+// across endpoints.
 export interface RawTrackRow {
   id: string;
   title?: string;

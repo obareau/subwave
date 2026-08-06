@@ -5,12 +5,9 @@ import { DEFAULT_SKIN_ID, SKINS } from '../../skins';
 import { Pill } from '../ui';
 import { cn } from '../../../lib/cn';
 
-// The skin picker as a contact sheet: each card frames a pure-CSS miniature of
-// that skin's real layout, printed in the broadsheet palette. Signature motion
-// (waveform, spinning reels, blinking cursor, a light sweep) idles only when a
-// card is the live station skin or under the cursor — gated through Tailwind
-// `group-hover` / `group-aria-pressed` play-state variants so the rack reads as
-// a still print until touched. Keyframes live in app/globals.css (skin-*).
+// Each card frames a pure-CSS miniature of that skin's real layout. The motion
+// idles unless a card is the live skin or under the cursor, gated through Tailwind
+// play-state variants. Keyframes live in app/globals.css (skin-*).
 
 interface SkinGalleryProps {
   activeSkinId?: string;
@@ -49,7 +46,6 @@ function EqRow({ className }: { className?: string }) {
   );
 }
 
-// ── Classic: masthead · centre-stage disc · waveform · transport deck ─────────
 function ClassicPreview() {
   return (
     <div className="flex h-full w-full flex-col gap-1.5 p-2.5">
@@ -72,7 +68,6 @@ function ClassicPreview() {
   );
 }
 
-// ── Unit SW-9: a tabletop receiver — keys, knobs, one dot-matrix window ───────
 function UnitPreview() {
   return (
     <div className="flex h-full w-full flex-col gap-1.5 bg-field p-2.5">
@@ -84,7 +79,6 @@ function UnitPreview() {
         </span>
       </div>
       <div className="flex flex-1 gap-1.5">
-        {/* key column + knobs */}
         <div className="flex w-2/5 flex-col gap-1">
           <div className="grid flex-1 grid-cols-2 gap-1">
             <span className="rounded-[2px] bg-ink" />
@@ -101,7 +95,6 @@ function UnitPreview() {
             </span>
           </div>
         </div>
-        {/* the dot-matrix display window */}
         <div className="flex flex-1 flex-col gap-1 bg-ink p-1.5">
           <span className="h-[5px] w-3/4 bg-bg/90" />
           <span className="h-[3px] w-1/2 bg-bg/60" />
@@ -117,7 +110,6 @@ function UnitPreview() {
   );
 }
 
-// ── Drift: ninety percent weather, ten percent type ───────────────────────────
 function DriftPreview() {
   return (
     <div className="relative h-full w-full overflow-hidden bg-linear-to-b from-muted to-ink">
@@ -131,24 +123,23 @@ function DriftPreview() {
   );
 }
 
-// ── Subamp: compact modular rack — deck · booth · log stacked like it's 1998 ──
 function SubampPreview() {
   return (
-    <div className="flex h-full w-full flex-col gap-1 p-2.5">
-      <div className="flex items-center gap-1 border border-ink bg-ink px-1 py-[3px]">
+    <div className="flex h-full w-full flex-col gap-1 bg-[color-mix(in_oklab,var(--bg)_88%,var(--ink))] p-2.5">
+      <div className="flex items-center gap-1 border border-ink bg-linear-to-r from-accent-soft to-field px-1 py-[3px]">
         <span className="size-[3px] bg-vermilion" />
-        <span className="h-px flex-1 bg-bg/60" />
-        <span className="h-[3px] w-1 bg-bg/60" />
+        <span className="h-px flex-1 bg-ink/40" />
+        <span className="h-[3px] w-1 bg-ink/40" />
       </div>
-      <div className="flex items-center gap-1.5 border border-ink px-1.5 py-1">
+      <div className="flex items-center gap-1.5 border border-ink bg-bg px-1.5 py-1">
         <span className="font-mono text-[7px] leading-none font-bold text-vermilion">128</span>
         <EqRow className="h-4 flex-1 justify-end" />
       </div>
-      <div className="flex items-center gap-1.5 border border-ink px-1.5 py-1">
+      <div className="flex items-center gap-1.5 border border-ink bg-bg px-1.5 py-1">
         <span className="size-2 rounded-full border border-ink" />
         <span className="h-px flex-1 bg-muted" />
       </div>
-      <div className="grid flex-1 content-start gap-[3px] border border-ink p-1.5">
+      <div className="grid flex-1 content-start gap-[3px] border border-ink bg-bg p-1.5">
         <span className="h-[3px] w-full bg-ink" />
         <span className="h-[3px] w-4/5 bg-muted" />
         <span className="h-[3px] w-3/5 bg-muted" />
@@ -157,7 +148,6 @@ function SubampPreview() {
   );
 }
 
-// ── TTY: the station as a live process — panes and a status line ──────────────
 function TtyPreview() {
   return (
     <div className="m-2.5 flex h-[calc(100%-1.25rem)] flex-col border border-ink bg-field">
@@ -193,11 +183,9 @@ function TtyPreview() {
   );
 }
 
-// ── Platter: a reference turntable — the record spins, the arm tracks ─────────
 function PlatterPreview() {
   return (
     <div className="flex h-full w-full items-center gap-2 bg-field p-2.5">
-      {/* plinth + spinning record + diagonal tonearm */}
       <div className="relative grid aspect-square h-full place-items-center border border-ink bg-bg">
         <span className={cn('relative grid aspect-square h-[74%] place-items-center rounded-full border border-ink bg-ink', REEL)}>
           <span className="grid aspect-square h-[42%] place-items-center rounded-full border border-bg/70 bg-field">
@@ -207,8 +195,7 @@ function PlatterPreview() {
         <span className="absolute top-1 right-1 h-[2px] w-[58%] origin-right -rotate-[28deg] bg-ink" />
         <span className="absolute top-1 right-1 size-[5px] translate-x-1/2 -translate-y-1/2 rounded-full border border-ink bg-field" />
       </div>
-      {/* metadata stub */}
-      <div className="grid flex-1 content-start gap-1.5">
+      <div className="grid flex-1 content-start gap-1.5 border border-ink bg-surface p-1.5">
         <span className="h-[3px] w-1/3 bg-vermilion" />
         <span className="h-[4px] w-4/5 bg-ink" />
         <span className="h-[3px] w-1/2 bg-muted" />

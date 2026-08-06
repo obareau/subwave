@@ -1,10 +1,7 @@
 // Pure derivations for the schedule page ("The Rundown", /admin/shows/schedule).
-//
-// The persisted model stays the controller's 7×24 grid — `schedule[day][hour]`
-// holds a show id or null (day keys are JS getDay: 0=Sun..6=Sat). Everything
-// this screen renders — board cards, listing rows, the "orders" stack, counts,
-// gap warnings, airtime bars — is derived from that one grid through the block
-// helpers here, so the board and the listing can never disagree.
+// `schedule[day][hour]` holds a show id or null (day keys are JS getDay:
+// 0=Sun..6=Sat). Everything the screen renders derives from that one grid through
+// the block helpers here, so the board and the listing can never disagree.
 
 export interface Schedule {
   [day: number]: (string | null)[];
@@ -50,12 +47,14 @@ export const DAYS: { key: number; label: string; name: string }[] = [
 
 export const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
-// Same palette (and the same index-keyed assignment) as ShowsPanel, so a
-// show's colour matches between the definitions page and this one.
+// Same palette and index-keyed assignment as ShowsPanel, so a show's colour
+// matches between the two pages. Each hex is blended 25% toward the theme paper so
+// the twelve hues sit in-palette on every theme; consumers only ever use these as
+// CSS color values, so color-mix is safe.
 export const SHOW_COLORS = [
   '#c5302a', '#2f6f4f', '#3a5fa8', '#9a5b1f', '#6b4a8a', '#1f7a7a',
   '#a83a6b', '#4a6b1f', '#8a6a1f', '#3a3a8a', '#7a2f5a', '#2f7a3a',
-];
+].map((hex) => `color-mix(in oklab, ${hex} 75%, var(--bg))`);
 
 export function emptyWeek(): Schedule {
   const w: Schedule = {};
@@ -71,10 +70,6 @@ export function cloneWeek(s: Schedule): Schedule {
 
 export function dayName(day: number): string {
   return DAYS.find(d => d.key === day)?.name ?? '';
-}
-
-export function dayLabel(day: number): string {
-  return DAYS.find(d => d.key === day)?.label ?? '';
 }
 
 /** '06' — board-card style hour. 24 stays '24' so a day-end reads as a close. */
@@ -138,17 +133,15 @@ export function setRange(
   return week;
 }
 
-/** Fill a whole day with `showId` — or clear it when the day already runs
- *  nothing but that show, so a second click undoes the first. The bulk gesture
- *  behind a click on a day header. */
+/** Fills the day with `showId`, or clears it when the day already runs nothing
+ *  but that show, so a second click undoes the first. */
 export function fillDayToggle(schedule: Schedule, day: number, showId: string): Schedule {
   const cells = schedule[day] ?? [];
   const allSet = cells.length === 24 && cells.every(c => c === showId);
   return setRange(schedule, [day], 0, 24, allSet ? null : showId);
 }
 
-/** Fill one hour across all seven days — same toggle-off rule as `fillDayToggle`.
- *  The bulk gesture behind a click on an hour in the gutter. */
+/** One hour across all seven days, same toggle-off rule as `fillDayToggle`. */
 export function fillHourToggle(schedule: Schedule, hour: number, showId: string): Schedule {
   const days = DAYS.map(d => d.key);
   const allSet = days.every(d => schedule[d]?.[hour] === showId);
@@ -168,11 +161,9 @@ export function resizedRun(
   return { start: block.start, end: Math.max(Math.min(hour, 24), block.start + 1) };
 }
 
-/** Move one run's boundaries to [start, end) — the write behind a resize drag.
- *  The hours it gives up fall silent; the hours it takes over are written to
- *  its show over whatever was there, the same overwrite every other write on
- *  this screen performs. Clearing first is what makes a shrink work at all,
- *  and it must happen before the write or a grow would erase its own gain. */
+/** Moves one run's boundaries to [start, end): the hours it gives up fall silent,
+ *  the hours it takes over are overwritten. Clearing first is what makes a shrink
+ *  work, and it must precede the write or a grow would erase its own gain. */
 export function resizeBlock(
   schedule: Schedule,
   block: Block,

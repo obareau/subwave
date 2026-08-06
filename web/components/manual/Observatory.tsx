@@ -37,8 +37,8 @@ export default function Observatory() {
         <p>
           The left rail recolours and filters the whole map live. Recolour by <strong>energy</strong>,{' '}
           <strong>tag confidence</strong>, <strong>tag source</strong>, <strong>acoustic analysis</strong>, or
-          the acoustic signals the DJ now hears — <strong>loudness</strong>, <strong>pace</strong>, and{' '}
-          <strong>voice</strong> (vocal vs instrumental); filter by scene, mood, energy band, or tag source, or
+          the acoustic signals the DJ now hears: <strong>loudness</strong>, <strong>pace</strong>, and{' '}
+          <strong>voice</strong> (vocal vs instrumental). Filter by scene, mood, energy band, or tag source, or
           search by title, artist, or album. The panels on the right keep a running read of whatever is in view:
           the energy split, the mood field, tempo and loudness histograms, a Camelot key wheel, and the
           major/minor and vocal/instrumental balance.
@@ -58,7 +58,7 @@ export default function Observatory() {
         <p>
           Selecting a track opens its full record: BPM, musical key, energy, length, mood and last.fm tags,
           tag confidence, loudness, and the acoustic-analysis score. A <strong>song-shape</strong> timeline
-          charts the track end to end — its pace curve, structural sections, where the intro ends, the vocal
+          charts the track end to end: its pace curve, structural sections, where the intro ends, the vocal
           passages, and how the key moves over time. Below that sit the track's learned embedding fingerprints,
           the text vector and (when analysed) the audio vector, drawn as heatmaps.
         </p>

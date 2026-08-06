@@ -1,13 +1,8 @@
 'use client';
 
-// Shows roster as a dense table — the "list" half of the cards/list toggle on
-// /admin/shows. Same contract as the slate cards: the row opens the inline
-// editor, and the spine carries the same per-show colour the weekly grid
-// paints with.
-//
-// It takes a prepared view-model rather than the panel's `Show` type: the row
-// is a dumb renderer, and ShowsPanel stays the only place that knows how a
-// show's facets, airtime and validity are derived.
+// The "list" half of the cards/list toggle on /admin/shows. Takes a prepared
+// view-model rather than the panel's `Show` type, so ShowsPanel stays the only
+// place that knows how a show's facets, airtime and validity are derived.
 
 import { useMemo } from 'react';
 import { Pill, MetaChip } from '../ui';
@@ -78,13 +73,13 @@ export function ShowsTable({ rows, onEdit }: ShowsTableProps) {
     {
       key: 'name',
       label: 'Show',
-      // Below md the Host column is hidden, so nothing carries the
-      // `w-full max-w-0` pair that lets a cell truncate instead of widening
-      // the table — the show name takes that role until Host reappears.
+      // Below md the Host column is hidden, so nothing else carries the
+      // `w-full max-w-0` pair that lets a cell truncate instead of widening the
+      // table; the show name takes that role until Host reappears.
       className: 'whitespace-nowrap w-full max-w-0 md:w-auto md:max-w-none',
       render: (r) => (
-        // No wrapping anywhere in the row: a chip or pill dropping to a second
-        // line would inflate the row height and undo the point of the list.
+        // A chip or pill dropping to a second line would inflate the row height and
+        // undo the point of the list.
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate font-extrabold text-ink">{r.name || 'untitled'}</span>
           {r.programme && (

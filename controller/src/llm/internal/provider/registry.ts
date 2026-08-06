@@ -100,7 +100,13 @@ export function noThinkFetch(url: any, init: any, baseFetch: any = fetch) {
 //     ONLY path that carries it to the agent/object calls, which never pass
 //     repeat_penalty through providerOptions. `repeat_penalty` is llama.cpp's
 //     param name (vLLM's is `repetition_penalty`); to opt out, set
-//     llm.repeatPenalty to 1.0. We never clobber a value already on the body.
+//     llm.repeatPenalty to 1.0. We never clobber a value already on the body —
+//     an inert guard in practice, and NOT the reason a configured penalty can
+//     go missing: @ai-sdk/openai has no repeat_penalty field at all, and its
+//     providerOptions schema drops one you try to pass, so the key is only ever
+//     on the body if we put it there. #1327 was reported as this guard firing
+//     against an SDK-supplied 1.0 and was actually settings.load() dropping the
+//     field; check `settings.get().llm.repeatPenalty` before touching the guard.
 //   • reasoning off → enable_thinking:false PLUS reasoning_format PLUS an
 //     OpenRouter-style `reasoning:{enabled:false}` block (see
 //     reasoningMandatoryModel below for the effort:'minimal' exception).
@@ -289,7 +295,12 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
   const caps = capabilitiesFor(cfg.provider);
   const constructionNoThink = opts.forceNoThink === true && caps.reasoningConstructionOnly === true;
   const bodyNoThink = opts.forceNoThink === true && caps.samplingViaBody === true;
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}`;
+  // repeat_penalty is captured ONCE when openAICompatibleFetch builds the
+  // wrapper, so — like num_ctx — it has to key the cache: without it, an
+  // operator editing Settings → Repeat penalty keeps hitting the instance built
+  // with the old value and the change reads as "ignored" until the controller
+  // restarts. Settings otherwise apply live on this path (#1327).
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;

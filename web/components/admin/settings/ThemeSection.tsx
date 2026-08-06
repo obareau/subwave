@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../../lib/notify';
 import { applyTheme, cacheTheme, resolveFont } from '../../../lib/theme';
+import { useThemeSwitcher } from '../../ThemeProvider';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { Modal } from '../../ui/modal';
 import { Input } from '../../ui/input';
@@ -39,26 +40,21 @@ interface ThemeDef {
   builtin?: boolean;
 }
 
-// SWATCH_KEYS (paper / ink / accent / overlay — reads the palette at a glance,
-// overlay doubles as the hover wash) + THEME_TOKENS come from the generated
-// registry mirror now, so this form, the controller validator and the no-flash
-// bootstrap can't drift.
+// SWATCH_KEYS + THEME_TOKENS come from the generated registry mirror, so this
+// form, the controller validator and the no-flash bootstrap can't drift.
 
-// Each swatch is its own ref because useDynamicStyle wants a single element
-// per call. The arbitrary token values can't go through Tailwind utilities
-// (issue #50 bans the inline `style` prop), so we route them through the
-// DOM-API hook instead.
+// One ref per swatch because useDynamicStyle takes a single element. Arbitrary
+// token values can't go through Tailwind utilities and issue #50 bans the inline
+// `style` prop, hence the DOM-API hook.
 function Swatch({ color }: { color?: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   useDynamicStyle(ref, { background: color || 'transparent' });
   return <span ref={ref} className="h-7 w-7" aria-hidden="true" />;
 }
 
-// Live preview — applies the in-progress token map (+ resolved display font) to
-// a scoped subtree so the operator sees the palette they're building without
-// touching the live page theme. Tokens are set via the DOM API (ref), not the
-// inline style prop (issue #50); omitted tokens derive from the base palette via
-// the globals.css :root fallbacks, exactly like the real system.
+// Applies the in-progress tokens to a scoped subtree, never the live page theme.
+// Set via the DOM API, not the inline style prop (issue #50); omitted tokens
+// derive from the globals.css :root fallbacks, exactly like the real system.
 function ThemePreview({ tokens, mode }: { tokens: Record<string, string>; mode: 'light' | 'dark' }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -92,10 +88,8 @@ function ThemePreview({ tokens, mode }: { tokens: Record<string, string>; mode: 
   );
 }
 
-// Create or edit a custom theme — AI-drafted from a description or built by hand,
-// saved as state/themes/<id>.json via POST /themes. Passing an existing theme's
-// id overwrites that file (edit); omitting it derives a new id from the name
-// (create). Tokens are editable and previewed live before save.
+// Saved as state/themes/<id>.json via POST /themes. Passing an existing theme's id
+// overwrites that file (edit); omitting it derives a new id from the name (create).
 function ThemeEditorModal({
   open,
   onOpenChange,
@@ -117,8 +111,7 @@ function ThemeEditorModal({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Seed the form each time the modal opens: from the theme being edited, or
-  // blank for a fresh create. Keyed on `open` so re-opening always starts clean.
+  // Keyed on `open` so re-opening always starts clean.
   useEffect(() => {
     if (!open) return;
     setErr(null);
@@ -152,8 +145,7 @@ function ThemeEditorModal({
       // globals.css, and an empty value would fail the typed validator.
       const cleaned = Object.fromEntries(Object.entries(tokens).filter(([, v]) => v.trim() !== ''));
       const body: Record<string, unknown> = { name: name.trim(), description: description.trim(), mode, tokens: cleaned };
-      // Pass the id when editing so the same state/themes/<id>.json is overwritten
-      // even if the operator renamed it; omit it on create so a fresh id is derived.
+      // Keeps the same file even if the operator renamed the theme.
       if (isEdit && editing) body.id = editing.id;
       const r = await adminFetch('/themes', {
         method: 'POST',
@@ -259,7 +251,91 @@ function ThemeEditorModal({
   );
 }
 
+const NOTICE_CLASS =
+  'border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case';
+
+// Why the palette on screen isn't the one the station picker says is active.
+//
+// Three levels resolve a theme and each silently outranks the one below it:
+// this browser's own override (localStorage, set from the player's palette
+// menu) → the on-air show's themeId → the station default set right here. Save
+// a station theme while either of the upper two is in play and it applies, then
+// appears to revert seconds later when the next poll repaints — which is #1300
+// bug 12, reported as the setting not sticking.
+//
+// Nothing about the save failed, so this is a note rather than a warning, and
+// role="status" because it can appear in response to a save the operator just
+// made rather than at first paint. It renders only when a level above the
+// station default is actually winning; otherwise the picker's own "active" pill
+// already tells the whole story.
+//
+// Every input comes from ThemeProvider, which polls /themes every 30s and paints
+// from the same response. That is deliberate: which show is on air changes on
+// the clock, not on anything this page does, so a snapshot taken when the panel
+// mounted would go stale in both directions — silent through a show that starts
+// while the page is open (the exact flip this note exists to explain), and
+// lingering after one ends.
+function EffectiveThemeNotice({
+  activeSource,
+  active,
+  stationDefault,
+  activeShow,
+  themes,
+  overrideId,
+}: {
+  activeSource: 'show' | 'station' | null;
+  active: string | null;
+  stationDefault: string | null;
+  activeShow: { id: string; name: string; themeId: string } | null;
+  themes: ThemeDef[] | null;
+  overrideId: string | null;
+}) {
+  const nameOf = (id: string | null | undefined) =>
+    (id && themes?.find(t => t.id === id)?.name) || id || 'unknown';
+
+  // The browser override is checked first because it outranks the show, and it
+  // is the only level whose fix lives outside this page. Unlike the show below
+  // it, there's no "changes nothing visible" case to stay quiet about: the
+  // override outlives the save, so it will outrank whatever is picked next even
+  // when it currently happens to match the station default.
+  if (overrideId && themes?.some(t => t.id === overrideId)) {
+    return (
+      <div className={NOTICE_CLASS} role="status">
+        <b>This browser is pinned to “{nameOf(overrideId)}”.</b> You picked a
+        theme override for yourself from the player’s palette menu, so what you
+        see here is that, not the station theme — listeners are unaffected.
+        Clear the override in the player’s palette menu to follow the station
+        again.
+      </div>
+    );
+  }
+
+  if (activeSource !== 'show' || !activeShow) return null;
+  // A show pinning the same theme the station already defaults to changes
+  // nothing anyone can see — saying so would be noise.
+  if (active === stationDefault) return null;
+
+  return (
+    <div className={NOTICE_CLASS} role="status">
+      <b>
+        On air now: “{nameOf(active)}”, pinned by the show{' '}
+        {activeShow.name || activeShow.id}.
+      </b>{' '}
+      A show’s own theme outranks the station default for as long as it is on
+      air, so the theme you set below won’t be visible until the show ends. It
+      is saved either way. To change what’s showing right now, edit that show’s
+      theme override on the Shows page.
+    </div>
+  );
+}
+
 export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProps) {
+  // Which level decided the theme actually on screen. ThemeProvider is the one
+  // place that resolves all three — it owns the browser override (localStorage,
+  // never seen by the server) and it polls /themes for the other two, painting
+  // from the same response the provenance comes in. Reading it here instead of
+  // snapshotting a second fetch is what keeps the notice in step with the paint.
+  const themeCtx = useThemeSwitcher();
   const [themes, setThemes] = useState<ThemeDef[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -270,17 +346,17 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
   const activeId = data.values?.theme?.active;
   const PUBLIC_API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
 
-  // Skin = the player's full-screen layout (ui.skin); distinct from the theme,
-  // which is the palette. Both live in this section now. Save through the same
-  // settings flow — the player picks it up on its next /state poll.
+  // Skin = the player's full-screen layout (ui.skin); the theme is the palette. The
+  // player picks a change up on its next /state poll.
   const activeSkinId = SKINS.some(s => s.id === data.values?.ui?.skin)
     ? (data.values?.ui?.skin as string)
     : DEFAULT_SKIN_ID;
   const activeSkinName = SKINS.find(s => s.id === activeSkinId)?.name ?? 'Classic';
   const chooseSkin = (id: string) => { if (!busy) saveSettings({ ui: { skin: id } }); };
 
-  // Theme list is public — fetch through the unauthenticated /themes endpoint
-  // so a signed-out admin still sees swatches while signing in.
+  // Unauthenticated /themes, so a signed-out admin still sees swatches while
+  // signing in. This is the editing list (it carries `builtin`, which decides
+  // Edit/Remove); the provenance behind the notice comes from ThemeProvider.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -305,6 +381,9 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       const next = j.themes ?? [];
       setThemes(next);
+      // A file dropped in can make a show's previously-dead themeId resolve, so
+      // the answer to "who's winning" may have just changed too.
+      themeCtx?.refreshThemes();
       notify.ok(`reloaded, ${next.length} theme${next.length === 1 ? '' : 's'}`);
     } catch (e) {
       notify.err(`Refresh failed: ${errorMessage(e)}`);
@@ -315,16 +394,19 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
 
   const choose = async (theme: ThemeDef) => {
     if (theme.id === activeId || busy) return;
-    // Save through the existing settings flow. ThemeProvider's 30 s poll
-    // would pick this up eventually, but the admin viewing this page wants
-    // the swatch swap to feel instant — apply locally on click.
+    // ThemeProvider's 30s poll would pick this up eventually; apply locally so the
+    // swatch swap is instant.
     applyTheme(theme);
     cacheTheme(theme);
     await saveSettings({ theme: { active: theme.id } });
+    // Re-read provenance now rather than up to 30s from now: if a show is
+    // pinning its own theme, this save has just set a default that won't be
+    // visible until the show ends, and the operator should learn that here — not
+    // from the palette flipping back on ThemeProvider's next poll.
+    themeCtx?.refreshThemes();
   };
 
-  // When an edit saves, refresh the list and — if the edited theme is the one
-  // on air — re-apply it so the admin page updates now (the poll would too).
+  // Re-apply when the edited theme is the one on air, so the admin page updates now.
   const onSaved = (next: ThemeDef[], savedId?: string) => {
     setThemes(next);
     if (savedId && savedId === activeId) {
@@ -333,9 +415,8 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
     }
   };
 
-  // Delete a user theme's state/themes/<id>.json. If it was the active theme,
-  // fall back to the first remaining one (built-ins lead the list) through the
-  // normal selection flow so nothing points at a now-missing id.
+  // Deleting the active theme falls back to the first remaining one (built-ins lead
+  // the list), so nothing points at a now-missing id.
   const remove = async (theme: ThemeDef) => {
     try {
       const r = await adminFetch(`/themes/${encodeURIComponent(theme.id)}`, { method: 'DELETE' });
@@ -343,6 +424,9 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       const next = j.themes ?? [];
       setThemes(next);
+      // Deleting the theme a show pinned makes that pin unresolvable, so the
+      // station default silently takes over — provenance just changed.
+      themeCtx?.refreshThemes();
       notify.ok(`removed "${theme.name}"`);
       if (theme.id === activeId && next[0]) await choose(next[0]);
     } catch (e) {
@@ -375,7 +459,6 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
         </div>
       </Card>
 
-      {/* Themes — the palette picker merged with create / edit / refresh. */}
       <Card title="Themes" sub="the station-wide palette">
         <div className="grid gap-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -397,16 +480,24 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
               Couldn’t load themes: {error}
             </div>
           )}
+          <EffectiveThemeNotice
+            activeSource={themeCtx?.activeSource ?? null}
+            active={themeCtx?.stationActiveId ?? null}
+            stationDefault={themeCtx?.stationDefault ?? null}
+            activeShow={themeCtx?.activeShow ?? null}
+            themes={themes}
+            overrideId={themeCtx?.overrideId ?? null}
+          />
+
           {!themes && !error && <SkeletonRows rows={4} />}
           {themes && (
             <div className="grid gap-2">
               {themes.map(t => {
                 const isActive = t.id === activeId;
                 return (
-                  // basis-full: on a phone the swatch strip + name leaves no
-                  // room beside Edit/Remove, so the picker takes the whole row
-                  // and the actions wrap under it. `sm:basis-0` + `grow` is
-                  // byte-for-byte the old `flex-1`.
+                  // basis-full: on a phone the swatch strip + name leaves no room
+                  // beside Edit/Remove, so the picker takes the whole row and the
+                  // actions wrap under it.
                   <div key={t.id} className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                     <button
                       type="button"
@@ -415,7 +506,7 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
                       className={cn(
                         'flex min-w-0 grow basis-full items-center gap-3 border p-3 text-left disabled:cursor-not-allowed disabled:opacity-60 sm:basis-0',
                         isActive
-                          ? 'border-vermilion bg-[var(--ink-softer)]'
+                          ? 'border-vermilion bg-accent-soft'
                           : 'border-ink bg-bg hover:bg-[var(--overlay)]',
                       )}
                     >

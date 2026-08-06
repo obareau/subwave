@@ -297,15 +297,14 @@ export default function Unraid() {
         <h2>&ldquo;Sounds-like&rdquo; and the heavy image.</h2>
         <p>
           Applies to both options. Tempo, key, intro detection, and loudness run
-          out of the box, the default image analyses them in the background, so
-          just run <strong>admin &rarr; Library &rarr; Rescan</strong> (tick{' '}
+          out of the box; the default image analyses them in the background. Run{' '}
+          <strong>admin &rarr; Library &rarr; Rescan</strong> (tick{' '}
           <em>re-analyse</em>) and let it churn. The two <strong>heavy</strong>{' '}
           dimensions, <strong>&ldquo;sounds-like&rdquo; audio embeddings</strong>{' '}
           (CLAP) and <strong>vocal ranges</strong> (Demucs), need a CPU-torch
           stack that isn&apos;t in the lean image, so they&apos;re a separate{' '}
           <code className="bs-code-inline">-heavy</code> build (~1.9 GB,{' '}
-          <strong>amd64-only</strong>). Only switch if you specifically want
-          them.
+          <strong>amd64-only</strong>). Only switch if you want them.
         </p>
         <div className="bs-callout">
           <div className="bs-eyebrow">ONE-CLICK: POINT AT THE HEAVY TAG</div>
@@ -334,7 +333,7 @@ export default function Unraid() {
             </li>
           </ul>
           <p>
-            Your state is untouched, config, personas, library tags, and the
+            Your state is untouched: config, personas, library tags, and the
             cached model weights all live under the appdata volume, so the swap
             is safe and reversible (edit the field back to{' '}
             <code className="bs-code-inline">subwave-aio</code> to return). First
@@ -345,9 +344,9 @@ export default function Unraid() {
         <div className="bs-callout">
           <div className="bs-eyebrow">GOT AN NVIDIA CARD? THE CUDA TAG</div>
           <p>
-            There&apos;s a GPU build of the one-click image too,{' '}
-            <code className="bs-code-inline">subwave-aio-cuda</code>, the same
-            heavy features with CLAP and Demucs running on the card instead of
+            There&apos;s a GPU build of the one-click image too.{' '}
+            <code className="bs-code-inline">subwave-aio-cuda</code> has the same
+            heavy features, with CLAP and Demucs running on the card instead of
             your CPU. Same Edit flow, two extra fields:
           </p>
           <ul className="bs-list">
@@ -380,8 +379,8 @@ export default function Unraid() {
             </li>
           </ul>
           <p>
-            No second container, no compose overlay, that&apos;s the split
-            stack&apos;s route. If the card ends up invisible the analyzer logs a
+            There&apos;s no second container and no compose overlay to add; those
+            belong to the split stack. If the card ends up invisible the analyzer logs a
             warning and carries on using the CPU, so a half-finished setup
             degrades rather than taking the station down. Fair warning on size:
             the CUDA image is <strong>~4 GB compressed</strong> against{' '}
@@ -412,8 +411,8 @@ export default function Unraid() {
         <p className="bs-eyebrow">BEHIND YOUR OWN PROXY</p>
         <h2>Putting it behind your reverse proxy.</h2>
         <p>
-          Most Unraid boxes already run a reverse proxy, NPM / SWAG / Traefik /
-          Caddy, for TLS and a tidy hostname. Putting SUB/WAVE behind yours is
+          Most Unraid boxes already run a reverse proxy (NPM, SWAG, Traefik or
+          Caddy) for TLS and a tidy hostname. Putting SUB/WAVE behind yours is
           the common path, and it&apos;s a <em>single upstream</em>, not a pile
           of per-path rules. This applies to both options above.
         </p>
@@ -497,9 +496,9 @@ export default function Unraid() {
             <code className="bs-code-inline">/api</code> +{' '}
             <code className="bs-code-inline">/stream.mp3</code>, so your proxy
             then has to replicate the whole route table on one hostname.
-            That&apos;s more proxy config, not less, and only worth it if you
-            specifically want the bundled Caddy out of the path. For most people
-            the single-upstream setup above is the easier win.
+            That&apos;s more proxy config, not less, and only worth it if you want
+            the bundled Caddy out of the path. For most people the single-upstream
+            setup above is the easier win.
           </p>
         </div>
       </section>
@@ -526,7 +525,7 @@ export default function Unraid() {
             </li>
             <li>
               <strong>Backups:</strong> everything lives under the appdata path,
-              settings, library cache, archives, and voices included. Back up{' '}
+              including settings, library cache, archives, and voices. Back up{' '}
               <code className="bs-code-inline">/mnt/user/appdata/subwave</code>.
             </li>
           </ul>

@@ -115,11 +115,16 @@ export function trimLinkToIntro(text: string | null | undefined, song: any): str
 // `linkPrev` is the track the link back-announces (the one on-air when the pick
 // was made); the queue uses it to drop the link if a request jumps ahead and it
 // would otherwise air a stale "that was X" over the wrong transition.
+// `linkClockAt` is the air moment the link was written to speak, present only
+// when a clock was offered at all — the queue drops the line if the real seam
+// lands too far from it (#1314). Separate from the effects bag on purpose: it
+// is about the LINK, not the transition.
 export async function enqueuePick(
   queue, song, reason, source,
   link: string | null = null,
   linkPrev: any = null,
   { sweep = false, washout = false, blend = false, dissolve = false, chop = false, loop = false }: { sweep?: boolean; washout?: boolean; blend?: boolean; dissolve?: boolean; chop?: boolean; loop?: boolean } = {},
+  { linkClockAt = null }: { linkClockAt?: Date | null } = {},
 ): Promise<number> {
   // Single chokepoint for the intro budget: every pick path (agent, pool, any
   // future producer) funnels its link through here, so enforcement can't be
@@ -156,6 +161,7 @@ export async function enqueuePick(
     introPersona: session.onAirPersona(),
     aiPicked: true,
     linkPrev,
+    linkClockAt,
   });
   if (pos === -2) {
     // Never-play blocklist refused the pick — library-db-sourced candidates

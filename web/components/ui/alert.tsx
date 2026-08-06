@@ -2,9 +2,7 @@
 
 import type { ReactNode } from 'react';
 
-/* V3 Alert — sharp, bordered inline callout for page-level messages (controller
-   errors, notices). `tone` is "error" (vermilion) or "info" (ink). Replaces the
-   ad-hoc bordered <div>s that each admin panel used to hand-roll. */
+/* Bordered inline callout for page-level messages. */
 export interface V3AlertProps {
   tone?: 'error' | 'info';
   title?: ReactNode;
@@ -14,9 +12,9 @@ export interface V3AlertProps {
 export function V3Alert({ tone = 'info', title, children }: V3AlertProps) {
   const toneClass =
     tone === 'error'
-      ? 'border-[#c5302a] text-[#c5302a]'
+      ? 'border-destructive text-destructive'
       : 'border-ink text-ink';
-  const titleBorderClass = tone === 'error' ? 'border-[#c5302a]' : 'border-ink';
+  const titleBorderClass = tone === 'error' ? 'border-destructive' : 'border-ink';
   return (
     <div role="alert" className={`border ${toneClass}`}>
       {title && (

@@ -26,7 +26,10 @@ import {
   SCRIPT_LENGTHS,
   SHOW_MOODS,
   SHOW_ENERGY,
+  SHOW_FILTER_VALUES_MAX,
+  SHOW_TOPIC_MAX,
   SOUL_MAX,
+  coerceShowVocals,
   type EraWindow,
 } from '../settings.js';
 
@@ -79,6 +82,8 @@ export interface CommunityShow {
   genres: string[];
   eras: EraWindow[];
   energies: string[];
+  /** '' = no constraint. See SHOW_VOCALS. */
+  vocals: string;
   filtersStrict: boolean;
   banter: boolean;
   programme: boolean;
@@ -223,11 +228,17 @@ function normalizeShow(raw: any): CommunityShow | null {
   return {
     slug,
     name,
-    topic: str(raw?.topic).slice(0, 1000),
-    moods: strList(raw?.moods, 6).filter(m => (SHOW_MOODS as string[]).includes(m)),
-    genres: strList(raw?.genres, 6),
+    topic: str(raw?.topic).slice(0, SHOW_TOPIC_MAX),
+    // Same cap the show validator enforces — a hardcoded 6 here would silently
+    // truncate a catalog show that legitimately pins more (the cap is 15 now).
+    moods: strList(raw?.moods, SHOW_FILTER_VALUES_MAX).filter(m => (SHOW_MOODS as string[]).includes(m)),
+    genres: strList(raw?.genres, SHOW_FILTER_VALUES_MAX),
     eras: normalizeEras(raw?.eras),
-    energies: strList(raw?.energies, 6).filter(e => (SHOW_ENERGY as string[]).includes(e)),
+    energies: strList(raw?.energies, SHOW_FILTER_VALUES_MAX).filter(e => (SHOW_ENERGY as string[]).includes(e)),
+    // Scalar, not a list — instrumental and vocal are mutually exclusive. Reuses
+    // the settings coercer so a catalog typo lands on '' (no constraint) here
+    // exactly as it does on a hand-edited show.
+    vocals: coerceShowVocals(raw),
     filtersStrict: raw?.filtersStrict === true,
     banter: raw?.banter === true,
     programme: raw?.programme === true,
@@ -298,10 +309,6 @@ export async function communityPersonas(): Promise<CommunityPersona[]> {
 export async function communityShows(): Promise<CommunityShow[]> {
   return (await getCatalog()).shows;
 }
-export async function communityStations(): Promise<CommunityStation[]> {
-  return (await getCatalog()).stations;
-}
-
 export async function readCommunitySkill(slug: string): Promise<CommunitySkill | null> {
   if (!SLUG_RE.test(slug)) return null;
   return (await communitySkills()).find(s => s.slug === slug) ?? null;

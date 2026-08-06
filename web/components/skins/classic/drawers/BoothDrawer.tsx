@@ -36,21 +36,16 @@ export interface BoothDrawerProps {
   locale?: StationLocale;
 }
 
-// `items` is the live session's `messages` array — turns of
-// { t, role, kind, text, meta }, oldest first. Shown newest first.
-//
-// New turns slide in from above with a 140 ms `y: -8 → 0` fade — a teletype
-// line feeding in. `layout` on each row pushes existing rows down smoothly
-// when new ones insert. `initial={false}` on the AnimatePresence parent means
-// the first render isn't animated (we don't want a 30-row enter animation on
-// drawer open).
+// `layout` on each row pushes existing rows down when new ones insert.
+// `initial={false}` on the AnimatePresence parent keeps drawer-open from
+// animating all 30 rows in at once.
 export default function BoothDrawer({ items, timezone, locale }: BoothDrawerProps) {
   const [filter, setFilter] = useState<FilterId>('all');
 
   const filtered = useMemo<SessionTurn[]>(() => {
     if (!items?.length) return [];
-    // System turns (session cues, pick prompts) are operator-facing — never
-    // shown on the player. Only voice / dj / track turns reach listeners.
+    // System turns (session cues, pick prompts) are operator-facing and never
+    // reach listeners.
     const ordered = [...items]
       .filter((turn) => turnClass(turn) !== 'system')
       .reverse();

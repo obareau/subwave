@@ -277,7 +277,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
     // why. Report the real numbers and name the two things that cause it — a
     // backfill that hasn't run yet, or a budget too small to hold the library.
     //
-    // Coverage is counted from DISK (stemCache.cachedTrackCount), not the
+    // Coverage is counted from DISK (stemCache.usage().dirs), not the
     // stems_at stamps: stamps record attempts and keep growing as new tracks
     // analyse while the sweep evicts old dirs, so the stamp count drifts
     // optimistic over time and would eventually mute this warning on exactly
@@ -290,11 +290,27 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
     // ISN'T running — without the guard, requireDb() would throw and safe()
     // would replace this whole section with a spurious "check failed".
     if (wantStems && analyzer.vocalActivityAvailable() !== false && db.isOpen()) {
-      const cached = await stemCache.cachedTrackCount();
+      const use = await stemCache.usage();
+      const cached = use.dirs;
       const attempted = db.stemsCachedCount();
       const total = db.trackCount();
       const budgetGb = Number(s?.audio?.stemCacheGb) || 15;
-      const holds = Math.floor((budgetGb * 1024 ** 3) / stemCache.APPROX_TRACK_BYTES);
+      const budgetBytes = budgetGb * 1024 ** 3;
+      // Sized off the cache's own measured per-track average once it has one
+      // — the fixed 25 MB guess ran ~2x pessimistic in the field (#1257).
+      const holds = Math.floor(budgetBytes / use.estTrackBytes);
+      // A cache sitting meaningfully over budget means the hourly LRU sweep
+      // isn't evicting (#1257: 674 GB standing against a 500 GB budget, with
+      // nothing anywhere saying so). Margin allows the normal write-then-sweep
+      // overshoot between hourly sweeps without flapping.
+      if (use.bytes > budgetBytes + Math.max(budgetBytes * 0.05, 1024 ** 3)) {
+        out.push({
+          label: 'stem transitions',
+          status: 'warn',
+          detail: `the stem cache holds ${(use.bytes / 1024 ** 3).toFixed(0)} GB against a ${budgetGb} GB budget`,
+          hint: 'The hourly sweep should keep the cache at its budget, so evictions are failing. Check that the controller container can delete under state/stems (it removes what the analyzer wrote — a relocated stems mount with different ownership is the usual cause), and the booth log for "Stem cache" lines.',
+        });
+      }
       if (total > 0 && cached < total / 2) {
         out.push({
           label: 'stem transitions',

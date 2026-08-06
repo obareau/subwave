@@ -10,21 +10,25 @@ interface NavidromeStatus {
   url?: string;
 }
 
-// Always-on connectivity banner. Polls the live-config Navidrome ping (cached
-// server-side) every 30s and, when it fails, warns on every admin page that the
-// DJ has no music source. Uses the same ping the DJ Doc reads, so the two never
-// disagree. Renders nothing until the first failing result arrives — a healthy
-// or not-yet-known station shows no chrome.
+// Polls the same Navidrome ping the DJ Doc reads, so the two never disagree.
+// Renders nothing until a failing result arrives.
 export default function NavidromeBanner({
   adminFetch,
+  onStatus,
 }: {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  // Lets the shell suppress the broader starve banner while this more specific
+  // one is up — a Navidrome outage raises both, and two stacked red bars
+  // saying overlapping things is worse than one.
+  onStatus?: (ok: boolean) => void;
 }) {
   const [status, setStatus] = useState<NavidromeStatus | null>(null);
   // adminFetch's identity changes as auth state ticks; hold the latest in a ref
   // so the poll interval mounts once instead of tearing down every render.
   const fetchRef = useRef(adminFetch);
   fetchRef.current = adminFetch;
+  const onStatusRef = useRef(onStatus);
+  onStatusRef.current = onStatus;
 
   useEffect(() => {
     let cancelled = false;
@@ -33,7 +37,10 @@ export default function NavidromeBanner({
         const r = await fetchRef.current('/doctor/navidrome');
         if (!r.ok) return; // 401 / 5xx — don't flip the banner on an auth blip
         const j = (await r.json()) as NavidromeStatus;
-        if (!cancelled) setStatus(j);
+        if (!cancelled) {
+          setStatus(j);
+          onStatusRef.current?.(j.ok);
+        }
       } catch {
         // Controller unreachable — leave the last known state rather than
         // flapping; a dead controller has its own, louder failure modes.

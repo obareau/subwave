@@ -11,9 +11,8 @@ export const metadata: Metadata = {
 };
 
 export default async function AdminLayout({ children }: { children: ReactNode }) {
-  // Read the sidebar collapse state server-side so the rail renders in the
-  // right state on first paint (no hydration flash). The Sidebar component
-  // writes this cookie whenever the operator toggles it.
+  // Read server-side so the rail renders in the right state on first paint (no
+  // hydration flash); the Sidebar component writes this cookie on toggle.
   const cookieStore = await cookies();
   const defaultOpen = cookieStore.get('sidebar_state')?.value !== 'false';
   return <AdminShell defaultOpen={defaultOpen}>{children}</AdminShell>;

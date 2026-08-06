@@ -52,7 +52,7 @@ function Plate({
       <span
         className={cn(
           'block aspect-[16/10] overflow-hidden border border-ink bg-overlay',
-          'shadow-[2px_2px_0_0_var(--ink)] transition-transform duration-200',
+          'transition-transform duration-200',
           'group-hover:-translate-y-0.5 group-focus-visible:-translate-y-0.5',
         )}
       >

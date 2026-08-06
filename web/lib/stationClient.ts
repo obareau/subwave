@@ -2,13 +2,13 @@
 
 // The one place player code talks to a controller. Every fetch and every
 // controller-relative URL (covers, persona avatars) is built here from a
-// StationOrigin, so pointing the player at another station is a matter of
-// swapping the origin (see stationOrigin.ts) — no call site hardcodes a path.
+// StationOrigin, so pointing the player at another station means swapping the
+// origin (stationOrigin.ts) — no call site hardcodes a path.
 //
-// Response handling mirrors what each call site did before extraction:
-// feed endpoints parse JSON without an ok-check, /schedule and /themes throw
-// on non-OK, /request/:id maps a 404 to status 'unknown', and the beacon is
-// fire-and-forget. Keep it that way — this module is plumbing, not policy.
+// Response handling is deliberately per-endpoint: feed endpoints parse JSON
+// without an ok-check, /schedule and /themes throw on non-OK, /request/:id maps
+// 404 to status 'unknown', the beacon is fire-and-forget. Keep it that way;
+// this module is plumbing, not policy.
 
 import { useMemo } from 'react';
 import {
@@ -25,9 +25,15 @@ import type {
   StationState,
 } from '@/lib/types';
 
-/** `/themes` response — the registry plus the station's active id. */
 export interface ThemesPayload {
+  /** The effective theme — what a client should actually paint. */
   active: string;
+  /** Which level decided `active`. Absent on an older controller. */
+  activeSource?: 'show' | 'station';
+  /** settings.theme.active, i.e. what admin's station picker sets. */
+  stationDefault?: string;
+  /** Set only when an on-air show's themeId outranked the station default. */
+  activeShow?: { id: string; name: string; themeId: string } | null;
   themes: Theme[];
 }
 
@@ -37,8 +43,8 @@ export interface BeaconPayload {
   utmSource?: string;
 }
 
-/** `POST /like` outcome. Error statuses (403 disabled, 409 stale/no track,
- *  429 throttled) still carry a JSON body with `error`. */
+/** Error statuses (403 disabled, 409 stale/no track, 429 throttled) still
+ *  carry a JSON body with `error`. */
 export interface LikeResult {
   ok?: boolean;
   songId?: string | null;
@@ -48,8 +54,8 @@ export interface LikeResult {
   error?: string;
 }
 
-/** `GET /like` — liked-state for the current airing, from this listener's
- *  point of view (server-side dedup key, no account needed). */
+/** Liked-state for the current airing, per listener via a server-side dedup
+ *  key — no account needed. */
 export interface LikeStatus {
   enabled: boolean;
   songId?: string | null;
@@ -59,32 +65,28 @@ export interface LikeStatus {
 
 export interface StationClient {
   origin: StationOrigin;
-  /** Prefix a controller-relative path (e.g. `/persona-avatar/p_x`) with the
-   *  station's API base. Empty/nullish input stays '' so `<img>` fallbacks
-   *  keep working. */
+  /** Prefix a controller-relative path with the station's API base.
+   *  Empty/nullish input stays '' so `<img>` fallbacks keep working. */
   resolve(path: string | null | undefined): string;
-  /** Artwork proxy URL for a library track. */
   coverUrl(subsonicId: string): string;
   nowPlaying(): Promise<NowPlayingResponse>;
   state(): Promise<StationState>;
   session(): Promise<SessionPayload>;
-  /** Cheap liveness GET for the signal meter. The caller owns timeout/abort. */
+  /** The caller owns timeout/abort. */
   health(init?: { signal?: AbortSignal }): Promise<Response>;
   schedule(): Promise<SchedulePayload>;
   themes(): Promise<ThemesPayload>;
   submitRequest(text: string, name: string): Promise<RequestResult>;
-  /** `/request/:id` outcome. 404 → status 'unknown'; network error → null so
-   *  drawers keep polling. */
+  /** 404 → status 'unknown'; network error → null so drawers keep polling. */
   requestStatus(requestId: string): Promise<RequestResult | null>;
-  /** Like the currently playing track. `songId` is what the client believes
-   *  is on air — the controller rejects a stale tap. null on network error. */
+  /** `songId` is what the client believes is on air; the controller rejects a
+   *  stale tap. null on network error. */
   likeCurrent(songId: string): Promise<LikeResult | null>;
-  /** Liked-state + count for the current airing. null on network error. */
+  /** null on network error. */
   likeStatus(): Promise<LikeStatus | null>;
-  /** One-shot audience beacon. Best-effort: never throws, never blocks. */
+  /** Best-effort: never throws, never blocks. */
   beacon(payload: BeaconPayload): void;
-  /** First-run wizard state. null on any failure — callers treat that as
-   *  "configured" and stay put. */
+  /** null on any failure; callers treat that as "configured" and stay put. */
   onboardingStatus(): Promise<{ needsSetup?: boolean } | null>;
 }
 
@@ -133,7 +135,7 @@ export function createStationClient(origin: StationOrigin): StationClient {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ songId }),
         });
-        // Error statuses carry a JSON body too — surface it, don't throw.
+        // Error statuses carry a JSON body too. Surface it, don't throw.
         return await json<LikeResult>(r);
       } catch {
         return null;
@@ -166,17 +168,16 @@ export function createStationClient(origin: StationOrigin): StationClient {
   };
 }
 
-/** Client for the install this page is served from — same-origin `/api` (or
- *  the NEXT_PUBLIC_* dev overrides). Install-level concerns (theme registry,
+/** The install this page is served from: same-origin `/api`, or the
+ *  NEXT_PUBLIC_* dev overrides. Install-level concerns (theme registry,
  *  onboarding status) go through this even inside a showcase pointed at a
- *  remote station: they're about *this* deployment, not the tuned station. */
+ *  remote station — they're about *this* deployment, not the tuned one. */
 export const defaultStationClient: StationClient =
   createStationClient(DEFAULT_STATION_ORIGIN);
 
-/** Client for whatever station the surrounding StationOriginProvider points
- *  at — the default origin when there's no provider, a directory station
- *  inside the landing showcase. Memoized on the origin's URL strings, which
- *  stay stable across renders even when the origin object identity doesn't. */
+/** Whatever station the surrounding StationOriginProvider points at, or the
+ *  default origin when there's no provider. Memoized on the origin's URL
+ *  strings, which stay stable even when the origin object identity doesn't. */
 export function useStationClient(): StationClient {
   const {
     apiUrl,

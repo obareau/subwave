@@ -3,8 +3,8 @@
 // otherwise the admin-selected active persona — settings.getEffectivePersona).
 
 import * as settings from '../../../settings.js';
-import { resolveCloudModelForPersona } from '../speech/cloud-speech.js';
-import { isElevenLabsV3 } from '../core/pure.js';
+import { resolveCloudModelForPersona, resolveCloudProviderForPersona } from '../speech/cloud-speech.js';
+import { cloudExpressionCueFamily } from '../core/pure.js';
 
 // Paralinguistic tags Chatterbox renders as actual non-verbal sounds. Every
 // other engine (piper, kokoro, cloud) reads `[laugh]` aloud as the word
@@ -25,6 +25,12 @@ const CHATTERBOX_TAG_HINT =
 // is needed for either engine.
 const ELEVENLABS_V3_TAG_HINT =
   '\n\nYou may sparingly insert non-verbal audio cues in square brackets: [laughs], [sighs], [whispers], [excited]. Use them only where genuinely natural — at most one per segment, and never as filler.';
+
+// Fish Audio S2.1 accepts short natural-language performance cues rather than
+// a fixed tag vocabulary. This extends the existing engine-gated cue policy;
+// it does not alter the base prompt or let brackets leak into fallback engines.
+const FISH_S21_TAG_HINT =
+  '\n\nYou may sparingly add a short natural-language performance cue in square brackets, such as [laughing nervously], [whispers], or [soft and warm]. Use at most one per segment, only when it genuinely improves the delivery, and never as filler.';
 
 // `persona` overrides the on-air persona — used by the persona-handoff
 // generators (generateSignoff / generateHandoffGreeting) to render the sign-off
@@ -52,11 +58,16 @@ export function djSystem(
     location: settings.resolveOnAirLocation(s),
   }) + settings.onAirRosterClause(persona);
   if (persona?.tts?.engine === 'chatterbox') return base + CHATTERBOX_TAG_HINT;
-  // cloudModel is non-empty only when the persona actually resolves to a
-  // configured cloud engine — including via the station defaultEngine when
-  // the persona sets no engine of its own, which a persona-engine check here
-  // would miss (see resolveCloudModelForPersona).
-  if (isElevenLabsV3(cloudModel)) return base + ELEVENLABS_V3_TAG_HINT;
+  // Provider/model resolution is non-empty only when the persona actually
+  // resolves to a configured cloud engine — including via the station default
+  // when the persona sets no engine. That fail-closed check keeps cues away
+  // from Piper/Kokoro fallback, where brackets would be spoken literally.
+  const cueFamily = cloudExpressionCueFamily(
+    resolveCloudProviderForPersona(persona),
+    cloudModel,
+  );
+  if (cueFamily === 'fish-s21') return base + FISH_S21_TAG_HINT;
+  if (cueFamily === 'elevenlabs-v3') return base + ELEVENLABS_V3_TAG_HINT;
   return base;
 }
 

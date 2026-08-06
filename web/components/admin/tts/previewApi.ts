@@ -1,33 +1,35 @@
-// Shared client for POST /settings/tts/preview — the one endpoint that renders
-// a short spoken sample for an engine/voice/speed combination. Used by the
-// "Play sample" button (VoicePreviewButton) and by the per-row preview
-// affordance inside the searchable voice picker (VoicePicker), so both
-// surfaces audition through exactly the same request shape. The endpoint
-// bypasses the on-air persona AND the silent engine fallback, so an
-// unavailable engine returns a real error message here rather than quietly
-// playing Piper. No React, no DOM.
+// Shared client for POST /settings/tts/preview, used by VoicePreviewButton and
+// VoicePicker so both audition through the same request shape. The endpoint
+// bypasses the on-air persona AND the silent engine fallback, so an unavailable
+// engine returns a real error rather than quietly playing Piper. No React, no DOM.
 import type { AdminAuth } from '../../../lib/adminAuth';
 
 export interface PreviewParams {
   engine: string;
   voice: string;
   cloudProvider?: string;
+  // Unsaved model id so the sample uses the exact provider/tier selection.
+  cloudModel?: string;
   // Final rate multiplier to audition (server clamps to 0.5–2.0×).
   speed?: number;
   // Kokoro phonemizer language override (e.g. "en-gb", "ja").
   lang?: string;
-  // Persona's free-text on-air language ("Turkish", "Türkçe"). When set, the
-  // server renders the sample sentence in that language (falling back to the
-  // English line if it doesn't recognize it), so the audition matches what
-  // the persona sounds like on air.
+  // Free-text on-air language ("Turkish", "Türkçe"); the server renders the sample
+  // sentence in it, falling back to English when it doesn't recognize it.
   language?: string;
-  // Unsaved ElevenLabs voice_settings sliders (issue #696) — sent so the
-  // sample auditions the CURRENT slider positions, not the last-saved values.
+  // Unsaved ElevenLabs sliders (issue #696), so the sample auditions the CURRENT
+  // positions rather than the last-saved values.
   voiceSettings?: {
     voiceStability: number;
     voiceStyle: number;
     voiceSimilarityBoost: number;
     voiceUseSpeakerBoost: boolean;
+  };
+  // Unsaved Fish Audio controls for an exact before-save audition.
+  fishSettings?: {
+    temperature: number;
+    topP: number;
+    latency: 'low' | 'normal' | 'balanced';
   };
 }
 

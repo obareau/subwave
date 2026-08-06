@@ -19,11 +19,9 @@ import {
   type SectionProps,
 } from './shared';
 
-// Suggested embedding model ids per provider — clickable chips under the Model
-// field so operators don't have to guess a valid name. The #1 trip-up is typing
-// an HF/locca repo id like "nomic-ai/nomic-embed-text-v1.5-GGUF" as an Ollama
-// tag, which 404s; Ollama wants the short tag (nomic-embed-text). dim is shown
-// so you can match the vector length of an already-tagged library.
+// The #1 trip-up is typing an HF/locca repo id like
+// "nomic-ai/nomic-embed-text-v1.5-GGUF" as an Ollama tag, which 404s — Ollama
+// wants the short tag. dim is shown so an already-tagged library can be matched.
 const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
   ollama: [
     { id: 'nomic-embed-text', dim: 768 },
@@ -103,21 +101,19 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           lastfmTags: e.enrichment.lastfmTags,
           lyrics: e.enrichment.lyrics,
         },
-        // openai-compatible bearer token — write only when typed, 'set' sentinel
-        // from getRedacted() is ignored server-side so it never overwrites the key.
+        // Write only when typed; getRedacted()'s 'set' sentinel is ignored
+        // server-side, so it never overwrites the stored key.
         ...(effectiveProvider === 'openai-compatible' && compatEmbedKeyInput.trim()
           ? { apiKey: compatEmbedKeyInput.trim() }
           : {}),
       },
     });
-    // No separate toast/refresh — saveSettings already notifies and refreshes
-    // for the whole embedding patch (and toasting ok here would lie when the
-    // save itself failed). Mirrors the LlmSection compat-key flow.
+    // No separate toast/refresh: saveSettings covers the whole embedding patch, and
+    // toasting ok here would lie when the save itself failed.
     if (effectiveProvider === 'openai-compatible' && compatEmbedKeyInput.trim()) {
       setCompatEmbedKeyInput('');
     }
-    // Save embedding API key override if typed (cloud embedding providers only —
-    // embedKeyVar is set only for providers that use a conventional key).
+    // embedKeyVar is set only for providers that use a conventional key.
     if (embedKeyVar && embeddingKeyInput.trim()) {
       const ok = await saveKey('EMBEDDING_API_KEY', embeddingKeyInput);
       if (ok) { notify.ok('API key saved'); setEmbeddingKeyInput(''); refresh(); }
@@ -129,11 +125,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   const effectiveProvider = e.provider || llmProvider;
   const embedSuggestions = EMBED_MODEL_SUGGESTIONS[effectiveProvider] ?? [];
 
-  // Provider list is the embedding-capable subset (/settings.embedding.providers),
-  // NOT the full LLM list — chat-only providers (deepseek, gateway) have no
-  // embeddings endpoint and can't be picked here (#493). OpenRouter shipped an
-  // embeddings endpoint so it's back in (#522). Anthropic was dropped — it has no
-  // embedding API and only worked by routing to OpenAI, which was confusing.
+  // The embedding-capable subset, NOT the full LLM list: chat-only providers
+  // (deepseek, gateway) have no embeddings endpoint (#493); OpenRouter shipped one
+  // so it is back in (#522); Anthropic has no embedding API at all.
   const embedProviders = data.embedding?.providers ||
     ['ollama', 'openai-compatible', 'locca', 'openrouter', 'openai', 'google', 'requesty'];
   // Keep a stale explicit choice (a chat-only provider saved before this list
@@ -141,12 +135,11 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   const providers = e.provider && !embedProviders.includes(e.provider)
     ? [e.provider, ...embedProviders]
     : embedProviders;
-  // The effective provider can't embed when "Follow LLM provider" resolves to a
-  // chat-only LLM, or a stale config still names one. Drives the warning below.
+  // False when "Follow LLM provider" resolves to a chat-only LLM, or a stale config
+  // still names one. Drives the warning below.
   const canEmbed = embedProviders.includes(effectiveProvider);
 
-  // --- Guided setup: probe the endpoint up front, detect a locca embed server,
-  // and kick the tagger from here, instead of failing mid-run (#405 follow-up).
+  // Probe the endpoint up front rather than failing mid-run (#405 follow-up).
   const [probe, setProbe] = useState<
     { ok: boolean; dim: number | null; code: string; message: string } | null
   >(null);
@@ -159,10 +152,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
 
   const embedKeyVar = LLM_ENV_VARS[effectiveProvider];
   const embedKeySet = !!(embedKeyVar && data.env?.[embedKeyVar]);
-  // Embeddings reuse the DJ provider's own key automatically, so the key is
-  // "present" if that provider's env var is set OR the optional EMBEDDING_API_KEY
-  // override is. The warning must key off this — not EMBEDDING_API_KEY alone, or
-  // it cries "missing" for a provider whose key is already set for the DJ.
+  // Embeddings reuse the DJ provider's key, so "present" means that provider's env
+  // var OR the optional override. Keying off EMBEDDING_API_KEY alone would cry
+  // "missing" for a provider whose key is already set for the DJ.
   const embedKeyPresent = embedKeySet || !!data.env?.['EMBEDDING_API_KEY'];
 
   // `||` (not `??`) so a field cleared in the form ('' entry) falls through to
@@ -216,8 +208,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
     }
   };
 
-  // Find a locca embedding server on its default port (8090), pre-fill the form,
-  // and confirm it actually embeds.
+  // Locca's default port is 8090.
   const detect = async () => {
     setDetecting(true);
     setProbe(null);
@@ -249,16 +240,12 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
     }
   };
 
-  // What the tagger will actually embed with right now — resolved from the LIVE
-  // form (not saved state). "Follow LLM" resolves the provider; a blank Model
-  // field resolves to that provider's default. This is the line that stops
-  // operators reverse-engineering "what am I actually using?" — e.g. a DeepSeek
-  // DJ routed through OpenRouter embeds via openai/text-embedding-3-small, which
-  // isn't obvious from any field (Discord report).
+  // What the tagger will embed with right now, resolved from the LIVE form (not
+  // saved state): "Follow LLM" resolves the provider, a blank Model field resolves
+  // to that provider's default.
   const embeddedMeta = data.libraryStats?.embeddingMeta || null;
   const suggestedDefault = EMBED_MODEL_SUGGESTIONS[effectiveProvider]?.[0];
-  // Defaults for the providers not carried in EMBED_MODEL_SUGGESTIONS (they have
-  // no combobox suggestions but still resolve to a sensible model server-side).
+  // Providers with no combobox suggestions that still resolve server-side.
   const OTHER_EMBED_DEFAULTS: Record<string, string> = {
     'openai-compatible': 'text-embedding-3-small',
     locca: 'nomic-embed-text',
@@ -346,11 +333,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
 
       <Card title="Embedding server" sub="where embeddings come from">
         <div className="grid gap-[18px]">
-          {/* Affirmative "you're set up" line for new users — the effective
-              provider/model/dim resolve to a working default even when both
-              fields are blank, so surface that instead of leaving the tab
-              looking unconfigured. Hidden when the effective provider can't
-              embed (the warning below the Provider field covers that case). */}
+          {/* Provider/model/dim resolve to a working default even with both fields
+              blank, so say so rather than looking unconfigured. Hidden when the
+              effective provider can't embed — the warning below covers that. */}
           {canEmbed && effectiveModel && (
             <div className="flex items-start gap-x-2 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] p-3 text-[11px] leading-[1.5] text-ink">
               <span className="flex-none text-[12px] leading-[1.5] text-[var(--accent)]">✓</span>
@@ -388,10 +373,8 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               Anthropic has no first-party embedding API; if your LLM is Anthropic,
               pick OpenAI here (needs <code>OPENAI_API_KEY</code>).
             </div>
-            {/* The resolved provider/model/dim is stated in the "Ready to tag
-                with defaults" banner above, so no "Embedding now:" line here —
-                only the specific warning that the library is already embedded
-                with a different model (a full re-embed on change). */}
+            {/* The banner above already states the resolved provider/model/dim, so
+                only the already-embedded-with-a-different-model warning goes here. */}
             {embeddedMeta && embeddedMeta.model !== effectiveModel && (
               <div className="field-hint">
                 Your library is embedded with{' '}
@@ -434,9 +417,8 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                   models={embedDiscovery.models}
                   value={e.model}
                   onChange={v => setForm(f => ({ ...f, embedding: { ...f.embedding, model: v } }))}
-                  // Blank field still means "follow the provider default"; show
-                  // that default (e.g. nomic-embed-text) rather than an empty
-                  // "Select a model" that reads as unconfigured.
+                  // A blank field means "follow the provider default", so show that
+                  // default rather than an empty "Select a model".
                   placeholder={effectiveModel ? `${effectiveModel} · default` : 'Select a model'}
                 />
               ) : (
@@ -574,12 +556,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             </div>
           )}
 
-          {/* Embedding key — cloud embedding providers only (embedKeyVar is
-              undefined for ollama / openai-compatible / locca, which need no
-              conventional key). Embeddings reuse the DJ provider's own key, so
-              the status keys off that (embedKeyPresent), not EMBEDDING_API_KEY
-              alone; the override is only for running embeddings on a different
-              provider than the DJ. */}
+          {/* embedKeyVar is undefined for ollama / openai-compatible / locca, which
+              need no conventional key. The override only matters when embeddings run
+              on a different provider than the DJ. */}
           {embedKeyVar && (
             <>
               <div className="field">
@@ -602,7 +581,6 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             </>
           )}
 
-          {/* Detect a locca embed server + test the endpoint BEFORE a long run. */}
           <div className="field">
             <div className="flex flex-wrap items-center gap-2">
               {needsServerUrl && (
@@ -637,11 +615,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         </div>
       </Card>
 
-      {/* The bulk tagger is launched from the Library page's "Start tagging"
-          flow (with its per-run step + batch controls), so there's no run
-          button here — this tab is just the embedding config + advanced knobs. */}
+      {/* No run button: the bulk tagger is launched from the Library page's
+          "Start tagging" flow. */}
 
-      {/* Advanced knobs — collapsed by default so newcomers see only the basics. */}
       <button
         type="button"
         onClick={() => setAdvancedOpen(o => !o)}

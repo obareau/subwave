@@ -10,6 +10,7 @@ import {
   DJ_SOULS,
   FREQUENCIES,
   coerceShowEnergies,
+  coerceShowVocals,
   coerceShowEras,
   coerceShowGenres,
   coerceShowMoods,
@@ -127,6 +128,9 @@ function resolveShowShape(show, s) {
     genres: coerceShowGenres(show),
     eras: coerceShowEras(show),
     energies: coerceShowEnergies(show),
+    // Instrumental / vocal steering, backed by Demucs vocal ranges. '' = no
+    // constraint. Single-valued: the two states are mutually exclusive.
+    vocals: coerceShowVocals(show),
     // When true, every set music filter (mood, genre, era, energy) is a hard
     // filter on the pick pool instead of a soft lean; off-filter tracks only
     // survive as a never-starve fallback. Defaults off.
@@ -277,9 +281,19 @@ export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
   const stored = peek();
   const tpl =
     stored?.djPrompt && stored.djPrompt.trim() ? stored.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
+  // When the template itself closes the soul (the default ends "{soul}."), a
+  // soul ending in "." would render ".." — strip that ONE lone period. Only
+  // that: an ellipsis ("..." or "…") is intentional trailing-off voice, and
+  // !/? change meaning, so all of those pass through untouched. A custom
+  // template without "{soul}." supplies no punctuation of its own, so the
+  // soul keeps whatever it ends with.
+  const rawSoulText = (((p?.soul as string) || DJ_SOULS[0])).trim();
+  const soulText = tpl.includes('{soul}.')
+    ? rawSoulText.replace(/(?<!\.)\.$/, '').trim()
+    : rawSoulText;
   const rendered = tpl
     .replaceAll('{name}', (p?.name as string) || 'your host')
-    .replaceAll('{soul}', (p?.soul as string) || DJ_SOULS[0])
+    .replaceAll('{soul}', soulText)
     .replaceAll('{station}', station)
     .replaceAll('{location}', location);
   const tone = personaToneDirectives(persona);
@@ -329,7 +343,11 @@ function houseRulesBlock(scope: string): string {
 // default, so a station with no house rules is byte-identical to before.
 export function agentPersonaPreamble(persona) {
   const name = persona?.name || 'the DJ';
-  const soul = persona?.soul || '';
+  // Close the soul as a sentence: this preamble runs straight into the next
+  // block, so a soul without terminal punctuation left the opener dangling
+  // mid-sentence (the scripted path's template adds its own "." instead).
+  const rawSoul = String(persona?.soul || '').trim();
+  const soul = rawSoul && !/[.!?…]$/.test(rawSoul) ? `${rawSoul}.` : rawSoul;
   const station = peek()?.station || DEFAULTS.station;
   // Agent output is structured (ids, reasons, kinds) — bind the rules to the
   // spoken fields only, or "write out numbers" starts mangling track ids.

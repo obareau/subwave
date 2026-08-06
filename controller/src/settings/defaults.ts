@@ -35,9 +35,12 @@ export const DEFAULTS = {
   // paying for the tape by default (issue #137). Dropping the bitrate (e.g.
   // 128 → 64 mono in a future change) also helps for operators who want it.
   // retentionDays: hourly recordings older than this many days are deleted by
-  // the scheduler's hourly cleanup. 0 = keep forever — the default, because a
-  // retention default would silently delete archives operators already have.
-  archive: { enabled: false, bitrate: 128, retentionDays: 0 },
+  // the scheduler's hourly cleanup. Bounded by default — the old keep-forever
+  // default (0) grew ~1.4 GB/day at 128 kbps until the disk filled, and
+  // operators only noticed at 99 GB. The default must NOT reach installs that
+  // already archive under keep-forever: normalizeArchiveRetentionDays keeps
+  // them at 0 (see settings/normalize.ts), so upgrades never delete tapes.
+  archive: { enabled: false, bitrate: 128, retentionDays: 30 },
   // Secondary Ogg-Opus broadcast mount (/stream.opus). Off by default — only
   // Blink (Chrome/Edge) clients ever select it (web/hooks/usePlayer.ts keeps
   // Safari/iOS/Firefox on MP3), and it adds a continuous Opus encoder + a
@@ -240,6 +243,16 @@ export const DEFAULTS = {
     // place — broadcast/voice-policy.ts. Applies live; no restart.
     enabled: true,
     defaultEngine: 'piper',
+    // Operator-chosen rescue voice — the TTS analogue of settings.llm.fallback.
+    // When a persona's engine is known-unavailable up front, or throws
+    // mid-render, this slot speaks instead: engine AND voice, where the
+    // hardcoded chain behind it (defaultEngine → piper → kokoro) only ever
+    // chose an engine and spoke with whatever global default it carried.
+    // `enabled: false` (and an absent block, which normalises to this) keeps
+    // the pre-fallback behaviour byte-for-byte. Same {engine, voice,
+    // cloudProvider} shape as a persona's own tts block — deliberately, since
+    // audio/tts.ts hands it to speakWith() as a synthetic persona.
+    fallback: { enabled: false, engine: 'piper', voice: '', cloudProvider: 'openai' },
     // Advisory flag — does the operator intend to run the optional tts-heavy
     // sidecar (Chatterbox + PocketTTS)? Both setup wizards (CLI + /onboarding)
     // write to this so each surface knows the other's choice. Nothing in the
@@ -257,8 +270,9 @@ export const DEFAULTS = {
     // pocket-tts but no persona-level voice is set. Built-in voice id.
     pocketTts: { voice: 'alba' },
     // Cloud engine config — used when an engine resolves to 'cloud'. A persona
-    // chooses provider+voice; `model` and `apiKey` stay shared here. `apiKey`
-    // empty means "read the provider's env var" (OPENAI_API_KEY etc.).
+    // chooses provider+voice; `model` stays shared here. Managed credentials
+    // use provider env vars; authenticated compatibility servers use the
+    // dedicated `compatApiKey` slot below.
     // `enabled` is the operator's "Off" switch — when false the cloud engine
     // reports unavailable regardless of key, so the engine pickers grey it out.
     cloud: {
@@ -266,7 +280,13 @@ export const DEFAULTS = {
       provider: 'openai',
       model: 'gpt-4o-mini-tts',
       voice: 'alloy',
+      // Legacy managed-provider inline key. New managed credentials live in
+      // secrets.env; retained for backward compatibility with older settings.
       apiKey: '',
+      // Dedicated bearer for authenticated openai-compatible TTS servers. It
+      // remains provider-scoped even when personas use compat alongside a
+      // different station-wide Cloud provider.
+      compatApiKey: '',
       // Base URL for the openai-compatible provider, including the /v1 suffix
       // (e.g. http://192.168.1.101:5000/v1). Required — and only used — when
       // provider === 'openai-compatible'.
@@ -281,6 +301,19 @@ export const DEFAULTS = {
       voiceStyle: 0,
       voiceSimilarityBoost: 0.75,
       voiceUseSpeakerBoost: true,
+      // Fish Audio S2.1 synthesis controls. Persisted alongside the shared
+      // cloud config so switching providers preserves the operator's tuning,
+      // but sent only when provider === 'fish-audio'.
+      temperature: 0.7,
+      topP: 0.7,
+      latency: 'normal' as 'low' | 'normal' | 'balanced',
+      // Free-form extra body fields for openai-compatible servers (issue
+      // #1317) — Chatterbox's temperature/seed/exaggeration, and whatever the
+      // next self-hosted engine invents. Stored as text pairs and coerced to
+      // JSON types at send time; sent ONLY when provider ===
+      // 'openai-compatible'. Empty = today's request shape, byte for byte.
+      // Rules live in settings/compat-params.ts.
+      compatParams: [] as { key: string; value: string }[],
     },
     // Remote engine — a user-configured self-hosted TTS endpoint that renders
     // audio over HTTP (POST /speak → audio body, gated on a /health probe).
@@ -345,6 +378,27 @@ export const DEFAULTS = {
     // so a capable model still calls the tool; misses fall back to the pool
     // picker. Leave on 'required' unless you hit that crash.
     toolChoice: 'required',
+    // How many DISCOVERY rounds the DJ agent gets before it must commit its pick
+    // (`done`). 0 (the default) follows the provider capability table — 1 for
+    // the forced-tool providers (ollama, openai-compatible, locca), 3 for the
+    // rest; see discoveryStepsFor() in llm/internal/provider/capabilities.ts.
+    // Set 1–5 to override.
+    //
+    // The override exists because the descriptor keys off the PROVIDER and can't
+    // know which model that provider is serving, and the two failure directions
+    // are opposite. RAISE it (2–3) when a capable model sits behind a
+    // forced-tool provider — a good local model on llama.cpp/vLLM gets one
+    // cornered round it doesn't need, and a seed tool that comes back empty then
+    // leaves it with nothing to commit. LOWER it to 1 when a cloud model wanders
+    // across its three rounds, or simply to cut tokens: every extra round is a
+    // separate billable call counting against dailyTokenCap, and all rounds share
+    // the one agentTimeoutMs deadline with the recovery legs behind them.
+    //
+    // Raising it never buys extra attempts at `done` — the step cap is derived
+    // as budget + 1, so the run still commits once and then hands off to the
+    // recovery cascade. The picker prompt follows this number too, so the model
+    // is told how many rounds it actually has.
+    discoverySteps: 0,
     // Ollama context window (num_ctx), local Ollama only. Ollama's own default
     // is 4096, but the session DJ agent feeds ~8k+ (the 40-turn session window
     // + tool schemas + discovery results), so the default silently truncates
@@ -382,7 +436,7 @@ export const DEFAULTS = {
     // a DESCRIBED track ("the song from the new Dune movie") via web search, then
     // matches it against the local library. Off by default: it needs a web-search
     // provider (settings.search) and costs a web round-trip + a small extraction
-    // call per use. No-op unless searchReady() — see llm/internal/tools/picker-tools.ts.
+    // call per use. No-op unless searchReady() — see llm/internal/tools/picker/tools/identify-requested-track.ts.
     requestWebResolve: false,
     // Hard wall-clock ceiling (ms) on a single DJ-agent generation (track
     // picks and listener requests). Enforced by withDeadline in llm/sdk.ts;
@@ -454,6 +508,9 @@ export const DEFAULTS = {
       toolChoice: 'required',
       numCtx: 16384,
       repeatPenalty: 1.15,
+      // Per-leg like toolChoice/numCtx above: the backup may be a different
+      // provider running a different model, so it resolves its own budget.
+      discoverySteps: 0,
     },
   },
   // Embedding-propagated library tagger (music/tag-library.ts).
@@ -557,7 +614,8 @@ export const DEFAULTS = {
     // pass keeps the Demucs stems it already computes (head + tail windows)
     // as FLAC under state/stems/<id>/ so transition renders are a fast mix
     // instead of a fresh separation. Needs the demucs stack like
-    // vocalActivity; ~21-25 MB per track, LRU-swept to stemCacheGb.
+    // vocalActivity; ~13-25 MB per track (field average ~13, #1257),
+    // LRU-swept to stemCacheGb.
     stemCache: false,
     stemCacheGb: 15,
     // Quiet-times gate (#1099): pause the analysis pass while anyone is

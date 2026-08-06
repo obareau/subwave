@@ -1,15 +1,9 @@
 'use client';
 
-// Backup — /admin/backup. Export the station's config + tag database to a
-// single downloadable zip, or restore one. Export redacts API keys (they never
-// leave the box); restore keeps whatever keys are already configured here. See
-// discussion #404.
-//
-// Restore has two paths: a browser upload (small backups) and a disk restore
-// for when the zip is too big to push through an edge proxy. A large-library
-// tag DB (e.g. 29k tracks) can exceed Cloudflare's 100 MB upload cap and bounce
-// with a 413; dropping the zip into the station's state/ folder and restoring
-// it from the list below skips the upload entirely. See #612.
+// Export redacts API keys; restore keeps whatever keys are already configured
+// here (discussion #404). Restore has two paths because a large-library tag DB
+// can exceed Cloudflare's 100 MB upload cap and bounce with a 413 — the disk
+// restore skips the upload entirely (#612).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -29,9 +23,7 @@ interface RestorableFile {
   mtime: string;
 }
 
-// A pending restore is either a browser-side File (upload) or the name of a zip
-// already sitting in the station's state/ dir (disk restore). One dialog + one
-// runner serve both.
+// One dialog + one runner serve both restore paths.
 type Pending =
   | { kind: 'upload'; file: File }
   | { kind: 'disk'; name: string };
@@ -110,10 +102,8 @@ export default function BackupPanel() {
     }
   }, [adminFetch]);
 
-  // Wait for the cached token to hydrate before the first fetch. Firing it
-  // immediately sends an unauthenticated /backup/restorable, and the
-  // controller's 401 carries `WWW-Authenticate: Basic`, which makes the
-  // browser pop its native login dialog. Mirrors the gate in the other panels.
+  // Wait for the cached token to hydrate: an unauthenticated fetch gets a 401
+  // carrying `WWW-Authenticate: Basic`, which pops the browser's login dialog.
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     loadDiskFiles();

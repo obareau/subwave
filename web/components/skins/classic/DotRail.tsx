@@ -28,8 +28,7 @@ export interface DotRailProps {
 export default memo(function DotRail({ counts, active, onSelect }: DotRailProps) {
   return (
     <div
-      // Slimmed on phones (76px vs 96px) — the reclaimed width goes to the
-      // CenterStage text column, whose right reserve tracks these values.
+      // Slimmed on phones; CenterStage's right reserve tracks these widths.
       className="absolute top-20 right-0 bottom-20 z-20 flex w-[76px] flex-col items-center justify-center gap-1 sm:w-24"
     >
       {ITEMS.map(item => {
@@ -48,9 +47,8 @@ export default memo(function DotRail({ counts, active, onSelect }: DotRailProps)
             )}
             aria-pressed={isActive}
           >
-            {/* Active background morphs between tabs via shared layoutId — same
-                trick as the modern dock indicator. Spans below have `relative`
-                so they sit above this absolutely-positioned element. */}
+            {/* The spans below need `relative` to sit above this
+                absolutely-positioned element. */}
             {isActive && (
               <m.span
                 layoutId="dot-rail-active"
@@ -72,8 +70,7 @@ export default memo(function DotRail({ counts, active, onSelect }: DotRailProps)
             </span>
             <span
               className={cn(
-                // Tighter tracking in the slim phone rail so "SCHEDULE" /
-                // "TIMELINE" still fit; full spacing from sm up.
+                // Tighter tracking so "SCHEDULE" still fits the slim phone rail.
                 'relative text-[8px] tracking-[0.2em] uppercase sm:text-[9px] sm:tracking-[0.3em]',
                 isActive ? 'text-bg' : isRequest ? 'font-bold text-vermilion' : 'text-ink',
               )}

@@ -24,7 +24,7 @@ Open the Apps tab, search for SUB/WAVE, and hit Install. Four fields to fill in:
 
 Apply, then open the WebUI and go to `/onboarding` to point it at your Navidrome server and pick a voice and an LLM. Keep Appdata on your array or pool, not the USB flash. The station's recordings and library cache grow over time, and the flash is the wrong place for that.
 
-No big GPU? That's most Unraid boxes. Install the official ollama container, run `ollama signin` in its console, and pick a cloud model. A small local model works too if you'd rather keep everything on the box.
+No big GPU? That's most Unraid boxes. Install the official ollama container, run `ollama signin` in its console, and [pick a cloud model](/news/bring-your-own-llm). A small local model works too if you'd rather keep everything on the box. And if there is an NVIDIA card in the machine, the all-in-one image now has [a CUDA flavour](/news/one-click-on-the-gpu) that puts it to work on library analysis.
 
 ## Why it helps
 

@@ -1,10 +1,5 @@
 'use client';
 
-// The recent-LLM-call log: messages, tool calls and their results, filterable
-// by outcome.
-//
-// Part of the debug/ split - see ../DebugPanel.tsx.
-
 import { useEffect, useState } from 'react';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { Checkbox } from '../../ui/checkbox';
@@ -22,8 +17,8 @@ import { mapChatRole } from './TtsPanels';
 
 function MessageList({ messages }: { messages: Array<{ role?: string; content?: unknown }> }) {
   return (
-    // Same auto-vs-fixed height dance as SessionChat: short exchanges size to
-    // content, agent runs (~40 turns) get a bounded, bottom-pinned scroll.
+    // Short exchanges size to content; agent runs (~40 turns) get a bounded,
+    // bottom-pinned scroll (same as SessionChat).
     <Conversation className={cn('w-full', messages.length > 4 ? 'h-80' : 'h-auto')}>
       <ConversationContent className="gap-2 p-0">
         {messages.map((m, i) => (
@@ -50,9 +45,8 @@ function MessageList({ messages }: { messages: Array<{ role?: string; content?: 
   );
 }
 
-// The LLM ring stores tool calls only after they've run — there's no per-tool
-// status flag, so a result object carrying an `error` key is the failure
-// signal; everything else completed.
+// The ring has no per-tool status flag, so an `error` key on the result is the only
+// failure signal; everything else completed.
 function toolErrorText(result: unknown): string | undefined {
   if (result && typeof result === 'object' && !Array.isArray(result) && 'error' in result) {
     const e = (result as { error?: unknown }).error;
@@ -74,8 +68,7 @@ function ToolList({ calls }: { calls: Array<{ name?: string; args?: unknown; res
             className="mb-0 w-full rounded-none border-separator-strong bg-[var(--card-bg)]"
           >
             <ToolHeader
-              // Completed calls from a log: success → output-available,
-              // failure → output-error. ToolUIPart types are `tool-${name}`.
+              // ToolUIPart types are `tool-${name}`.
               type={`tool-${t.name || 'unknown'}` as `tool-${string}`}
               state={err ? 'output-error' : 'output-available'}
               className="px-2.5 py-1.5"
@@ -101,8 +94,7 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
 
   const dbg = llm?.debug;
   const viaEnv = !!dbg?.viaEnv;
-  // Optimistic local view so the checkbox responds instantly; the 2s /debug poll
-  // reconciles it. Cleared whenever the server-reported value changes (below).
+  // Optimistic local view; the 2s /debug poll reconciles it.
   const [override, setOverride] = useState<boolean | null>(null);
   const enabled = override ?? !!dbg?.enabled;
   useEffect(() => { setOverride(null); }, [dbg?.enabled]);
@@ -138,8 +130,6 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
         </div>
       }
     >
-      {/* Raw-request capture — writes the last N exact request bodies to a file
-          operators can open. Toggle here, or set LLM_DEBUG_RAW in the env. */}
       <div className="mb-2 grid gap-1 border border-separator-strong p-2.5">
         <Label className="flex min-h-9 cursor-pointer flex-wrap items-center gap-2 text-[11px] tracking-[0.12em] text-muted uppercase sm:min-h-0">
           <Checkbox
@@ -170,10 +160,8 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 i === 0 && filter === 'all' ? 'bg-[var(--ink-softer)]' : 'bg-transparent',
               )}
             >
-              {/* minmax(0,1fr) + truncate: `djAgentSegment` is one unbroken
-                  word, and a bare 1fr track would take its min-content width
-                  and shove the ms/clock cells off the card's clipped right
-                  edge at phone widths. */}
+              {/* minmax(0,1fr), not 1fr: an unbroken kind like `djAgentSegment` takes
+                  its min-content width and shoves the ms/clock cells off the card. */}
               <summary className="grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto_auto_auto] items-center gap-2 px-2.5 py-2 sm:gap-2.5">
                 <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
                   {c.ok ? '✓' : '✗'}
@@ -199,8 +187,7 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 )}
                 {c.responseText && (
                   <CallSection label="model said instead" tone="err" preview={oneLine(c.responseText)}>
-                    {/* Free text straight from the model — may contain
-                        markdown, so this is the one MessageResponse call. */}
+                    {/* Model free text may contain markdown — the one MessageResponse call. */}
                     <MessageResponse className="whitespace-normal">
                       {c.responseText}
                     </MessageResponse>

@@ -83,8 +83,62 @@ Then `docker compose up -d` (Compose re-pulls the `analyzer` service as
 
 The heavy image is **amd64-only** (the CPU-torch stack). On an arm64 host also
 set `DOCKER_DEFAULT_PLATFORM=linux/amd64` — it runs under emulation (slow, but
-analysis is a one-time per-track pass). Model weights download lazily into the
-analyzer's HF cache the first time you actually run a sounds-like/vocals rescan.
+analysis is a one-time per-track pass).
+
+### The heavy image needs to reach huggingface.co once
+
+**Model weights are not baked into the image.** The heavy analyzer downloads
+CLAP (and Demucs) from `huggingface.co` the first time it is actually asked for
+a sounds-like or vocals pass, into the `analyzer-cache` volume mounted at
+`/opt/analyzer/hf-cache`. That is a deliberate trade — baking them would add
+roughly a gigabyte to an image most people pull over a home connection — but it
+does mean the heavy tier has a **one-time outbound network dependency**, and
+that dependency is easy to miss because everything else about the station works
+offline.
+
+On a host with no outbound reach you'll see this in `docker logs
+sub-wave-analyzer`:
+
+```
+[analyze] '[Errno 111] Connection refused' thrown while requesting HEAD
+https://huggingface.co/laion/clap-htsat-unfused/resolve/main/model.safetensors
+[analyze-worker] CLAP load failed
+```
+
+The station keeps working — bpm, key, loudness and intros are pure librosa and
+need no download — but the sounds-like meter stays at zero. The admin Library
+panel says so directly, with the reason, rather than suggesting you switch
+image: you're already on the right one.
+
+Three ways out:
+
+- **Let it out once.** The download is a few hundred MB and happens once per
+  volume. Once the cache is warm the analyzer never calls out again.
+- **Pre-seed the cache from another machine.** The cache is a plain
+  [HF cache directory](https://huggingface.co/docs/huggingface_hub/guides/manage-cache).
+  On a box that *does* have reach:
+  ```bash
+  pip install huggingface_hub
+  HF_HOME=./hf-cache huggingface-cli download laion/clap-htsat-unfused
+  ```
+  then copy `hf-cache/` onto the analyzer's volume (`docker cp ./hf-cache/.
+  sub-wave-analyzer:/opt/analyzer/hf-cache/`) and restart the analyzer.
+- **Point at your own copy.** `CLAP_MODEL` accepts a local path as well as a hub
+  id, so a weights directory you already mirror can be used directly.
+
+Once the cause is fixed, **restart whatever is holding the analyzer**. The
+failure is remembered until you do — deliberately, because that is what stops
+the analysis pass re-attempting the same tracks on every run and reporting the
+same "+N tracks missing an audio vector" count forever. Which process that is
+depends on your install, and the admin panel names the right one for yours:
+
+- **Sidecar** (the default compose stacks): `docker compose restart analyzer`.
+  The failure is remembered inside the analyzer container, across the idle
+  worker respawn that used to reset it.
+- **AIO, or a local librosa venv**: there is no separate analyzer — the worker
+  is a child of the controller and the failure is remembered in the controller
+  process, so restart *that* (on the AIO, the container). `docker compose
+  restart analyzer` has nothing to act on there.
 
 ### Heavy analysis on an NVIDIA GPU (CUDA)
 
@@ -114,12 +168,98 @@ anywhere else it's `--gpus all` on your `docker run`. Everything below about
 device selection and VRAM applies there unchanged.
 
 Sharing the card with a local TTS or LLM? The worker plays nice: after ~5
-minutes with no analysis requests it drops its models out of VRAM and reloads
+minutes with no CLAP/Demucs use it drops its models out of VRAM and reloads
 them on the next request (`ANALYZE_IDLE_UNLOAD_S` in `.env` tunes the window;
-`0` keeps them resident). A few hundred MB of CUDA context remain until the
-analyzer container stops. Pair it with the **quiet times** toggle on the admin
+`0` keeps them resident; CPU-only hosts get the same release with a longer
+30-minute default — #1204). The trade: the first heavy request after a release
+pays a cold reload from the on-disk cache — a few seconds for CLAP on a typical
+box (measured ~2s; a "sounds like ..." search may feel it on slower hardware),
+longer for Demucs. If your station leans on sound search and RAM is plentiful,
+`ANALYZE_IDLE_UNLOAD_S=0` restores the old always-resident behaviour. A few
+hundred MB of CUDA context remain until the analyzer container stops. Pair it with the **quiet times** toggle on the admin
 Library page and a long scan pauses — and frees the GPU — whenever listeners
 are tuned in.
+
+### Running the analyzer on another machine
+
+Everything above assumes the card is in the same host as the station. If it
+isn't — the station lives on a NAS or a mini-PC and the GPU is in a desktop
+somewhere else — you do **not** have to move the station, and you certainly
+don't have to stop the stack and copy `appdata` to the GPU box and back.
+
+The analyzer is a plain HTTP service, and the controller resolves its backend
+from one variable:
+
+```ini
+# root .env, on the STATION host
+ANALYZE_URL=http://192.168.1.101:8080
+```
+
+It probes `{ANALYZE_URL}/health` for the `analyze` capability and, when that
+answers, sends analysis there instead of to the local `analyzer` container. Use
+a LAN or Tailscale address — `localhost` is the *controller container's*
+loopback.
+
+**One requirement, and it is the whole reason network-share attempts fail:
+both machines must see the state directory at the same path.** The controller
+pre-fetches each track to `/var/sub-wave/analyze-tmp/` and hands the analyzer a
+*path*, not the audio (network fetch on the controller overlaps DSP on the
+analyzer — that's most of the throughput). If the analyzer can't open that path,
+every track fails. Stem-cache rendering (`state/stems/`) writes back through the
+same shared dir.
+
+So, on the GPU host:
+
+```yaml
+# docker-compose.yml on the GPU MACHINE — analyzer only.
+services:
+  analyzer:
+    # -heavy is CLAP + Demucs on the CPU, and is amd64-only. For the GPU, swap
+    # in subwave-analyzer-cuda and add the `deploy:` block below.
+    image: ghcr.io/perminder-klair/subwave-analyzer-heavy:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # MUST resolve to the same files the station's /var/sub-wave holds, at
+      # this exact mount point. An NFS/SMB export of the station's state dir is
+      # the usual way; the AIO's equivalent is the appdata share.
+      - /mnt/subwave-state:/var/sub-wave
+      - analyzer-cache:/opt/analyzer/hf-cache
+    # CUDA image only — same reservation docker-compose.analyzer-gpu.yml applies
+    # (that file also documents the legacy `runtime: nvidia` fallback).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+volumes:
+  analyzer-cache:
+```
+
+Then set `ANALYZE_URL` on the station host and `docker compose up -d`. Sanity
+checks, in order:
+
+1. `curl http://<gpu-host>:8080/health` from the **station** host — expect
+   `"ok": true` with `analyze` in `engines`.
+2. `docker compose exec analyzer ls /var/sub-wave/analyze-tmp` on the **GPU**
+   host while a scan runs — if that's empty or errors, the share is the problem,
+   not the URL.
+3. Watch the station's analyze log: path-open errors mean the mount point
+   differs. Timeouts are ambiguous — the per-track deadline is
+   `ANALYZE_REQUEST_TIMEOUT_MS` (120s by default), and reading a long track
+   across a slow share *plus* the DSP can outrun it on a link that is otherwise
+   working. Raise it before concluding the URL is wrong.
+
+Keep the local `analyzer` service stopped (`docker compose stop analyzer` after
+each `up -d`, which restarts it) so you aren't paying for an idle image, and
+mind that the share needs write permission for the analyzer's user — it writes
+stems and reads temp audio.
+
+> **Not the same as sharing your music library.** Navidrome's music files aren't
+> involved here; the shared directory is SUB/WAVE's own `state/`.
 
 ---
 
@@ -269,7 +409,17 @@ contributors on a dev machine; production should use a sidecar.
    report not-ready for a minute or two on a cold start. Give it time, then
    re-check the admin panel — the probe re-runs every ~30s, so it flips to
    available on its own. (Plain bpm/key/loudness needs no download.)
-4. **Lost your tags after a restart?** That's a *separate* issue from the engine
+   If it never warms up, the download itself is the usual reason — see
+   [the heavy image needs to reach huggingface.co once](#the-heavy-image-needs-to-reach-huggingfaceco-once).
+   `/health` reports it: `analyze_audio_capable: false` alongside an
+   `analyze_audio_error` naming the cause.
+4. **Same track count every run?** "audio backfill: +90 already-analysed tracks
+   missing an audio vector", the same 90, forever, means the pass is re-targeting
+   tracks it can't fill. Either the model isn't loading (step 3 — the admin panel
+   now names the reason), or those specific files fail to decode. The Library
+   panel lists the failing tracks with their errors once any track has failed
+   three times, and stops retrying them until you clear the list.
+5. **Lost your tags after a restart?** That's a *separate* issue from the engine
    being off — it means `state/` didn't come back on the same path, so the
    controller created a fresh empty `library.db`. See the data-persistence note
    in [`unraid.md`](unraid.md#dont-lose-your-library-on-reboot-pin-state_dir).

@@ -22,9 +22,8 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
   const savedLf = data.values?.scrobble?.lastfm || {};
   const savedLb = data.values?.scrobble?.listenbrainz || {};
 
-  // Treat 'set' as "stored — leave the input empty unless the operator types
-  // something new". The controller ignores 'set' on POST so a round-trip
-  // won't blank the secret.
+  // 'set' means "stored": leave the input empty. The controller ignores 'set' on
+  // POST, so a round-trip won't blank the secret.
   const inputValue = (v: string) => (v === 'set' ? '' : v);
   const placeholder = (v: string, fallback: string) =>
     v === 'set' ? '•••••• (on file)' : fallback;
@@ -36,8 +35,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
   const lfReady = lf.enabled && lfApiKeySet && lfApiSecretSet && lfSessionSet;
   const lbReady = lb.enabled && lbTokenSet;
 
-  // "Connect to Last.fm" flow — replaces the CLI session-key dance. Needs the
-  // API key + secret saved first (the backend reads them from settings/env).
+  // Needs the API key + secret saved first (the backend reads them from settings/env).
   const canConnect = lfApiKeySet && lfApiSecretSet;
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -80,7 +78,6 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
     }
   };
 
-  // Step 1: ask the controller for an auth token + URL, open it for the user.
   const connectLastfm = async () => {
     setConnecting(true);
     try {
@@ -102,8 +99,8 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
     }
   };
 
-  // Step 2: trade the authorized token for a session key; the controller saves
-  // it and switches scrobbling on, so a refresh reflects "connected".
+  // The controller saves the session key and switches scrobbling on, so a refresh
+  // reflects "connected".
   const finishLastfm = async () => {
     if (!authToken) return;
     setConnecting(true);

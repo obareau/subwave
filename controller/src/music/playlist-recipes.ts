@@ -73,10 +73,6 @@ export function get(playlistId: string): PlaylistRecipeEntry | undefined {
   return read().recipes.find((r) => r.playlistId === playlistId);
 }
 
-export function has(playlistId: string): boolean {
-  return read().recipes.some((r) => r.playlistId === playlistId);
-}
-
 export function count(): number {
   return read().recipes.length;
 }

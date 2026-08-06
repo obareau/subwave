@@ -4,7 +4,7 @@
 // Run: `npm test -- clock-phrase` (tsx scripts/clock-phrase.test.ts).
 
 import assert from 'node:assert/strict';
-import { clockDisplay, spokenHourPhrase } from '../src/time.js';
+import { clockDisplay, spokenHourPhrase, spokenTimePhrase } from '../src/time.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -74,6 +74,30 @@ async function main() {
   await test('out-of-range hours normalise instead of crashing', () => {
     assert.equal(spokenHourPhrase(24), 'midnight');
     assert.equal(spokenHourPhrase(-1), 'eleven at night');
+  });
+
+  console.log('spokenTimePhrase (#1282 — minute-aware, coarse radio buckets):');
+  await test('top of the hour is still "just gone"', () => {
+    assert.equal(spokenTimePhrase(18, 0), 'just gone six in the evening');
+    assert.equal(spokenTimePhrase(18, 4), 'just gone six in the evening');
+  });
+  await test('the reported case — 18:31 is no longer "just gone six"', () => {
+    assert.equal(spokenTimePhrase(18, 31), 'half past six in the evening');
+  });
+  await test('early minutes are "just after"', () => {
+    assert.equal(spokenTimePhrase(9, 8), 'just after nine in the morning');
+  });
+  await test('quarter past around :15-:24', () => {
+    assert.equal(spokenTimePhrase(14, 17), 'quarter past two in the afternoon');
+  });
+  await test('past :40 leans on the next hour', () => {
+    assert.equal(spokenTimePhrase(18, 45), 'quarter to seven in the evening');
+    assert.equal(spokenTimePhrase(18, 55), 'coming up on seven in the evening');
+  });
+  await test('day edges — next-hour phrases normalise across midnight/noon', () => {
+    assert.equal(spokenTimePhrase(23, 50), 'coming up on midnight');
+    assert.equal(spokenTimePhrase(11, 45), 'quarter to noon');
+    assert.equal(spokenTimePhrase(0, 20), 'quarter past midnight');
   });
 
   if (failures) {

@@ -31,9 +31,8 @@ export interface ShortcutsDialogProps {
   container?: HTMLElement | null;
 }
 
-/* Help dialog listing every player keyboard shortcut. Centered newsprint
-   modal — accepts `container` so it stays inside the frame in contained
-   mode, matching FullDialog / Modal. */
+/* Accepts `container` so it stays inside the frame in contained mode,
+   matching FullDialog / Modal. */
 export default function ShortcutsDialog({ open, onOpenChange, container }: ShortcutsDialogProps) {
   const contained = !!container;
   const pos = contained ? 'absolute' : 'fixed';

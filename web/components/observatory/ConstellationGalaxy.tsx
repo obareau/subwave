@@ -1,30 +1,23 @@
-/* ============================================================================
-   SUB/WAVE — Library Observatory · the galaxy (WebGL renderer)
-   The single map renderer (it replaced the SVG + 2D-canvas pair). Every track
-   is a glowing star drawn as a GPU point sprite (three.js), with an additive
-   nebula underlay that follows track density, faint synapse filaments, and an
-   UnrealBloom pass for the halo. The stage is always night — bloom needs a
-   dark ground truth in both site themes — so `.cmap-galaxy` re-declares the
-   theme vars locally and node colours get a legibility lift (see liftNight).
+/* Library Observatory — the galaxy (WebGL renderer).
+   Every track is a GPU point sprite (three.js) over an additive nebula
+   underlay, faint synapse filaments, and an UnrealBloom pass. The stage is
+   always night because bloom needs a dark ground truth in both site themes, so
+   `.cmap-galaxy` re-declares the theme vars locally and node colours get a
+   legibility lift (see liftNight).
 
-   Browsability comes from semantic zoom, not bigger dots: star screen-size
-   grows sublinearly with zoom (∝ k^0.45, so zooming reads as flying closer),
-   genre constellation names fade OUT as you dive, and track labels fade IN
-   where the local density allows (grid-decluttered, recomputed when the view
-   settles). Labels live in one CSS-transformed HTML layer so pan/zoom never
-   re-lays-out the DOM; each label counter-scales via a single --inv var.
+   Semantic zoom, not bigger dots: star screen-size grows sublinearly with zoom
+   (k^0.45), genre constellation names fade OUT as you dive, track labels fade
+   IN where local density allows. Labels live in one CSS-transformed HTML layer
+   so pan/zoom never re-lays-out the DOM; each counter-scales via a single --inv.
 
-   Rendering is on-demand: a frame draws only when the view / data / selection
-   changes (plus a ~1.1s GPU-side entrance), and an IntersectionObserver skips
-   draws entirely while the map is offscreen — the landing-page embed costs no
-   GPU when idle. DPR is capped at 2.
+   Rendering is on-demand: a frame draws only when view/data/selection change
+   (plus a ~1.1s GPU-side entrance), and an IntersectionObserver skips draws
+   while offscreen, so an idle embed costs no GPU. DPR is capped at 2.
 
-   Coordinate model is unchanged from the old renderers so the thin SVG
-   highlight overlay (selection wiring, ripple, hover ring) is carried over
-   verbatim: a 1000×1000 user space fit with `meet` letterboxing
+   Coordinate model: a 1000x1000 user space fit with `meet` letterboxing
    (S = min(W,H), centred), then the pan/zoom view {tx,ty,k} inside it.
-   Screen px = origin + (t + user·k)·f, where f = S/1000.
-   ============================================================================ */
+   Screen px = origin + (t + user*k)*f, where f = S/1000. The thin SVG
+   highlight overlay depends on this exactly. */
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -63,7 +56,7 @@ interface View {
 }
 
 const K_MIN = 0.65;
-const K_MAX = 10; // deeper than the old 6 — flying in is the point now
+const K_MAX = 10;
 const SIZE_EXP = 0.45; // star screen-size ∝ k^SIZE_EXP: closer, not fatter
 const HALO = 1.9; // sprite is HALO× the node radius; the skirt glows
 const NIGHT = '#0d0b09';
@@ -98,9 +91,8 @@ function parseRGB(c: string): [number, number, number] {
 }
 
 // The ink→vermilion palette was tuned for paper; its dark end vanishes on the
-// night stage. Lift any colour below a luminance floor toward warm paper —
-// hue survives, the star becomes visible. Used for GPU colours AND the legend
-// swatches so the key never lies about what's on the map.
+// night stage. Lift anything below a luminance floor toward warm paper so hue
+// survives. Applied to legend swatches too, so the key can't lie about the map.
 export function liftNight(c: string): [number, number, number] {
   const [r, g, b] = parseRGB(c);
   const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -193,7 +185,7 @@ const NEBULA_FRAG = /* glsl */ `
   }
 `;
 
-// Everything three-side, held in one ref so effects share it without state.
+// All three-side state in one ref, so effects share it without re-rendering.
 interface GlState {
   renderer: THREE.WebGLRenderer;
   composer: EffectComposer;
@@ -246,8 +238,8 @@ export default function ConstellationGalaxy({
 
   const neighbourSet = useMemo(() => new Set((neighbours || []).map((t) => t.idx)), [neighbours]);
   const filtering = matchSet.size < lib.tracks.length;
-  // live mirror so the entrance loop reads the current filter state without
-  // being re-armed by filter changes
+  // Live mirror so the entrance loop reads current filter state without being
+  // re-armed by filter changes.
   const filteringRef = useRef(filtering);
   filteringRef.current = filtering;
 
@@ -256,7 +248,7 @@ export default function ConstellationGalaxy({
     [],
   );
 
-  // ---- visibility + on-demand rendering -----------------------------------
+  // visibility + on-demand rendering
   const visibleRef = useRef(true);
   const staleWhileHidden = useRef(false);
   const frameReq = useRef<number | null>(null);
@@ -277,7 +269,7 @@ export default function ConstellationGalaxy({
     });
   }, [renderNow]);
 
-  // ---- measure the stage ----------------------------------------------------
+  // measure the stage
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -303,7 +295,7 @@ export default function ConstellationGalaxy({
     };
   }, [invalidate]);
 
-  // ---- three infrastructure (once) ------------------------------------------
+  // three infrastructure (once)
   useEffect(() => {
     const canvas = glCanvasRef.current;
     if (!canvas) return;
@@ -388,7 +380,7 @@ export default function ConstellationGalaxy({
     };
   }, [reducedMotion, invalidate]);
 
-  // ---- geometry: rebuilt only when the dataset changes -----------------------
+  // geometry, rebuilt only when the dataset changes
   const entranceStart = useRef(0);
   const entranceRaf = useRef<number | null>(null);
   useEffect(() => {
@@ -451,7 +443,6 @@ export default function ConstellationGalaxy({
     gl.scene.add(nebula, links, stars);
     Object.assign(gl, { geo, linkGeo, stars, nebula, links });
 
-    // (re)play the entrance for a new dataset
     if (!reducedMotion) {
       entranceStart.current = performance.now();
       gl.starMat.uniforms.uElapsed!.value = 0;
@@ -467,8 +458,8 @@ export default function ConstellationGalaxy({
         g.starMat.uniforms.uElapsed!.value = el;
         g.nebulaMat.uniforms.uElapsed!.value = el;
         g.linkMat.opacity = (filteringRef.current ? 0.1 : 0.22) * Math.min(1, e / ENTRANCE_TOTAL);
-        // respect the offscreen gate — an idle below-the-fold embed shouldn't
-        // burn ~1.1s of bloom frames; the IO handler repaints on reveal
+        // Respect the offscreen gate: an idle below-the-fold embed shouldn't
+        // burn ~1.1s of bloom frames. The IO handler repaints on reveal.
         if (visibleRef.current) renderNow();
         else staleWhileHidden.current = true;
         entranceRaf.current = done ? null : requestAnimationFrame(loop);
@@ -482,9 +473,8 @@ export default function ConstellationGalaxy({
   }, [lib, reducedMotion, renderNow, invalidate]);
   useEffect(
     () => () => {
-      // reset the ids too — StrictMode remounts rerun the effects, and a stale
-      // non-null id would make invalidate()'s "frame already scheduled" guard
-      // wedge shut forever
+      // Reset the ids too: StrictMode remounts rerun the effects, and a stale
+      // non-null id wedges invalidate()'s "frame already scheduled" guard shut.
       if (entranceRaf.current != null) cancelAnimationFrame(entranceRaf.current);
       if (frameReq.current != null) cancelAnimationFrame(frameReq.current);
       if (moveRaf.current != null) cancelAnimationFrame(moveRaf.current);
@@ -495,7 +485,6 @@ export default function ConstellationGalaxy({
     [],
   );
 
-  // link opacity follows the filter state (read by the entrance loop via ref)
   useEffect(() => {
     const gl = glRef.current;
     if (!gl || entranceRaf.current != null) return;
@@ -503,7 +492,7 @@ export default function ConstellationGalaxy({
     invalidate();
   }, [filtering, invalidate]);
 
-  // ---- per-node attributes: colour / size / alpha / ring ---------------------
+  // per-node attributes: colour / size / alpha / ring
   useEffect(() => {
     const gl = glRef.current;
     if (!gl?.geo) return;
@@ -549,7 +538,7 @@ export default function ConstellationGalaxy({
     invalidate();
   }, [lib, matchSet, colorBy, selected, neighbourSet, filtering, invalidate]);
 
-  // ---- camera + point scale follow the view ---------------------------------
+  // camera + point scale follow the view
   useEffect(() => {
     const gl = glRef.current;
     const { w, h } = size;
@@ -581,7 +570,7 @@ export default function ConstellationGalaxy({
     }
   }, [view, size, invalidate]);
 
-  // ---- track labels: recomputed when the view settles ------------------------
+  // track labels, recomputed when the view settles
   const [labelIdx, setLabelIdx] = useState<number[]>([]);
   useEffect(() => {
     const id = setTimeout(() => {
@@ -622,7 +611,7 @@ export default function ConstellationGalaxy({
     return () => clearTimeout(id);
   }, [view, size, lib, matchSet, selected, neighbourSet]);
 
-  // ---- picking (uniform spatial grid, as before) ------------------------------
+  // picking (uniform spatial grid)
   const PICK_CELL = 32;
   const pickGrid = useMemo(() => {
     const g = new Map<string, number[]>();
@@ -670,7 +659,7 @@ export default function ConstellationGalaxy({
     [lib, pickGrid],
   );
 
-  // ---- pan + zoom + pinch -----------------------------------------------------
+  // pan + zoom + pinch
   const clampK = (k: number) => Math.max(K_MIN, Math.min(K_MAX, k));
   const commitView = (next: View) => {
     viewRef.current = next;
@@ -709,15 +698,14 @@ export default function ConstellationGalaxy({
     return { mx, my, d: Math.hypot(pts[0]!.x - pts[1]!.x, pts[0]!.y - pts[1]!.y) };
   };
   const onPointerDown = (e: React.PointerEvent) => {
-    // let the zoom/reset controls be plain buttons — capturing their pointer
-    // would retarget the click to the wrapper (deselect) and eat the zoom
+    // Don't capture the zoom/reset buttons' pointer: it would retarget the
+    // click to the wrapper (deselect) and eat the zoom.
     if ((e.target as HTMLElement).closest('button')) return;
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     downAt.current = { x: e.clientX, y: e.clientY };
     onHover(null);
     if (pointers.current.size === 2) {
-      // second finger → switch from drag to pinch about the midpoint
       drag.current = null;
       const r = wrapRef.current!.getBoundingClientRect();
       const { ox, oy, f } = fit(r.width, r.height);
@@ -807,11 +795,10 @@ export default function ConstellationGalaxy({
       return { k: k2, tx: 500 - ux * k2, ty: 500 - uy * k2 };
     });
 
-  // ---- fly-to: animate the camera to centre a requested node -----------------
-  // Screen centre is always viewbox (500,500) under meet-fit letterboxing, so
-  // the target is exact regardless of stage aspect. Zoom eases geometrically
-  // (perceptually linear), translation linearly on the same eased parameter —
-  // the focal point drifts a hair mid-flight but lands exactly.
+  // Fly-to. Screen centre is always viewbox (500,500) under meet-fit
+  // letterboxing, so the target is exact regardless of stage aspect. Zoom eases
+  // geometrically (perceptually linear), translation linearly on the same eased
+  // parameter — the focal point drifts a hair mid-flight but lands exactly.
   const flyRaf = useRef<number | null>(null);
   useEffect(() => {
     if (!focus) return;
@@ -850,7 +837,7 @@ export default function ConstellationGalaxy({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus?.n]);
 
-  // ---- keyboard: pan with arrows, zoom with +/-, 0 resets ---------------------
+  // keyboard: pan with arrows, zoom with +/-, 0 resets
   const onKeyDown = (e: React.KeyboardEvent) => {
     if ((e.target as HTMLElement).closest('button')) return; // zoom controls keep their own keys
     const PAN = 60; // viewbox units per press — a comfortable nudge at any zoom
@@ -867,9 +854,8 @@ export default function ConstellationGalaxy({
   };
 
   const transform = `translate(${view.tx} ${view.ty}) scale(${view.k})`;
-  // Constellation names, greedily decluttered: lib.genres is most-populous
-  // first, so when two centroids crowd each other (common on the sound map,
-  // where 80+ genre centroids can share the dense core) the bigger scene wins.
+  // Greedily decluttered: lib.genres is most-populous first, so when two
+  // centroids crowd each other the bigger scene wins.
   const genreLabels = useMemo(() => {
     const kept: { g: string; c: { x: number; y: number } }[] = [];
     for (const g of lib.genres) {
@@ -909,7 +895,6 @@ export default function ConstellationGalaxy({
     >
       <canvas ref={glCanvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
 
-      {/* constellation names + track labels — one transformed layer, no re-layout */}
       <div className="cmap-labels" aria-hidden="true">
         <div className="cmap-labels-inner" ref={labelInnerRef}>
           {genreLabels.map(({ g, c }) => (
@@ -934,7 +919,6 @@ export default function ConstellationGalaxy({
         </div>
       </div>
 
-      {/* highlight overlay — wiring, ripple, hover (a few elements at most) */}
       <svg
         viewBox="0 0 1000 1000"
         preserveAspectRatio="xMidYMid meet"
@@ -988,7 +972,6 @@ export default function ConstellationGalaxy({
         </g>
       </svg>
 
-      {/* zoom controls */}
       <div className="cmap-zoom">
         <button onClick={() => zoom(1.3)} aria-label="zoom in">
           +
@@ -1001,10 +984,8 @@ export default function ConstellationGalaxy({
         </button>
       </div>
 
-      {/* legend — swatches pass through the same night-lift as the stars, and
-          every colour-by mode gets the key its nodeColor/nodeFilled actually
-          draw: heat ramps for the continuous scalars (with a hollow chip for
-          the unmeasured), palettes for the categoricals */}
+      {/* Swatches pass through the same night-lift as the stars, so the key
+          matches what nodeColor/nodeFilled actually draw. */}
       <div className="cmap-legend">
         <span className="t-caption ad-muted">{legendLabel(colorBy)}</span>
         {colorBy === 'energy' || colorBy === 'confidence' || colorBy === 'loudness' || colorBy === 'pace' ? (
@@ -1076,7 +1057,6 @@ export default function ConstellationGalaxy({
   );
 }
 
-// End labels for the heat-ramp legends, per continuous colour-by mode.
 const RAMP_ENDS: Record<'energy' | 'confidence' | 'loudness' | 'pace', [string, string]> = {
   energy: ['LOW', 'HIGH'],
   confidence: ['0.0', '1.0'],

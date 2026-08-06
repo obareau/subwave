@@ -1,21 +1,16 @@
 'use client';
 
-/* Shared newsprint primitives for the redesigned admin panels.
-   Every panel renders inside AdminShell's `.admin-root` wrapper, so the
-   unprefixed class names (.card / .tag …) resolve to the admin-scoped
-   rules in globals.css.
+/* Shared admin primitives. Every panel renders inside AdminShell's
+   `.admin-root` wrapper, so the unprefixed class names (.card / .tag …)
+   resolve to the admin-scoped rules in globals.css. Btn / Seg / Toggle wrap
+   shadcn primitives while keeping the original prop API. */
 
-   Btn / Seg / Toggle are thin wrappers over shadcn/ui primitives (Button,
-   ToggleGroup, Switch) — retuned in components/ui/* to the newsprint look —
-   keeping the original prop API so existing call sites need no changes. */
-
-import type { CSSProperties, ReactNode, MouseEvent, Ref } from 'react';
-import { useLayoutEffect, useRef } from 'react';
+import type { ReactNode, MouseEvent, Ref } from 'react';
 import { cn } from '../../lib/cn';
 import { Button } from '../ui/button';
 import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group';
 import { Switch } from '../ui/switch';
-import { Badge } from '../ui/badge';
+import { Badge, badgeVariants } from '../ui/badge';
 
 export interface EyebrowProps {
   children?: ReactNode;
@@ -34,9 +29,8 @@ export interface CardProps {
   className?: string;
   bodyClass?: string;
   headClass?: string;
-  // `flat` drops the box border/background and side padding so the section
-  // reads as part of a continuous form separated by hairline dividers — used
-  // inside EditorDialog (.card.is-flat in globals.css).
+  // Drops the box border/background and side padding, for sections inside
+  // EditorDialog (.card.is-flat in globals.css).
   flat?: boolean;
 }
 
@@ -64,20 +58,67 @@ export interface PillProps {
   className?: string;
   onClick?: () => void;
   title?: string;
+  /* Toggle state for a pill used as an on/off chip. Set it and the pill
+     reports aria-pressed; leave it off for pills that fire a plain action. */
+  pressed?: boolean;
+  /* Unavailable, but still worth finding — a chip past a selection cap, or one
+     frozen while a save is in flight. Keep passing `onClick`: the pill swallows
+     it. Dropping the handler instead would fall back to the Badge <span> and
+     take the chip out of the tab order entirely, which is what this prop
+     exists to avoid. */
+  disabled?: boolean;
 }
 
 /* Tag pill over shadcn Badge. `tone` ∈ ink | accent | solid (default =
-   muted outline); `dot` prepends a small currentColor dot. */
-export function Pill({ children, tone, dot, className, onClick, title }: PillProps) {
-  return (
-    <Badge
-      variant={tone || 'default'}
-      className={cn(onClick && 'cursor-pointer', className)}
-      onClick={onClick}
-      title={title}
-    >
+   muted outline); `dot` prepends a small currentColor dot.
+
+   With `onClick` this renders a real <button> rather than a clickable Badge.
+   Badge is a <span>, so an onClick pill was reachable by mouse only — no tab
+   stop, no Enter/Space, and nothing announcing it as actionable. That made
+   every chip-style multi-select in the admin (webhook events, show genres,
+   skill toggles) keyboard-dead. `type="button"` is load-bearing for the panels
+   that DO sit inside a <form>: without it a chip click submits the form.
+
+   Without `onClick` the Badge path is unchanged, so the ~87 read-only pills
+   render exactly as before. */
+export function Pill({ children, tone, dot, className, onClick, title, pressed, disabled }: PillProps) {
+  const content = (
+    <>
       {dot && <span className="size-1.5 rounded-full bg-current" />}
       {children}
+    </>
+  );
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        /* text-start only to match the Badge <span> exactly: a <button> centres
+           its text by default. The pill is inline-flex so this changes nothing
+           visually today — it keeps the two paths provably style-identical. */
+        className={cn(
+          badgeVariants({ variant: tone || 'default' }),
+          disabled ? 'cursor-default' : 'cursor-pointer',
+          'text-start',
+          className,
+        )}
+        /* aria-disabled, NOT the `disabled` attribute. A disabled <button> is
+           removed from the tab order, so a keyboard user cannot land on it to
+           hear WHY it is unavailable — for a chip past a selection cap that is
+           the whole message. aria-disabled announces the state and keeps the
+           tab stop, so the handler has to refuse the click itself: the element
+           is still natively clickable, by pointer and by Enter/Space alike. */
+        onClick={disabled ? undefined : onClick}
+        title={title}
+        aria-pressed={pressed}
+        aria-disabled={disabled || undefined}
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <Badge variant={tone || 'default'} className={className} title={title}>
+      {content}
     </Badge>
   );
 }
@@ -88,10 +129,9 @@ export interface MetaChipProps {
   className?: string;
 }
 
-/* Read-only facet chip for the "broadcast slate" cards (shows / skills /
-   personas) — a hairline "what this is" tag, smaller and quieter than a Pill.
-   `accent` flags a hard lock (strict filters, pinned feature). `className`
-   lets a caller cap/truncate a long value (e.g. a cloned-voice filename). */
+/* Read-only facet chip for the roster cards. `accent` flags a hard lock
+   (strict filters, pinned feature); `className` lets a caller cap or truncate
+   a long value. */
 export function MetaChip({ children, accent, className }: MetaChipProps) {
   return (
     <span
@@ -127,9 +167,8 @@ export interface BtnProps {
   type?: 'button' | 'submit' | 'reset';
   title?: string;
   className?: string;
-  /** React 19 passes `ref` as an ordinary prop — declared so callers that need
-   *  the element (returning focus to a disclosure trigger, measuring) can reach
-   *  it without dropping down to <Button>. */
+  /** React 19 passes `ref` as an ordinary prop; declared so callers can reach
+   *  the element without dropping down to <Button>. */
   ref?: Ref<HTMLButtonElement>;
   /** Accessible name, for icon-only buttons whose label is the icon. */
   'aria-label'?: string;
@@ -171,9 +210,8 @@ export function Btn({
 export interface SegOption {
   id: string;
   label: ReactNode;
-  /* Hover tooltip. Mainly for icon-only tabs, where the label carries no
-     readable text of its own (the accessible name comes from an `sr-only`
-     span inside `label`). */
+  /* Hover tooltip, mainly for icon-only tabs (whose accessible name comes from
+     an `sr-only` span inside `label`). */
   title?: string;
 }
 
@@ -184,9 +222,8 @@ export interface SegProps {
   onChange?: (id: string) => void;
 }
 
-/* Segmented control over shadcn ToggleGroup. `options` is [{ id, label }];
-   `onChange(id)` fires on selection. Clicking the active item is a no-op
-   (the group always keeps a value, matching the original behaviour). */
+/* Segmented control over shadcn ToggleGroup. Clicking the active item is a
+   no-op: the group always keeps a value. */
 export function Seg({ value, options, accent, onChange }: SegProps) {
   return (
     <ToggleGroup
@@ -223,11 +260,9 @@ export interface ToggleProps {
   on?: boolean;
   onClick?: () => void;
   disabled?: boolean;
-  /** Accessible name — the switch renders no text of its own, so pass the label
-   *  of the setting it controls (from the surrounding row). Required rather
-   *  than optional: an unlabelled switch reads as just "switch, off" to a
-   *  screen reader, and making it optional is what let the sweep go partial.
-   *  tsc now catches a new call site that forgets one. */
+  /** Accessible name — the switch renders no text of its own. Required, not
+   *  optional: an unlabelled switch reads as just "switch, off" to a screen
+   *  reader, and tsc catches a call site that forgets one. */
   ariaLabel: string;
 }
 
@@ -257,62 +292,3 @@ export function Metric({ n, l, accent }: MetricProps) {
   );
 }
 
-export interface WaveProps {
-  bars?: number;
-  seed?: number;
-  h?: number;
-  tone?: string;
-  maxHeight?: number;
-}
-
-/* Stable seeded pseudo-random waveform bars. Heights are set via DOM
-   mutation in useLayoutEffect because Tailwind can't express per-element
-   dynamic pixel values without inline `style`. */
-export function Wave({ bars = 60, seed = 1, h = 60, tone = '', maxHeight }: WaveProps) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const heights: number[] = [];
-  let x = seed * 9301 + 49297;
-  for (let i = 0; i < bars; i++) {
-    x = (x * 9301 + 49297) % 233280;
-    heights.push(Math.round(8 + (x / 233280) * (h - 8)));
-  }
-
-  useLayoutEffect(() => {
-    const root = ref.current;
-    if (!root) return;
-    const max = maxHeight ?? h;
-    root.style.setProperty('--wave-h', `${h}px`);
-    root.style.setProperty('--wave-max-h', `${max}px`);
-    const spans = root.querySelectorAll<HTMLSpanElement>(':scope > span');
-    spans.forEach((span, i) => {
-      const bar = heights[i];
-      if (bar != null) span.style.height = `${bar}px`;
-    });
-  });
-
-  return (
-    <div
-      ref={ref}
-      className={cn(
-        'wave h-[var(--wave-h)] max-h-[var(--wave-max-h)]',
-        tone,
-      )}
-    >
-      {heights.map((_, i) => <span key={i} />)}
-    </div>
-  );
-}
-
-/* Helper: turn a `CSSProperties`-shaped object into an inline `style` prop.
-   Some panels need to express dynamic per-element values (computed colours,
-   gradient angles, geometry) that can't be encoded in Tailwind utilities.
-   They route through this so the lint allow-list stays scoped to truly
-   dynamic styles — every static layout should be Tailwind. */
-export function styleVars(vars: Record<string, string | number | undefined>): CSSProperties {
-  const out: Record<string, string | number> = {};
-  for (const [k, v] of Object.entries(vars)) {
-    if (v == null || v === '') continue;
-    out[k] = v;
-  }
-  return out as CSSProperties;
-}

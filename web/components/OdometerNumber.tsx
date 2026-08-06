@@ -8,11 +8,8 @@ interface OdometerNumberProps {
   className?: string;
 }
 
-// Vertically-sliding digit. New value rises in from below; old slides up and
-// out. Used by the player TopBar listener count, the DotRail numeric tab
-// counts, and the admin shell on-air strip — wherever a number visibly ticks
-// rather than jumps. AnimatePresence keys on the value itself, so the slide
-// fires on every change including from 0 → 1 and back.
+// Vertically-sliding digit. AnimatePresence keys on the value itself, so the
+// slide fires on every change including 0 → 1 and back.
 export default function OdometerNumber({ value, className }: OdometerNumberProps) {
   return (
     <span className={cn('relative inline-flex items-baseline overflow-hidden', className)} aria-live="polite">

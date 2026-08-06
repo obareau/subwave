@@ -93,7 +93,9 @@ export async function runAudioMoodPass(): Promise<AudioMoodStats> {
   // the live vocab once so prompts and the scoring loop stay index-aligned.
   const vocab = moodVocab();
   const prompts = vocab.map(moodPrompt);
-  const vecs = await analyzer.embedTexts(prompts, { timeoutMs: 10 * 60_000 });
+  // coldRetry off: with a deadline this generous, a timeout means the backend
+  // is broken, not cold — doubling it to 20 minutes would just stall the pass.
+  const vecs = await analyzer.embedTexts(prompts, { timeoutMs: 10 * 60_000, coldRetry: false });
   if (!vecs || vecs.length !== vocab.length) {
     // A backend that ADVERTISES the text tower but failed the call is a runtime
     // fault (worker error, oversized-response 500 — #996), not a lean build;

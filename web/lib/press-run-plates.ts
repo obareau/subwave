@@ -1,8 +1,7 @@
-// Plate list for the landing page's "Press Run" interlude — the single source
-// of truth for the gallery strip, its captions, the lightbox, and the capture
-// script (scripts/capture-gallery.mjs). Every skin appears at least once and
-// every built-in theme exactly once. Plain data, no React: the capture script
-// imports this from node (via tsx).
+// Plate list for the landing page's "Press Run" interlude: one source of truth
+// for the gallery strip, captions, lightbox and scripts/capture-gallery.mjs.
+// Every skin appears at least once and every built-in theme exactly once.
+// Plain data, no React, because the capture script imports it from node.
 
 export type PressRunSkinId =
   | 'classic' | 'unit' | 'drift' | 'subamp' | 'tty' | 'platter';
@@ -18,9 +17,8 @@ export interface PressRunPlate {
   no: number;
   skinId: PressRunSkinId;
   skinName: string;
-  /** One-liner shown in the lightbox. Copied verbatim from the skin registry
-   *  (components/skins/index.ts) — kept as plain strings so this module never
-   *  drags the registry's next/dynamic wrappers into the capture script. */
+  /** Copied verbatim from the skin registry, as plain strings so this module
+   *  never drags the registry's next/dynamic wrappers into the capture script. */
   skinDescription: string;
   themeId: PressRunThemeId;
   themeName: string;

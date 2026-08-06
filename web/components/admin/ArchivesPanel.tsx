@@ -1,9 +1,7 @@
 'use client';
 
-// Archives — /admin/archives. The hourly broadcast recordings Liquidsoap
-// writes under state/archive/. Download a single hour or clear the whole lot;
-// no playback controls here (these MP3s are an hour long each and the browser
-// audio element doesn't seek well into them).
+// No playback controls: these MP3s are an hour long each and the browser audio
+// element doesn't seek well into them.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -57,9 +55,8 @@ export default function ArchivesPanel() {
     void load();
   }, [hydrated, needsAuth, load]);
 
-  // Wipe every recording in one shot — the only delete affordance (per-file
-  // delete isn't worth the UI for hour-long mixdowns). Re-fetches the now-empty
-  // list on success so the panel reflects the freed disk immediately.
+  // The only delete affordance — per-file delete isn't worth the UI for
+  // hour-long mixdowns.
   const clearArchive = async () => {
     setClearing(true);
     setClearErr(null);
@@ -75,8 +72,6 @@ export default function ArchivesPanel() {
     }
   };
 
-  // Group by date — the operator's mental model is "let me grab yesterday's
-  // 9am hour", not "give me a flat list of 720 mp3s sorted by mtime".
   const byDate = useMemo(() => {
     if (!entries) return [] as { date: string; items: ArchiveEntry[]; bytes: number }[];
     const m = new Map<string, ArchiveEntry[]>();
@@ -111,13 +106,9 @@ export default function ArchivesPanel() {
 
   const totalBytes = entries.reduce((a, b) => a + b.bytes, 0);
 
-  // The archive file endpoint is behind requireAdmin, so a plain <a download>
-  // hits it with no Authorization header and the browser saves the 401 JSON
-  // body as the "download". Embedding user:pass@ in the URL doesn't help —
-  // it's a no-op for same-origin and modern Chrome strips credentials from
-  // navigations anyway. Instead fetch through adminFetch (which attaches the
-  // Basic header), then trigger the save from an in-memory blob. Hourly MP3s
-  // are ~tens of MB, fine to hold briefly for a one-off download.
+  // The endpoint is behind requireAdmin, so a plain <a download> saves the 401
+  // JSON body instead. user:pass@ in the URL is a no-op same-origin and Chrome
+  // strips it from navigations, so fetch via adminFetch and save from a blob.
   const download = async (path: string) => {
     setDownloading(path);
     setDlErr(null);

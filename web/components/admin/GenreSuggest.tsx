@@ -1,12 +1,8 @@
 'use client';
 
-// GenreSuggest — related-genre chips beneath the show editor's "genre lean"
-// field. Three states, all driven off GET /library/genres/related:
-//   • field empty        → the most-stocked genres as quick-picks
-//   • field is a genre    → its nearest genres by embedding similarity
-//   • field partially typed → genres whose name contains the text
-// Click a chip to set the lean. A single-value helper — one genre in, one out —
-// that turns the embedding data into something actionable instead of decorative.
+// Three chip states off GET /library/genres/related: empty field → most-stocked
+// genres, exact genre → its nearest by embedding similarity, partial text →
+// substring matches.
 
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
@@ -35,13 +31,11 @@ const norm = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 export default function GenreSuggest({ adminFetch, value, onSelect }: Props) {
   const [data, setData] = useState<SuggestData | null>(null);
   const [error, setError] = useState(false);
-  // Resolve the typed value to a real genre on the client (the field is free
-  // text); used to look up its neighbour list.
+  // The field is free text, so the typed value is resolved to a real genre here.
   const byNorm = useRef<Map<string, GenreItem>>(new Map());
 
-  // Fetch once on mount. No "already fetched" ref guard — under React
-  // StrictMode the first mount's fetch is cancelled by the cleanup, so the
-  // remount must be free to fetch again or `data` never populates.
+  // No "already fetched" ref guard: under StrictMode the first mount's fetch is
+  // cancelled by the cleanup, so the remount must be free to fetch again.
   useEffect(() => {
     let live = true;
     (async () => {
@@ -73,8 +67,7 @@ export default function GenreSuggest({ adminFetch, value, onSelect }: Props) {
     label = `similar to ${match.value}`;
     chips = data.related[match.value] ?? [];
   } else if (nv) {
-    // Typed text that isn't an exact genre → substring matches (minus the exact
-    // one, which is already in the field), falling back to popular.
+    // Substring matches, minus the exact one already in the field.
     const subs = data.genres.filter((g) => norm(g.value).includes(nv) && norm(g.value) !== nv);
     if (subs.length) {
       label = 'matches';

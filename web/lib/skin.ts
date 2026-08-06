@@ -1,24 +1,21 @@
-// Listener-side skin persistence — the skin twin of lib/theme.ts's override
-// storage. The operator picks a station-wide skin in admin → Settings (rides
-// GET /state as ui.skin); a listener can override it per-browser, and the
-// last-seen station skin is cached so a returning visitor boots into the
-// right skin before the first poll instead of flashing the default.
+// Listener-side skin persistence, the skin twin of lib/theme.ts's override
+// storage. The station-wide pick rides GET /state as ui.skin; a listener can
+// override it per-browser, and the last-seen station skin is cached so a
+// returning visitor boots into the right skin before the first poll.
 
 const OVERRIDE_KEY = 'subwave-skin-override';
 const STATION_CACHE_KEY = 'subwave-skin-station';
 
 // Skin-id facts shared by the registry (components/skins/index.ts) and the
-// pre-paint script below. They live HERE — plain data, no React — because the
-// server layout inlines SKIN_INIT_SCRIPT and must not drag the registry's
-// next/dynamic wrappers into a server component. The registry re-exports
-// DEFAULT_SKIN_ID for component-side consumers.
+// pre-paint script below. They live HERE, as plain data with no React, because
+// the server layout inlines SKIN_INIT_SCRIPT and must not drag the registry's
+// next/dynamic wrappers into a server component.
 export const DEFAULT_SKIN_ID = 'classic';
 
-/** Renamed/retired skin ids — resolved to their successor so an operator's
- *  saved setting keeps working across upgrades. */
+/** Retired ids resolve to their successor so a saved setting survives an
+ *  upgrade. */
 export const LEGACY_SKIN_ALIASES: Record<string, string> = {
   terminal: 'tty',
-  // Spool (the walkman deck) was retired in favour of the Unit SW-9 receiver.
   spool: 'unit',
 };
 
@@ -31,8 +28,7 @@ export function canonicalSkinId(id: string | null | undefined): string | null {
     : id;
 }
 
-/** The listener's per-browser skin override id, or null when none is set
- *  or storage is unreadable. */
+/** Null when unset or storage is unreadable. */
 export function loadSkinOverride(): string | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -43,8 +39,7 @@ export function loadSkinOverride(): string | null {
   }
 }
 
-/** Save or clear the listener's skin override. Pass null to re-follow the
- *  station default. Failures (private mode, quota) are swallowed. */
+/** Pass null to re-follow the station default. Storage failures are swallowed. */
 export function saveSkinOverride(id: string | null): void {
   if (typeof window === 'undefined') return;
   try {
@@ -53,7 +48,7 @@ export function saveSkinOverride(id: string | null): void {
   } catch { /* non-fatal */ }
 }
 
-/** Last station skin id seen on /state — the flash-free boot hint. */
+/** Last station skin seen on /state; the flash-free boot hint. */
 export function loadCachedStationSkin(): string | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -71,14 +66,13 @@ export function cacheStationSkin(id: string): void {
   } catch { /* non-fatal */ }
 }
 
-// Pre-hydration <script> body — the skin twin of THEME_INIT_SCRIPT. SSR can't
-// know the browser's skin override, so the server always paints the default
-// face and the shell swaps one tick after hydration. When this browser is
-// known to resolve to a NON-default skin, stamp `data-skin-pending` on <html>
-// and inject a rule hiding the full-page shell, so that first paint is a
-// quiet blank instead of a flash of the wrong skin. PlayerShell removes the
-// attribute once the resolved skin is mounted. Static constant, inlined via
-// dangerouslySetInnerHTML in layout.tsx; no untrusted input reaches it.
+// Pre-hydration <script> body, the skin twin of THEME_INIT_SCRIPT. SSR can't
+// know the browser's skin override, so the server paints the default face and
+// the shell swaps one tick after hydration. When this browser resolves to a
+// NON-default skin, stamp `data-skin-pending` on <html> and hide the shell, so
+// first paint is a quiet blank instead of a flash of the wrong skin.
+// PlayerShell removes the attribute once the resolved skin mounts. Static
+// constant, inlined via dangerouslySetInnerHTML; no untrusted input reaches it.
 export const SKIN_INIT_SCRIPT = `
   try {
     var o = localStorage.getItem('${OVERRIDE_KEY}');

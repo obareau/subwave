@@ -1,13 +1,8 @@
 'use client';
-// Detented horizontal fader for the behaviour settings (talk frequency, script
-// length) — the mixing-desk counterpart to the rotary ToneKnob, and kept
-// visually distinct on purpose: knobs are continuous personality colour, faders
-// are discrete behaviour stops with real scheduling consequences, so every
-// stop is named and directly clickable. Pointer-draggable AND keyboard-operable
-// (role="slider" with arrows/Home/End). Cap/tick/fill positions come from the
-// fixed lookups in constants.ts (inline styles are forbidden in admin sources —
-// issue #50). Same dark "physical hardware" body as the knob in both themes;
-// the lit fill and cap stripe track --accent.
+// Detented horizontal fader for the behaviour settings. Pointer-draggable AND
+// keyboard-operable (role="slider" with arrows/Home/End). Cap/tick/fill positions
+// come from the fixed lookups in constants.ts, since inline styles are forbidden in
+// admin sources (issue #50).
 import { useRef } from 'react';
 import type {
   KeyboardEvent as ReactKeyboardEvent,
@@ -52,8 +47,8 @@ export function SteppedFader({ ariaLabel, stops, value, onChange }: SteppedFader
   const startDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.currentTarget.focus();
-    // Track the last-applied stop locally — the window listeners outlive this
-    // render, so comparing against the captured `value` would go stale mid-drag.
+    // The window listeners outlive this render, so comparing against the captured
+    // `value` would go stale mid-drag.
     let last = idx;
     const apply = (clientX: number) => {
       const next = indexFromX(clientX);
@@ -102,19 +97,15 @@ export function SteppedFader({ ariaLabel, stops, value, onChange }: SteppedFader
           aria-orientation="horizontal"
           onPointerDown={startDrag}
           onKeyDown={onKeyDown}
-          // Taller grab area on phones — the groove, ticks and cap are all
-          // centred on the rail, so the extra height is transparent padding and
-          // the control looks identical; `sm:` restores the desktop 32px.
+          // Taller grab area on phones. Everything is centred on the rail, so the
+          // extra height is transparent padding; `sm:` restores the desktop 32px.
           className="relative h-11 cursor-ew-resize touch-none rounded outline-none select-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)] sm:h-8"
         >
-          {/* groove */}
           <div className="absolute top-1/2 right-0 left-0 h-[6px] -translate-y-1/2 rounded-full border border-[#0e0c0a] bg-[linear-gradient(180deg,#161412,#2a2420)] shadow-[inset_0_2px_4px_rgba(0,0,0,0.6)]" />
-          {/* lit fill up to the cap */}
           <div className={cn(
             'absolute top-1/2 left-0 h-[6px] -translate-y-1/2 rounded-l-full bg-[color-mix(in_oklab,var(--accent)_45%,transparent)]',
             fills[idx],
           )} />
-          {/* detent ticks */}
           {stops.map((s, i) => (
             <span
               key={s.id}
@@ -127,7 +118,6 @@ export function SteppedFader({ ariaLabel, stops, value, onChange }: SteppedFader
               )}
             />
           ))}
-          {/* cap */}
           <div className={cn('absolute top-1/2 -translate-x-1/2 -translate-y-1/2', lefts[idx])}>
             <span className="flex h-7 w-4 justify-center rounded-[3px] border border-[#0e0c0a] bg-[radial-gradient(circle_at_50%_30%,#2a2420,#161412)] shadow-[0_2px_5px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.08)]">
               <span className="h-full w-[2px] rounded-[1px] bg-[var(--accent)] shadow-[0_0_6px_color-mix(in_oklab,var(--accent)_60%,transparent)]" />
@@ -145,7 +135,7 @@ export function SteppedFader({ ariaLabel, stops, value, onChange }: SteppedFader
               onClick={() => select(i)}
               className={cn(
                 // -my-2/py-2 grows the thumb target to ~28px without moving the
-                // label or the row below it. Desktop keeps the bare text box.
+                // label or the row below it.
                 'absolute top-0 -my-2 py-2 text-[9px] leading-tight font-bold whitespace-nowrap uppercase sm:my-0 sm:py-0',
                 i === 0 ? 'left-0' : i === n - 1 ? 'right-0' : cn(lefts[i], '-translate-x-1/2'),
                 i === idx ? 'text-[var(--accent)]' : 'text-muted hover:text-[var(--ink)]',
@@ -157,7 +147,6 @@ export function SteppedFader({ ariaLabel, stops, value, onChange }: SteppedFader
         </div>
       </div>
 
-      {/* what the selected stop actually does on air */}
       <div className="field-hint mt-2">
         <span className="font-bold text-[var(--ink)]">{current?.label}</span> — {current?.desc}
       </div>

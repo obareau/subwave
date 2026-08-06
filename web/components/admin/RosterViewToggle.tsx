@@ -1,10 +1,7 @@
 'use client';
 
-// The Cards/List switch that sits above each roster (/admin/skills,
-// /admin/shows, /admin/personas). Icon-only: LayoutList is the slate card's
-// own shape (a face beside stacked lines), Rows3 is the dense table. Each
-// carries a visually-hidden label, so the accessible name is still
-// "Cards"/"List" for screen readers and tests.
+// Icon-only, so each option carries a visually-hidden label to keep the
+// accessible name "Cards"/"List" for screen readers and tests.
 
 import { LayoutList, Rows3 } from 'lucide-react';
 import { Seg } from './ui';

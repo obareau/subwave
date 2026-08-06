@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { LayoutTemplate, Moon, Palette, Sun, Zap } from 'lucide-react';
+import { LayoutTemplate, Palette, Zap } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useDynamicStyle } from '../hooks/useDynamicStyle';
 import { useLiteMode } from '../hooks/useLiteMode';
@@ -15,44 +15,42 @@ interface SwatchProps {
   color: string | undefined;
 }
 
-// `useDynamicStyle` is how this codebase paints arbitrary per-element colours
-// without using the (lint-banned) inline `style` prop. The hook routes through
-// HTMLElement.style via the DOM API, which lint can't intercept.
+// `useDynamicStyle` paints arbitrary per-element colours without the (lint-banned)
+// inline `style` prop — it routes through HTMLElement.style via the DOM API.
 function Swatch({ color }: SwatchProps) {
   const ref = useRef<HTMLSpanElement>(null);
   useDynamicStyle(ref, { background: color || 'transparent' });
   return <span ref={ref} className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden="true" />;
 }
 
+// Spans the full grid so the heading sits above its whole row of cards, never
+// beside the first one.
 function SectionLabel({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <span className={cn('v3-eyebrow border-b border-soft-border px-1 pb-1 text-[10px] tracking-[0.3em]', className)}>
+    <span
+      className={cn(
+        'v3-eyebrow col-span-full border-b border-soft-border px-1 pb-1 text-[10px] tracking-[0.3em]',
+        className,
+      )}
+    >
       {children}
     </span>
   );
 }
 
 export interface ThemeSwitcherProps {
-  /** Visual variant — player chrome (TopBar) or admin header. Controls the
-   *  trigger button's text styling so it picks up the right cluster's font. */
+  /** Trigger button text styling, so it picks up the right cluster's font. */
   variant?: 'player' | 'admin';
 }
 
-// Per-listener theme + skin switcher. Drops into a header as a palette icon
-// and opens a centered modal listing every theme the controller exposes, the
-// player skins, and the lite-mode toggle. The listener's picks are persisted
-// in localStorage and beat the station-wide defaults until reset. Modal (not a
-// dropdown) so it reads the same on every skin regardless of where the icon
-// sits — an anchored popover collided with each skin's own chrome.
-//
-// The component renders nothing while the theme registry is still loading or
-// is empty — there's nothing useful to show, and bouncing a button in and out
-// would draw the eye more than just appearing once.
+// Per-listener theme + skin switcher; picks persist in localStorage and beat the
+// station-wide defaults until reset. Modal rather than a dropdown so it reads the
+// same on every skin — an anchored popover collided with each skin's own chrome.
+// Renders nothing while the registry is loading or empty.
 export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps) {
   const ctx = useThemeSwitcher();
-  // Skin selection is only available inside a PlayerShell; the admin header
-  // variant gets null and hides the section. With a single shipped skin
-  // there's nothing to switch, so the section also stays hidden then.
+  // Skin selection only exists inside a PlayerShell; the admin variant gets null
+  // and hides the section, as does a build shipping a single skin.
   const skinCtx = useSkinSelection();
   const showSkins = skinCtx != null && skinCtx.skins.length > 1;
   const [open, setOpen] = useState(false);
@@ -66,17 +64,9 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
     [ctx],
   );
 
-  // Bail out before the provider's first poll resolves — the trigger has
-  // nothing useful to open.
   if (!ctx || ctx.themes.length === 0) return null;
 
-  const { themes, stationActiveId, overrideId, effectiveId, paintedId, mode, renderedMode, cycleMode } =
-    ctx;
-  const isDark = renderedMode === 'dark';
-  // A pinned mode the active palette wasn't authored for pauses that palette in
-  // favour of the built-in base (see resolveAppearance) — say so rather than
-  // leaving the picker highlighting a row that isn't on screen.
-  const palettePaused = mode !== null && paintedId === null;
+  const { themes, stationActiveId, overrideId, effectiveId } = ctx;
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -87,9 +77,8 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
           title="Appearance"
           className={cn(
             'v3-focus inline-flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none',
-            // The admin header packs this next to several other icon-only
-            // controls, so it needs a thumb-sized box on a phone; the dense
-            // desktop icon returns at sm. Player chrome is untouched.
+            // The admin header packs this next to other icon-only controls, so it
+            // needs a thumb-sized box on a phone; the dense desktop icon returns at sm.
             variant === 'admin'
               ? 'caption min-h-9 min-w-9 text-muted sm:min-h-0 sm:min-w-0'
               : 'text-muted hover:text-ink',
@@ -106,7 +95,9 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
           className={cn(
             'v3-modal-pop fixed top-1/2 left-1/2 z-50 flex flex-col border border-ink bg-bg text-ink shadow-drawer outline-none',
             '-translate-x-1/2 -translate-y-1/2',
-            'max-h-[calc(100vh-3rem)] w-[min(360px,calc(100vw-2rem))]',
+            // Two columns of cards need roughly twice the old 360px; still clamped
+            // to the viewport, so a phone gets the grid's single-column fallback.
+            'max-h-[calc(100vh-3rem)] w-[min(620px,calc(100vw-2rem))]',
           )}
         >
           <div className="flex items-baseline justify-between gap-3 border-b border-ink px-5 py-3.5">
@@ -121,7 +112,7 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
             </Dialog.Close>
           </div>
 
-          <div className="v3-scroll grid flex-1 gap-1 overflow-auto px-3 py-3">
+          <div className="v3-scroll grid flex-1 grid-cols-1 gap-1 overflow-auto px-3 py-3 sm:grid-cols-2">
             <SectionLabel>Theme</SectionLabel>
             {themes.map(t => {
               const isActive = t.id === effectiveId;
@@ -155,14 +146,12 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
               );
             })}
 
-            {/* Reset row — only meaningful when an override is in effect; muted
-                when there's nothing to clear so it doesn't draw the eye. */}
             <button
               type="button"
               onClick={() => onPickTheme(null)}
               disabled={!overrideId}
               className={cn(
-                'mt-1 w-full border-0 bg-transparent px-2 py-1 text-left text-[10px] tracking-[0.2em] text-muted uppercase',
+                'col-span-full mt-1 w-full border-0 bg-transparent px-2 py-1 text-left text-[10px] tracking-[0.2em] text-muted uppercase',
                 overrideId ? 'v3-focus cursor-pointer hover:text-ink' : 'cursor-default opacity-60',
               )}
             >
@@ -174,50 +163,6 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
               )}
             </button>
 
-            {/* Light/dark control — independent of which palette is active, and
-                the on-screen twin of the `d` keyboard shortcut. Three states,
-                not two: AUTO follows the palette (and the system preference
-                when there is no palette), LIGHT/DARK pin it per-browser.
-                Flipping back off a pin returns to AUTO rather than pinning the
-                opposite, so a stray press can't detach the listener from the
-                operator's palette for good. Stays open so the flip is visible. */}
-            <button
-              type="button"
-              onClick={() => cycleMode()}
-              aria-label={`Appearance: ${mode ? `${mode} (pinned)` : `auto, currently ${renderedMode}`}. Activate to switch to ${isDark ? 'light' : 'dark'}.`}
-              className="v3-focus mt-2 flex w-full cursor-pointer items-center gap-2 border border-soft-border bg-bg px-2 py-1.5 text-left hover:bg-[var(--overlay)]"
-            >
-              {isDark ? (
-                <Moon className="h-4 w-4 shrink-0" aria-hidden="true" />
-              ) : (
-                <Sun className="h-4 w-4 shrink-0" aria-hidden="true" />
-              )}
-              <span className="grid min-w-0 flex-1 gap-0.5">
-                <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
-                  Light / dark
-                </span>
-                <span className="truncate text-[10px] leading-[1.3] text-muted">
-                  {palettePaused
-                    ? 'Palette paused while pinned — shortcut: D'
-                    : mode
-                      ? 'Pinned — press again for auto · shortcut: D'
-                      : 'Following the palette — shortcut: D'}
-                </span>
-              </span>
-              <span
-                className={cn(
-                  'shrink-0 text-[10px] font-bold tracking-[0.2em] uppercase',
-                  mode ? 'text-vermilion' : 'text-muted',
-                )}
-                aria-hidden="true"
-              >
-                {mode ?? 'Auto'}
-              </span>
-            </button>
-
-            {/* Player-skin picker — a different face for the whole player, not
-                just a palette. Mirrors the theme rows: listener pick beats the
-                station default until reset. */}
             {showSkins && skinCtx && (
               <>
                 <SectionLabel className="mt-2">Player skin</SectionLabel>
@@ -259,7 +204,7 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
                   }}
                   disabled={!skinCtx.overrideId}
                   className={cn(
-                    'mt-1 w-full border-0 bg-transparent px-2 py-1 text-left text-[10px] tracking-[0.2em] text-muted uppercase',
+                    'col-span-full mt-1 w-full border-0 bg-transparent px-2 py-1 text-left text-[10px] tracking-[0.2em] text-muted uppercase',
                     skinCtx.overrideId ? 'v3-focus cursor-pointer hover:text-ink' : 'cursor-default opacity-60',
                   )}
                 >
@@ -271,16 +216,15 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
               </>
             )}
 
-            {/* Low-power toggle. Drops backdrop blur + animations so weak GPUs
-                (kiosks, Raspberry Pi) stop re-compositing frosted layers every
-                frame. Persists per-browser; a kiosk can also pin it with ?lite=1
-                in its start URL. Stays open on toggle so the effect is visible. */}
+            {/* Low-power toggle: drops backdrop blur + animations so weak GPUs stop
+                re-compositing frosted layers every frame. A kiosk can pin it with
+                ?lite=1. Stays open on toggle so the effect is visible. */}
             <button
               type="button"
               aria-pressed={lite}
               onClick={() => setLite(!lite)}
               className={cn(
-                'v3-focus mt-2 flex w-full cursor-pointer items-center gap-2 border px-2 py-1.5 text-left',
+                'v3-focus col-span-full mt-2 flex w-full cursor-pointer items-center gap-2 border px-2 py-1.5 text-left',
                 lite
                   ? 'border-vermilion bg-[var(--ink-softer)]'
                   : 'border-soft-border bg-bg hover:bg-[var(--overlay)]',

@@ -21,9 +21,6 @@ interface JinglesSectionProps {
   data: SettingsData;
   busy: boolean;
   saveSettings: SaveSettings;
-  // Slimmed from the full FormState — jingleRatio is the only settings field
-  // this section touches, so the Imaging page holds it as a lone string rather
-  // than rebuilding Settings' whole form-hydration machinery.
   jingleRatio: string;
   setJingleRatio: (v: string) => void;
   jingleText: string;
@@ -67,9 +64,8 @@ export function JinglesSection({
     importAbort.current = null;
     setImportProgress(null);
     if (!res) return;
-    // The selection always clears so a retry can't re-upload files that
-    // already made it in; failures stay listed so the operator can re-pick
-    // just those.
+    // Always clear the selection so a retry can't re-upload files that already
+    // made it in; failures stay listed so the operator can re-pick just those.
     setImportFiles([]);
     if (importRef.current) importRef.current.value = '';
     if (res.failures.length || res.aborted) {
@@ -102,7 +98,6 @@ export function JinglesSection({
         }
       />
 
-      {/* Frequency */}
       <PanelBox>
         <PanelHead label="how often" right={<Badge variant="accent">restart required</Badge>} />
         <div className="flex flex-wrap items-center gap-5 px-[18px] py-[18px]">
@@ -135,7 +130,6 @@ export function JinglesSection({
         </div>
       </PanelBox>
 
-      {/* Library */}
       <PanelBox>
         <PanelHead label={`jingle library · ${pad2(jingles.length)}`} />
         {jingles.length === 0 ? (
@@ -145,9 +139,8 @@ export function JinglesSection({
             {jingles.map(j => (
               <div
                 key={j.filename}
-                /* Mobile drops the play/delete cluster under the text: the two
-                   icon buttons plus the gap eat 90px of the ~310px a panel has
-                   at 390px, which squeezes the quote to a two-word column. */
+                /* Mobile drops the play/delete cluster below the text: the two icon
+                   buttons eat 90px of the ~310px a panel has at 390px. */
                 className="grid grid-cols-1 items-center gap-3 px-[18px] py-[15px] sm:grid-cols-[1fr_auto] sm:gap-[18px]"
               >
                 <div className="min-w-0">
@@ -193,12 +186,11 @@ export function JinglesSection({
         )}
       </PanelBox>
 
-      {/* Create — Piper TTS */}
       <Modal
         open={modal === 'create'}
         onOpenChange={(o) => { if (!o) setModal(null); }}
         title="create jingle"
-        sub="we’ll voice it with Piper TTS"
+        sub="we’ll voice it in your station’s configured TTS voice"
         footer={
           <>
             <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={() => setModal(null)}>Cancel</Button>
@@ -220,7 +212,6 @@ export function JinglesSection({
         </div>
       </Modal>
 
-      {/* Import — bring your own audio */}
       <Modal
         open={modal === 'import'}
         onOpenChange={(o) => { if (!o && !importProgress) closeImport(); }}

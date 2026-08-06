@@ -23,6 +23,8 @@ docker compose --profile tts-heavy up -d
 
 That brings up a separate container holding both heavy engines. It shares the same volume as the controller, so once it's running your chosen voice just works, with no extra wiring. Until then the station keeps talking on Piper, so you never go off air while you sort it out.
 
+Once the sidecar is up, both engines can [clone a voice from a single WAV](/news/clone-a-voice), and Chatterbox can move onto [an NVIDIA card](/news/chatterbox-on-the-gpu) if you have one. The manual's [Voices & TTS](/manual/voices) page compares all five engines.
+
 ## Why it helps
 
 You stop guessing. The reason a voice didn't change is now on the screen, with the fix next to it, so getting the good voices going takes a minute instead of a debugging session.

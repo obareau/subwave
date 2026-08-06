@@ -317,7 +317,10 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
-- **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them.
+- **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them, including [running analysis on another machine](docs/tts-heavy.md#running-the-analyzer-on-another-machine) (a GPU box elsewhere on the network).
+- **[`docs/custom-tts.md`](docs/custom-tts.md):** bring your own TTS server — point the DJ at any HTTP endpoint you run (your GPU box, a bridge in front of a vendor API), the same way the LLM side takes a custom base URL.
+- **[`docs/gpu-tts.md`](docs/gpu-tts.md):** running Chatterbox on an NVIDIA GPU — via the OpenAI layer, or by GPU-enabling the bundled sidecar.
+- **[`docs/private-station.md`](docs/private-station.md):** locking the player and the stream behind a password — and how to tune in from apps, VLC and hardware once it's on, including a station behind reverse-proxy HTTP Basic Auth.
 - **[`docs/navidrome-libraries.md`](docs/navidrome-libraries.md):** keeping audiobooks / seasonal collections off air with a dedicated, library-scoped Navidrome user.
 - **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
   non-obvious constraints behind each subsystem.

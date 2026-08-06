@@ -8,6 +8,7 @@
 
 import * as settings from '../../../settings.js';
 import { languageModel, resolveModelId, ollamaBaseUrl, llmCfg } from './registry.js';
+import { discoveryStepsFor, DISCOVERY_STEPS_MIN } from './capabilities.js';
 
 export interface Leg {
   cfg: any;       // the resolved llm config for this leg
@@ -53,6 +54,37 @@ export function fallbackLeg(): Leg | null {
   } catch {
     return null;
   }
+}
+
+// The discovery budget a PROMPT may honestly promise the model.
+//
+// The system prompt is built once, before withFailover has chosen a leg, so a
+// station whose fallback runs a different provider can have its prompt written
+// against the primary's budget and then executed on the backup's. Take the
+// MINIMUM across every leg that could run, because the two directions are not
+// equally safe: under-promising costs a round the model could have used, while
+// over-promising tells it to plan a second look it will never get and leaves it
+// cornered at the forced commit — the exact failure the narrow wording exists
+// to prevent.
+//
+// Non-throwing: a misconfigured leg falls to the floor rather than taking down
+// a prompt build.
+export function promptDiscoverySteps(): number {
+  let steps: number;
+  try {
+    steps = discoveryStepsFor(llmCfg());
+  } catch {
+    return DISCOVERY_STEPS_MIN;
+  }
+  const stored = settings.get().llm?.fallback;
+  if (stored?.enabled) {
+    try {
+      steps = Math.min(steps, discoveryStepsFor(stored));
+    } catch {
+      return DISCOVERY_STEPS_MIN;
+    }
+  }
+  return steps;
 }
 
 // Cheap liveness check for a leg's host, used by the dual-LLM tagger to decide

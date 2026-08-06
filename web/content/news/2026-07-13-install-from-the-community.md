@@ -12,7 +12,7 @@ Community skills and personas used to be baked into each release, so you only sa
 
 The catalog is one shared place operators publish three kinds of thing:
 
-- Skills, the short between-track segments your DJ can run.
+- [Skills](/news/custom-dj-skills), the short between-track segments your DJ can run.
 - DJ personas, a full character with its own voice and temperament.
 - Shows, new here. A ready-made template: a standing brief plus the music filters that steer it.
 
@@ -26,7 +26,9 @@ Open admin and pick Skills, Personas, or Shows. Each panel has a Community butto
 - A persona joins your roster with a default voice, ready to edit.
 - A show installs unscheduled with your active DJ as host. Give it a persona and paint it into the weekly grid.
 
-To share your own, the public pages at `/skills`, `/personas`, and `/shows` each have a Share button. It opens a short form, a bot turns that into a pull request on the catalog, and once a maintainer merges it, every station can install it.
+![The admin Shows page: the on-air, up-next and after-that shows across the top, a brush row of show names, and the weekly grid below it, every hour of the week painted in each show's colour](/screenshots/admin-shows.webp)
+
+To share your own, the public pages at [/skills](/skills), [/personas](/personas), and [/shows](/shows) each have a Share button. It opens a short form, a bot turns that into a pull request on the catalog, and once a maintainer merges it, every station can install it.
 
 Running your own catalog, or a fork? Point your station at it and everything above reads from there instead:
 

@@ -1,11 +1,7 @@
-// Route-level loading UI for the force-dynamic /landing broadsheet.
-//
-// The page renders per-request (`dynamic = 'force-dynamic'`) and awaits the
-// showcase-station catalog before it can return, so without this boundary the
-// whole app shell blanks while that request is in flight. This gives Next a
-// Suspense fallback for the segment: a lightweight paper-toned placeholder that
-// keeps the broadsheet frame present — and announces itself to assistive tech
-// via role="status" — until the real page paints.
+// Suspense fallback for the force-dynamic /landing broadsheet. The page awaits
+// the showcase-station catalog before it can return, so without this boundary
+// the whole app shell blanks while that request is in flight. Announces itself
+// to assistive tech via role="status".
 export default function LandingLoading() {
   return (
     <div className="min-h-screen bg-bg text-ink">

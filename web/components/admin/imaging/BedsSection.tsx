@@ -38,9 +38,8 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importName, setImportName] = useState('');
   const [importDesc, setImportDesc] = useState('');
-  // In-progress edits of the numeric fields. null = show the saved value, so
-  // the inputs stay controlled (an out-of-range entry snaps back on blur
-  // instead of lingering in the DOM as a number that was never persisted).
+  // null = show the saved value, so the inputs stay controlled and an out-of-range
+  // entry snaps back on blur instead of lingering as a never-persisted number.
   const [thresholdEdit, setThresholdEdit] = useState<string | null>(null);
   const [crossEdit, setCrossEdit] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
@@ -97,7 +96,6 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         }
       />
 
-      {/* On/off */}
       <PanelBox>
         <div className="flex flex-wrap items-center justify-between gap-5 px-[18px] py-[16px]">
           <div className="min-w-[240px] flex-1">
@@ -124,11 +122,10 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         </V3Alert>
       )}
 
-      {/* Thresholds */}
       <PanelBox>
         <PanelHead label="when to use a bed" />
-        {/* One column on mobile — two 155px cells can't hold a sentence, a
-            number field and a unit. The divider swaps side with the axis. */}
+        {/* One column on mobile: two 155px cells can't hold a sentence, a number
+            field and a unit. */}
         <div className="grid grid-cols-1 sm:grid-cols-2">
           <div className="border-b border-separator-soft p-[18px] sm:border-r sm:border-b-0">
             <div className="flex flex-wrap items-center gap-2.5">
@@ -186,7 +183,6 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         </div>
       </PanelBox>
 
-      {/* Library */}
       <PanelBox>
         <PanelHead label={`bed library · ${pad2(list.length)}`} />
         {list.length === 0 ? (
@@ -196,8 +192,7 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
             {list.map(b => (
               <div
                 key={b.name}
-                /* Mobile drops the play/delete cluster under the text — see
-                   JinglesSection for the same reflow. */
+                /* Mobile drops the play/delete cluster below the text (as JinglesSection). */
                 className="grid grid-cols-1 items-center gap-3 px-[18px] py-[15px] sm:grid-cols-[1fr_auto] sm:gap-[18px]"
               >
                 <div className="min-w-0">
@@ -243,7 +238,6 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         )}
       </PanelBox>
 
-      {/* Create — ElevenLabs Music API */}
       <Modal
         open={modal === 'create'}
         onOpenChange={(o) => { if (!o) setModal(null); }}
@@ -323,7 +317,6 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         </div>
       </Modal>
 
-      {/* Import — bring your own instrumental */}
       <Modal
         open={modal === 'import'}
         onOpenChange={(o) => { if (!o) setModal(null); }}
@@ -367,7 +360,7 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
           />
           <DropZone
             label={importFile ? `${importFile.name} · ${fmtSize(importFile.size)}` : 'choose a file…'}
-            hint={`same formats · at least ${minSec}s · up to 25 MB · converted to MP3`}
+            hint={`mp3 · wav · ogg · flac · m4a · aac · opus — at least ${minSec}s · up to 25 MB · converted to MP3`}
             onClick={() => importRef.current?.click()}
           />
           <p className="m-0 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">

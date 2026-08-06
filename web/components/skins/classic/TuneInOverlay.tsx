@@ -9,16 +9,9 @@ export interface TuneInOverlayProps {
   nowPlaying: NowPlayingTrack | null;
 }
 
-// Full-bleed first-paint gate. A new listener lands on a player that shows
-// live track info but isn't actually playing — the small "Tune In" button in
-// the footer is easy to miss. This overlay makes the call-to-action
-// unmissable, and the tap doubles as the browser gesture that unblocks audio,
-// so the stream starts on the first interaction with no second click.
-//
-// Entrance keeps the v3-fade-in CSS keyframe. Exit is motion-driven via
-// variants: the play disc scales out while the rest washes away 80 ms later,
-// so the dial "engages" rather than vanishing. AnimatePresence lives at the
-// PlayerApp parent.
+// The tap is the browser gesture that unblocks audio, so the stream starts on
+// the first interaction with no second click. Entrance is the v3-fade-in CSS
+// keyframe; exit is motion-driven, and AnimatePresence lives at the parent.
 export default function TuneInOverlay({ onTune, nowPlaying }: TuneInOverlayProps) {
   const track = nowPlaying?.title
     ? `${nowPlaying.title}${nowPlaying.artist ? ` — ${nowPlaying.artist}` : ''}`

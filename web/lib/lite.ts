@@ -1,33 +1,26 @@
 // Lite (low-power) mode.
 //
-// The frosted-glass `backdrop-filter` blur and the always-on looping animations
-// (spinning disc, live-cover glitch/scan, pulses) are cheap on a laptop GPU but
-// brutal on weak ones: a Raspberry Pi 4 re-compositing blurred layers at ~50fps
-// pegs Chromium at ~170% CPU. Lite mode adds a `lite` class to <html> that drops
-// every backdrop-filter and disables animations (see globals.css) — the heavy
-// paint goes away while audio + controls stay intact.
+// `backdrop-filter` blur and the always-on looping animations are cheap on a
+// laptop GPU but brutal on weak ones: a Raspberry Pi 4 re-compositing blurred
+// layers at ~50fps pegs Chromium at ~170% CPU. Lite mode adds a `lite` class to
+// <html> that drops every backdrop-filter and disables animations (globals.css).
 //
-// Triggered three ways, in precedence order:
-//   1. `?lite=1` / `?lite=0` in the URL — lets a kiosk pin the mode from its
-//      start URL. The value is written through to localStorage so a later visit
-//      without the param sticks.
-//   2. The toggle in the player theme menu — writes the same localStorage key.
-//   3. Nothing set → off (full-fat experience).
-//
-// Applied pre-paint via LITE_INIT_SCRIPT (inlined in layout.tsx) so a pinned
-// kiosk never flashes the heavy build before hydration.
+// Precedence: `?lite=1`/`?lite=0` in the URL (written through to localStorage so
+// a later param-less visit sticks), then the player theme-menu toggle, then off.
+// Applied pre-paint via LITE_INIT_SCRIPT so a pinned kiosk never flashes the
+// heavy build.
 
 const STORAGE_KEY = 'subwave-lite';
 const LITE_CLASS = 'lite';
 
-/** Toggle the `lite` class on <html>. No-op on the server. */
+/** No-op on the server. */
 export function applyLite(on: boolean): void {
   if (typeof document === 'undefined') return;
   document.documentElement.classList.toggle(LITE_CLASS, on);
 }
 
-/** Read the stored lite preference. Returns null when nothing is stored, so
- *  callers can tell "never chosen" apart from "explicitly off". */
+/** Null when nothing is stored, so callers can tell "never chosen" from
+ *  "explicitly off". */
 export function loadLitePref(): boolean | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -40,8 +33,7 @@ export function loadLitePref(): boolean | null {
   }
 }
 
-/** Persist the lite preference. Failures (private mode, quota) are swallowed —
- *  the DOM class still applies for the session. */
+/** Storage failures are swallowed; the DOM class still applies for the session. */
 export function saveLitePref(on: boolean): void {
   if (typeof window === 'undefined') return;
   try {
@@ -49,9 +41,8 @@ export function saveLitePref(on: boolean): void {
   } catch { /* private mode / quota — non-fatal */ }
 }
 
-// Pre-hydration <script> body — resolves lite mode from the URL (?lite=…) then
-// localStorage and toggles the `lite` class on <html> before paint, so a pinned
-// kiosk never flashes the heavy build. A URL param also writes through to
+// Pre-hydration <script> body: resolves lite mode from ?lite= then localStorage
+// and toggles the class before paint. A URL param writes through to
 // localStorage so the choice survives the next param-less load. Static string,
 // inlined via dangerouslySetInnerHTML; no untrusted input reaches it.
 export const LITE_INIT_SCRIPT = `

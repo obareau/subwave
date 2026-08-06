@@ -3,9 +3,7 @@ import * as SwitchPrimitives from "@radix-ui/react-switch"
 
 import { cn } from "@/lib/cn"
 
-/* Retuned for SUB/WAVE's newsprint aesthetic: sharp 38×20 box, 1px ink
-   border, square ink thumb that fills white when the accent-filled track
-   is on. Matches the legacy `.toggle` control. */
+/* Retuned to match the legacy `.toggle` control. */
 const Switch = React.forwardRef<
   React.ElementRef<typeof SwitchPrimitives.Root>,
   React.ComponentPropsWithoutRef<typeof SwitchPrimitives.Root>

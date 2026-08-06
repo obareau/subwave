@@ -73,6 +73,12 @@ export interface QueueItem {
   introPersona?: Persona | null;
   aiPicked?: boolean;
   linkPrev?: { id: string | null; title: string | null; artist: string | null } | null;
+  // Epoch ms of the air moment this item's link was WRITTEN against — stamped
+  // only when the generator actually handed the model a clock to speak
+  // (queue/pure.ts linkClockAt), so an item with no stamp made no claim about
+  // the time and is never dropped for drifting. airIntro compares it with the
+  // real air moment; see linkClockDrifted (#1314).
+  linkClockAt?: number | null;
   introWav?: string | null;
   introAired?: boolean;
   // Set at drain time when a bed was pushed into dj_queue immediately ahead of

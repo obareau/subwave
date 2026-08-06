@@ -7,13 +7,10 @@ import { cn } from '../../lib/cn';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 
 /* V3 Modal — centered, ink-bordered dialog in the admin newsprint style.
-   shadcn-style composition: a header (title + sub + close), a scrollable
-   body, and an optional sticky footer for actions.
 
-   It portals into `.admin-root` rather than <body> so the admin-scoped CSS
-   (`.input` / `.select` / `.textarea` / `.btn` / `.eyebrow` …) resolves for
-   form controls rendered inside it. Falls back to <body> outside the admin
-   shell. Controlled: pass `open` + `onOpenChange`. */
+   Portals into `.admin-root` rather than <body> so the admin-scoped CSS resolves
+   for form controls rendered inside it, falling back to <body> outside the
+   admin shell. */
 export interface ModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -38,12 +35,10 @@ export function Modal({
     setContainer(document.querySelector<HTMLElement>('.admin-root') || document.body);
   }, []);
 
-  // Centering is done with the STATIC Tailwind translate classes below (matching
-  // the glitch-free ShortcutsDialog), never via a post-mount JS transform — a
-  // JS-applied transform/width lands a frame late and makes the dialog visibly
-  // jump on open. The only dynamic value is the width, fed in as a CSS var so
-  // the class can clamp it to the viewport; the `600px` fallback keeps the very
-  // first paint correct even before the effect runs.
+  // Centering uses the STATIC Tailwind translate classes below, never a
+  // post-mount JS transform: a JS-applied transform lands a frame late and makes
+  // the dialog visibly jump on open. Width is the only dynamic value, fed in as
+  // a CSS var; the `600px` fallback keeps the first paint correct.
   const contentRef = useRef<HTMLDivElement>(null);
   useDynamicStyle(contentRef, { '--modal-w': `${width}px` });
 

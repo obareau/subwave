@@ -53,7 +53,7 @@ export default function Themes() {
     <ManualPage
       eyebrow="MANUAL · 09"
       title="Skins & themes."
-      intro="The look of the player is two independent knobs. A skin is the whole face — the layout every listener sees. A theme is the palette that face is painted in. You set a station-wide default for each; a listener can override either in their own browser without changing what anyone else sees."
+      intro="The look of the player is two independent knobs. A skin is the whole face: the layout every listener sees. A theme is the palette that face is painted in. You set a station-wide default for each; a listener can override either in their own browser without changing what anyone else sees."
       current="/manual/themes"
     >
       <section className="bs-section">
@@ -64,9 +64,9 @@ export default function Themes() {
           disturbs the other: recolour Classic to Cyberpunk and it&rsquo;s the
           same masthead-and-deck layout in cyan and hot pink; switch Classic to
           the Platter skin and the palette rides straight across to the
-          turntable. Every skin reads the same live station feed &mdash;
-          now-playing, the booth log, the schedule, requests &mdash; so none of
-          them lose a feature; they just present it differently.
+          turntable. Every skin reads the same live station feed (now-playing,
+          the booth log, the schedule, requests), so none of them lose a
+          feature; they just present it differently.
         </p>
         <p>
           Both are picked in admin &rarr;{' '}
@@ -83,7 +83,7 @@ export default function Themes() {
         <p>
           Each skin is a completely different full-screen layout built on the
           same core. The station-wide pick is a contact sheet in admin
-          Settings &mdash; every skin gets a live pure-CSS miniature of its real
+          Settings: every skin gets a live pure-CSS miniature of its real
           layout, so you can read the rack at a glance before committing. Click a
           card marked <em>Set as station skin</em> and it goes on air for
           everyone.
@@ -127,7 +127,7 @@ export default function Themes() {
         <p className="bs-eyebrow">LISTENER OVERRIDES</p>
         <h2>Anyone can pick their own look.</h2>
         <p>
-          The station default is just that &mdash; a default. Every player has an{' '}
+          The station default is just that: a default. Every player has an{' '}
           <strong>Appearance</strong> menu (the palette icon in the header) that
           lets a listener choose a different theme <em>and</em> a different skin
           for their own browser. The choice is saved locally and beats the
@@ -139,7 +139,7 @@ export default function Themes() {
         <p className="text-muted">
           The skin picker only appears when the build ships more than one skin
           (it always does today). One listener&rsquo;s override never touches the
-          broadcast or anyone else&rsquo;s screen &mdash; it&rsquo;s purely how{' '}
+          broadcast or anyone else&rsquo;s screen; it&rsquo;s purely how{' '}
           <em>they</em> see the station.
         </p>
       </section>
@@ -155,12 +155,12 @@ export default function Themes() {
         <ul className="bs-list">
           <li><strong>Classic Light</strong> &mdash; newsprint cream with hot vermilion ink. The default.</li>
           <li><strong>Classic Dark</strong> &mdash; deep charcoal newsprint with the same vermilion accent.</li>
-          <li><strong>Sunset</strong> &mdash; warm dusk: plum paper, peach ink, vermilion-magenta accent.</li>
-          <li><strong>Vinyl</strong> &mdash; sepia &ldquo;warm record sleeve&rdquo; with mustard accent.</li>
-          <li><strong>Cyberpunk</strong> &mdash; near-black paper, cyan ink, hot pink accent.</li>
-          <li><strong>Lab</strong> &mdash; flat off-white paper, white lifted cards, crisp black hairlines, one electric accent, dot-matrix display + grain.</li>
-          <li><strong>Press</strong> &mdash; stark broadsheet: bright white stock, black ink and rules, a red headline accent, Instrument Serif display.</li>
-          <li><strong>Neon</strong> &mdash; after-dark arcade: ink-black base, twin magenta + cyan accents, grotesque display, faint grain.</li>
+          <li><strong>Vinyl</strong> &mdash; warm record sleeve: sepia paper, deep brown ink, mustard accent.</li>
+          <li><strong>Cyberpunk</strong> &mdash; near-black neon: graphite base, cyan ink, hot pink accent.</li>
+          <li><strong>Blueprint</strong> &mdash; drafting-table cobalt: chalk-white linework, a bright azure accent.</li>
+          <li><strong>Flare</strong> &mdash; hazard-orange flood: a full high-vis field, near-black ink, ultra-bold grotesque.</li>
+          <li><strong>Recon</strong> &mdash; field-ops poster: warm khaki stock, a hot-orange grid and accent.</li>
+          <li><strong>Signal</strong> &mdash; concrete monochrome: mid-gray press field, near-black ink. No colour, all signal.</li>
         </ul>
         <p className="text-muted">
           The palette recolours both the player <em>and</em> the admin console,
@@ -213,20 +213,22 @@ export default function Themes() {
 
       <section className="bs-section">
         <p className="bs-eyebrow">THE TOKEN MAP</p>
-        <h2>Seven knobs, no surprises.</h2>
+        <h2>Sixteen knobs, no surprises.</h2>
         <p>
           A theme writes a fixed set of CSS variables onto <code className="bs-code-inline">&lt;html&gt;</code>.
           Any other key in your JSON is silently dropped, so a malformed theme can&rsquo;t
-          inject styles or break out into other parts of the page.
+          inject styles or break out into other parts of the page. Only the first seven
+          are essential; every token after them derives a sensible fallback from
+          your <code className="bs-code-inline">--bg</code>/<code className="bs-code-inline">--ink</code>/
+          <code className="bs-code-inline">--accent</code> when omitted.
         </p>
         <ul className="bs-list">
-          <li><code className="bs-code-inline">--bg</code> &mdash; page background (&ldquo;paper&rdquo;).</li>
-          <li><code className="bs-code-inline">--ink</code> &mdash; main text colour.</li>
-          <li><code className="bs-code-inline">--muted</code> &mdash; secondary text, captions, dividers.</li>
-          <li><code className="bs-code-inline">--accent</code> &mdash; the station&rsquo;s accent (active states, on-air pill, focus rings).</li>
-          <li><code className="bs-code-inline">--overlay</code> &mdash; translucent wash used for hover and modal scrims.</li>
-          <li><code className="bs-code-inline">--soft-border</code> &mdash; the hairline between sections.</li>
-          <li><code className="bs-code-inline">--field</code> &mdash; input/textarea fill.</li>
+          <li><strong>Surface</strong> &mdash; <code className="bs-code-inline">--bg</code> page background (&ldquo;paper&rdquo;), <code className="bs-code-inline">--surface</code> raised card fill, <code className="bs-code-inline">--surface-border</code> its border, <code className="bs-code-inline">--field</code> input/textarea fill.</li>
+          <li><strong>Text</strong> &mdash; <code className="bs-code-inline">--ink</code> main text, <code className="bs-code-inline">--muted</code> secondary text, <code className="bs-code-inline">--ink-faint</code> the third, faintest rung.</li>
+          <li><strong>Accent</strong> &mdash; <code className="bs-code-inline">--accent</code> the station&rsquo;s accent (active states, on-air pill, focus rings), <code className="bs-code-inline">--accent-2</code> a genuinely different second ink (charts, secondary marks), <code className="bs-code-inline">--accent-soft</code> the accent tinted well into the paper.</li>
+          <li><strong>Structure</strong> &mdash; <code className="bs-code-inline">--line</code> crisp hairline, <code className="bs-code-inline">--soft-border</code> the softer hairline between sections, <code className="bs-code-inline">--overlay</code> translucent wash for hover and modal scrims.</li>
+          <li><strong>Type</strong> &mdash; <code className="bs-code-inline">--display-font</code> / <code className="bs-code-inline">--mono-font</code>, each a curated id (not a free font string).</li>
+          <li><strong>Texture</strong> &mdash; <code className="bs-code-inline">--grain</code>, the paper-grain strength, 0&ndash;1.</li>
         </ul>
         <p>
           Any CSS colour value works: hex, <code className="bs-code-inline">rgb()</code>,{' '}
@@ -235,7 +237,7 @@ export default function Themes() {
           tells the rest of the stylesheet whether to treat the theme as light or dark;
           it controls the paper-grain blend and the few shadcn rules that still key off{' '}
           <code className="bs-code-inline">data-theme</code>. Because skins consume these
-          same seven tokens, a custom theme retints every skin at once.
+          same tokens, a custom theme retints every skin at once.
         </p>
       </section>
 
@@ -254,10 +256,10 @@ export default function Themes() {
         <p>
           The &ldquo;active&rdquo; theme is the per-show override if one is set and
           resolves, otherwise the station default; the active skin is the listener&rsquo;s
-          override if set, otherwise the station default. Built-in ids are reserved &mdash;
-          a user theme JSON that claims <code className="bs-code-inline">classic-light</code>{' '}
-          is logged and skipped &mdash; and an unknown or removed skin id always falls back
-          to Classic so the player never renders blank.
+          override if set, otherwise the station default. Built-in ids are reserved: a user
+          theme JSON that claims <code className="bs-code-inline">classic-light</code>{' '}
+          is logged and skipped. An unknown or removed skin id always falls back
+          to Classic, so the player never renders blank.
         </p>
       </section>
 
@@ -265,9 +267,8 @@ export default function Themes() {
         <p className="bs-eyebrow">BEYOND SKINS</p>
         <h2>Fork the reference player.</h2>
         <p>
-          Skins reskin the built-in player in place. When you want to go further
-          &mdash; a wholly different app, your own framework, your own everything
-          &mdash; there&rsquo;s the{' '}
+          Skins reskin the built-in player in place. For a wholly different app,
+          with your own framework and your own everything, there&rsquo;s the{' '}
           <a
             href="https://github.com/getsubwave/web-player"
             className="bs-link"
@@ -279,15 +280,15 @@ export default function Themes() {
           : a lean, forkable <strong>reference player</strong> in a separate
           repo, built with React + Vite + TypeScript + Tailwind. It ships pointed
           at the live public station, so it plays real radio the moment you run{' '}
-          <code className="bs-code-inline">npm run dev</code> &mdash; no config
+          <code className="bs-code-inline">npm run dev</code>, with no config
           needed.
         </p>
         <p>
           It&rsquo;s built to be cloned and redesigned. The data layer (a single
           station API client plus a handful of hooks) is cleanly separated from
-          the presentation (the components), so you keep the plumbing &mdash;
-          now-playing, the booth feed, up-next, requests, the schedule,
-          lock-screen controls &mdash; and rebuild the look however you like.
+          the presentation (the components), so you keep the plumbing
+          (now-playing, the booth feed, up-next, requests, the schedule,
+          lock-screen controls) and rebuild the look however you like.
           Point it at your own install with one environment variable:
         </p>
         <CodeBlock>{`VITE_STATION_URL=https://radio.example.com`}</CodeBlock>
@@ -295,17 +296,17 @@ export default function Themes() {
           From that one origin it derives <code className="bs-code-inline">/api</code>{' '}
           (the controller) and <code className="bs-code-inline">/stream.mp3</code>{' '}
           (the audio); it works cross-origin out of the box. Build it to a static{' '}
-          <code className="bs-code-inline">dist/</code> and deploy to any host &mdash;
-          Vercel, Netlify, Cloudflare, or a Docker image &mdash; in one click.
+          <code className="bs-code-inline">dist/</code> and deploy to any host in one
+          click: Vercel, Netlify, Cloudflare, or a Docker image.
         </p>
         <div className="bs-callout">
           <div className="bs-eyebrow">DESCRIBE IT, DON&rsquo;T CODE IT</div>
           <p>
             The repo ships an <code className="bs-code-inline">AGENTS.md</code> and
             a built-in redesign skill, so a coding agent (Claude Code, Cursor)
-            already understands how the player is wired. Tell it the vibe &mdash;
-            &ldquo;warm 70s vinyl, cream and burnt orange, a serif logo&rdquo; or
-            &ldquo;minimal monospace brutalist&rdquo; &mdash; and it restyles the
+            already understands how the player is wired. Tell it the vibe
+            (&ldquo;warm 70s vinyl, cream and burnt orange, a serif logo&rdquo;, say,
+            or &ldquo;minimal monospace brutalist&rdquo;) and it restyles the
             player while keeping the audio and live data working. Full guide at{' '}
             <a
               href="https://getsubwave.github.io/web-player/"

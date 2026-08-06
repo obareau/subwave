@@ -6,7 +6,7 @@ export default function Prerequisites() {
     <SetupPage
       eyebrow="SETUP · 01"
       title="Have these ready."
-      intro="SUB/WAVE doesn't ship Navidrome or Ollama; it talks to yours. Get them running first if they aren't already, and write down the URLs and credentials. The install wizard asks for them."
+      intro="SUB/WAVE doesn't ship Navidrome or Ollama; it connects to yours. Get them running first if they aren't already, and write down the URLs and credentials. The install wizard asks for all of it."
       current="/setup/prerequisites"
     >
       <section className="bs-section">
@@ -23,6 +23,10 @@ export default function Prerequisites() {
               single Bun-compiled binary with no runtime dependency; no Node
               needed unless you&apos;re hacking on the source (
               <Link href="/setup/development" className="bs-link">Development</Link>).
+              Getting Docker on <Link href="/setup/macos" className="bs-link">macOS</Link>,{' '}
+              <Link href="/setup/windows" className="bs-link">Windows</Link> or{' '}
+              <Link href="/setup/linux" className="bs-link">Linux</Link> is the
+              first step of each platform page.
             </p>
           </li>
           <li>
@@ -72,6 +76,14 @@ export default function Prerequisites() {
           <Link href="/setup/quick-start" className="bs-link">Quick Start</Link> for
           the wizard, or <Link href="/setup/manual" className="bs-link">Manual
           Install</Link> to run the commands yourself.
+        </p>
+        <p>
+          Want it spelled out for the machine in front of you? The platform pages
+          cover the same install with the host-side details filled in:{' '}
+          <Link href="/setup/macos" className="bs-link">macOS</Link>,{' '}
+          <Link href="/setup/windows" className="bs-link">Windows</Link>,{' '}
+          <Link href="/setup/linux" className="bs-link">Linux</Link>, and{' '}
+          <Link href="/setup/unraid" className="bs-link">Unraid</Link>.
         </p>
       </section>
     </SetupPage>

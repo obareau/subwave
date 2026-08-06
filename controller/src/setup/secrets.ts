@@ -25,6 +25,7 @@ export const SECRET_ENV_KEYS = [
   'DEEPSEEK_API_KEY',
   'AI_GATEWAY_API_KEY',
   'ELEVENLABS_API_KEY',
+  'FISH_API_KEY',
   'SEARCH_API_KEY',
   // Embeddings. Only needed when the embedding provider uses a different key
   // than chat (e.g. OpenRouter for embeddings, a local proxy for chat) — see

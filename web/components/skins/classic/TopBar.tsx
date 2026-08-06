@@ -25,16 +25,13 @@ export default memo(function TopBar({
   onOpenSchedule,
 }: TopBarProps) {
   const tagline = buildTagline(context);
-  // When a programmed show is on air, name it and prefer its host.
   const showName = activeShow?.name || null;
   const onAirName = activeShow?.persona?.name || djName;
   return (
     <div
-      // viewport-fit=cover lets the header extend under the iPhone notch /
-      // Dynamic Island. The top inset stacks the safe-area on top of the
-      // baseline gutter; left/right max() against the gutter so landscape
-      // on a notched phone doesn't clip the wordmark, while desktop keeps
-      // its wider sm: gutters.
+      // viewport-fit=cover lets the header extend under the iPhone notch. The
+      // left/right max() against the baseline gutter stops landscape on a
+      // notched phone clipping the wordmark.
       className="player-topbar absolute top-0 right-0 left-0 z-30 flex flex-col gap-1 border-b border-ink bg-bg/55 pt-[calc(env(safe-area-inset-top)_+_0.625rem)] pr-[max(1rem,env(safe-area-inset-right))]
         pb-2.5 pl-[max(1rem,env(safe-area-inset-left))]
         backdrop-blur-xl backdrop-saturate-150
@@ -94,8 +91,7 @@ export default memo(function TopBar({
           <ThemeSwitcher variant="player" />
         </div>
       </div>
-      {/* Mobile: the context line is too long to share the masthead row, so it
-          drops to its own line below; from md it sits inline above. */}
+      {/* Too long to share the masthead row on mobile, so it drops below. */}
       {tagline && (
         <span
           className="v3-caption player-topbar-subline truncate text-muted md:hidden"

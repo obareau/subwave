@@ -1,9 +1,7 @@
-// News / "Dispatches" loader. Reads the markdown files under web/content/news,
-// parses their frontmatter, and renders the bodies to HTML. Server-side only.
-// The /news routes render per-request (see app/news/layout.tsx), so this read
-// happens at request time — the Docker runner stages copy content/ next to the
-// standalone bundle (web/Dockerfile, docker/Dockerfile.aio) to make the
-// markdown available at runtime.
+// News / "Dispatches" loader for web/content/news. Server-side only, and the
+// /news routes render per-request, so this read happens at request time — the
+// Docker runner stages copy content/ next to the standalone bundle
+// (web/Dockerfile, docker/Dockerfile.aio) so the markdown exists at runtime.
 import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
@@ -33,7 +31,6 @@ export interface NewsArticle extends NewsMeta {
 
 const NEWS_DIR = path.join(process.cwd(), 'content', 'news');
 
-// GitHub-flavoured markdown, no header-id auto-mangling needed here.
 marked.setOptions({ gfm: true, breaks: false });
 
 // Strip an optional leading date prefix (2026-05-20-) so URLs read cleanly.
@@ -41,12 +38,9 @@ function fileToSlug(file: string): string {
   return file.replace(/\.md$/, '').replace(/^\d{4}-\d{2}-\d{2}-/, '');
 }
 
-// Normalise a frontmatter date to an ISO yyyy-mm-dd string. Unquoted YAML
-// dates (date: 2026-06-01) are parsed by js-yaml into a JS Date, whose
-// String() form ("Mon Jun 01 2026 …") breaks both the newest-first sort
-// (it ends up comparing day-of-week names) and formatNewsDate (which can't
-// re-parse it and falls back to printing the raw string). Coerce to a clean
-// UTC date string here so everything downstream stays comparable + readable.
+// js-yaml parses an unquoted `date: 2026-06-01` into a JS Date, whose String()
+// form ("Mon Jun 01 2026 …") breaks the newest-first sort (it compares
+// day-of-week names) and formatNewsDate. Coerce to a clean UTC date string.
 function toIsoDate(value: unknown): string {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime())
@@ -88,7 +82,7 @@ function parseMeta(slug: string, raw: string): NewsMeta {
 
 let _cache: NewsMeta[] | null = null;
 
-/** All articles, newest first. Metadata only (no rendered body). Memoised. */
+/** Metadata only, no rendered body. Memoised. */
 export function getAllNews(): NewsMeta[] {
   if (_cache) return _cache;
   _cache = readRaw()
@@ -99,11 +93,7 @@ export function getAllNews(): NewsMeta[] {
   return _cache;
 }
 
-export function getNewsSlugs(): string[] {
-  return getAllNews().map((a) => a.slug);
-}
-
-/** One article with its body rendered to HTML, or null if the slug is unknown. */
+/** Null if the slug is unknown. */
 export function getNewsArticle(slug: string): NewsArticle | null {
   const hit = readRaw().find((r) => r.slug === slug);
   if (!hit) return null;
@@ -112,7 +102,7 @@ export function getNewsArticle(slug: string): NewsArticle | null {
   return { ...meta, html: marked.parse(content) as string };
 }
 
-/** "May 20, 2026" — the dateline format used across the news surface. */
+/** "May 20, 2026". */
 export function formatNewsDate(iso: string): string {
   if (!iso) return '';
   const d = new Date(`${iso}T00:00:00Z`);

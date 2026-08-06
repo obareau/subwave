@@ -1,16 +1,9 @@
 'use client';
 
-// Skills editor — /admin/skills. The autonomous DJ segments (weather, news,
-// now-playing digs, random facts) the station can fire between tracks.
-//
-// Each skill is toggled on/off station-wide here. A skill only fires
-// autonomously when it is enabled here AND assigned to the persona on air
-// (see /admin/personas). "Run now" is an operator override — it fires the
-// segment immediately, bypassing the enable toggle, the persona assignment,
-// the frequency gate, and the cooldown.
-//
-// Creating and editing a skill (custom or built-in) opens the SkillEditModal
-// "segment sheet" — the list here is just the roster + quick actions.
+// Skills editor. A skill only fires autonomously when it is enabled here AND
+// assigned to the persona on air (/admin/personas). "Run now" is an operator
+// override: it bypasses the enable toggle, the persona assignment, the
+// frequency gate and the cooldown.
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
@@ -35,8 +28,7 @@ import SkillsTable from './skills/SkillsTable';
 import { cooldownLabel, iconFor } from './skills/shared';
 import type { Skill, SortMode, StatusFilter } from './skills/shared';
 
-// Slim show shape from GET /settings — enough for the "filter by show" option
-// (a show's skills are its HOST persona's, plus its pinned feature segment).
+// A show's skills are its HOST persona's, plus its pinned feature segment.
 interface ShowLite {
   id: string;
   name: string;
@@ -49,7 +41,6 @@ function personaHasSkill(p: PersonaLite, name: string): boolean {
   return p.skills === null || p.skills.includes(name);
 }
 
-// One entry in the shipped community catalog (GET /dj/skills/community).
 interface CommunitySkill {
   slug: string;
   label: string;
@@ -82,7 +73,6 @@ interface SkillRunResponse {
   error?: string;
 }
 
-// Which skill the modal is editing/creating, if any.
 type ModalState = { mode: 'create' } | { mode: 'edit'; skill: Skill };
 
 interface SkillDescriptionProps {
@@ -90,8 +80,8 @@ interface SkillDescriptionProps {
   keyUrl?: string;
 }
 
-// Renders a skill description, turning the "<Provider> API key" phrase into a
-// link to where that key is issued (skill.keyUrl). Plain text when no keyUrl.
+// Turns the "<Provider> API key" phrase into a link to skill.keyUrl; plain text
+// when there is no keyUrl.
 function SkillDescription({ text, keyUrl }: SkillDescriptionProps): ReactNode {
   const desc = text || 'No description.';
   const m = keyUrl ? desc.match(/[A-Z][\w-]* API key/) : null;
@@ -125,23 +115,21 @@ export default function SkillsPanel() {
   const [importing, setImporting] = useState(false);                 // zip import in flight?
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Roster context for the organisation tools — best-effort from GET /settings;
-  // when it fails the DJ/show filter and assignment pills simply don't render.
+  // Best-effort: when the roster fetch fails the DJ/show filter and assignment
+  // pills simply don't render.
   const [personas, setPersonas] = useState<PersonaLite[]>([]);
   const [shows, setShows] = useState<ShowLite[]>([]);
 
-  // Organisation controls — component-local, reset on navigation.
   const [query, setQuery] = useState('');
   const [who, setWho] = useState('all');            // 'all' | 'p:<personaId>' | 's:<showId>'
   const [tagSel, setTagSel] = useState<string[]>([]);
   const [status, setStatus] = useState<StatusFilter>('all');
   const [sort, setSort] = useState<SortMode>('az');
 
-  // Cards (default) or the dense table. Remembered per surface in localStorage.
   const [view, setView] = useRosterView('skills');
 
-  // Pull the slim persona/show roster out of GET /settings. Reused after the
-  // modal saves DJ assignments, so the filter + pills stay accurate.
+  // Re-run after the modal saves DJ assignments, so the filter + pills stay
+  // accurate.
   const refreshRoster = useCallback(async () => {
     try {
       const r = await adminFetch('/settings');
@@ -188,8 +176,7 @@ export default function SkillsPanel() {
         setErr(e instanceof Error ? e.message : String(e));
       }
     })();
-    // The community catalog is best-effort — a failure here shouldn't blank the
-    // roster, so it fetches independently and just leaves the section empty.
+    // Fetched independently so a catalog failure can't blank the roster.
     (async () => {
       try {
         const r = await adminFetch('/dj/skills/community');
@@ -201,7 +188,6 @@ export default function SkillsPanel() {
         if (!cancelled) setCommunity([]);
       }
     })();
-    // Roster for the DJ/show filter — best-effort like the community catalog.
     refreshRoster();
     return () => { cancelled = true; };
   }, [hydrated, needsAuth, adminFetch, refreshRoster]);
@@ -251,8 +237,8 @@ export default function SkillsPanel() {
     } finally { setBusy(null); }
   };
 
-  // Re-fetch the community catalog (after an import may have flipped an entry's
-  // installed flag). Best-effort — leaves the list as-is on failure.
+  // An import may have flipped an entry's installed flag. Best-effort: leaves
+  // the list as-is on failure.
   const refreshCommunity = async () => {
     try {
       const r = await adminFetch('/dj/skills/community');
@@ -262,9 +248,8 @@ export default function SkillsPanel() {
     } catch { /* keep current list */ }
   };
 
-  // Import a skill from an uploaded .zip (SKILL.md + optional tool.mjs). Arrives
-  // disabled; a bundle carrying a tool.mjs runs code once enabled, so the toast
-  // says so. The controller derives the slug from the bundle's SKILL.md.
+  // An imported bundle arrives disabled, and one carrying a tool.mjs runs code
+  // once enabled — the toast says so.
   const importZip = async (file: File) => {
     setImporting(true);
     try {
@@ -287,8 +272,8 @@ export default function SkillsPanel() {
     }
   };
 
-  // Install a community skill into state/skills (arrives disabled). The route
-  // returns the refreshed roster; we also flip the catalog entry to installed.
+  // Installs into state/skills, disabled. The route returns the refreshed
+  // roster; the catalog entry is flipped to installed here.
   const install = async (slug: string) => {
     setInstalling(slug);
     try {
@@ -324,11 +309,9 @@ export default function SkillsPanel() {
 
   const enabledCount = skills.filter(s => s.enabled).length;
 
-  // Union of every tag in the catalog — the tag filter's vocabulary. Hidden
-  // until at least one skill carries a tag.
+  // The tag filter's vocabulary; hidden until a skill carries a tag.
   const allTags = [...new Set(skills.flatMap(s => s.tags || []))].sort();
 
-  // Who runs this skill — drives the DJ/show filter and the assignment pill.
   const matchesWho = (s: Skill): boolean => {
     if (who === 'all') return true;
     if (who.startsWith('p:')) {
@@ -373,21 +356,19 @@ export default function SkillsPanel() {
   const filtered = query.trim() !== '' || who !== 'all' || tagSel.length > 0 || status !== 'all';
   const clearFilters = () => { setQuery(''); setWho('all'); setTagSel([]); setStatus('all'); };
 
-  // "All DJs" / "3 of 8 DJs" pill copy — needs the roster; empty string hides it.
+  // Needs the roster; an empty string hides the pill.
   const assignmentLabel = (s: Skill): string => {
     if (!personas.length) return '';
     const n = personas.filter(p => personaHasSkill(p, s.name)).length;
     return n === personas.length ? 'All DJs' : `${n} of ${personas.length} DJs`;
   };
 
-  // The show's pinned feature segment — only meaningful while the DJ/show
-  // filter is sitting on a show.
+  // Only meaningful while the DJ/show filter is sitting on a show.
   const isPinned = (s: Skill): boolean =>
     who.startsWith('s:') && shows.find(x => x.id === who.slice(2))?.segmentSkill === s.name;
 
   return (
     <div className="grid gap-4">
-      {/* ── HERO ─────────────────────────────────────────────────────────── */}
       <section className="card">
         <div className="border-b border-ink p-4">
           <Eyebrow className="text-vermilion">skills</Eyebrow>
@@ -420,9 +401,8 @@ export default function SkillsPanel() {
             Read this in the manual ↗
           </a>
         </div>
-        {/* The action cluster is a full-width row of its own on phones — an
-            `ml-auto` cluster beside the counts is what pushed COMMUNITY / NEW
-            SKILL off the right edge at 390px. */}
+        {/* Full-width row of its own on phones: an `ml-auto` cluster beside the
+            counts pushed COMMUNITY / NEW SKILL off the right edge at 390px. */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3 bg-[var(--ink-softer)] p-3.5">
           <span className="caption">
             {filtered ? `${visible.length} of ${skills.length}` : skills.length} skill{skills.length === 1 ? '' : 's'}
@@ -455,7 +435,6 @@ export default function SkillsPanel() {
         </div>
       </section>
 
-      {/* ── ORGANISE — search / filter / sort ─────────────────────────────── */}
       <section className="card p-3.5">
         <div className="flex flex-wrap items-center gap-2">
           {/* Phones get the search on its own row and the selects full-width /
@@ -527,8 +506,7 @@ export default function SkillsPanel() {
               <X size={14} /> Clear
             </Btn>
           )}
-          {/* Cards stay the default; the list is the second gear for a roster
-              that has outgrown a card stack. Filters/sort drive both views. */}
+          {/* Filters and sort drive both views. */}
           <div className="ml-auto">
             <RosterViewToggle view={view} onChange={setView} />
           </div>
@@ -557,7 +535,6 @@ export default function SkillsPanel() {
         )}
       </section>
 
-      {/* ── SKILL LIST ───────────────────────────────────────────────────── */}
       {visible.length === 0 && (
         <Card title="No matches">
           <EmptyState
@@ -587,15 +564,13 @@ export default function SkillsPanel() {
 
       {view === 'cards' && visible.map(s => {
         const Icon = iconFor(s);
-        // Spine keyed to enabled state — the same signal the toggle carries.
         const spine = s.enabled ? 'bg-[var(--accent)]' : 'bg-separator-strong';
         const assign = assignmentLabel(s);
         const pinned = isPinned(s);
         return (
-          // The whole card opens the edit sheet; the Toggle, Run now, and the
-          // API-key link stopPropagation so they act in place. The onKeyDown
-          // guard (target === currentTarget) keeps a keyboard press on those
-          // inner controls from bubbling up and also opening the editor.
+          // The whole card opens the edit sheet, so inner controls
+          // stopPropagation and the onKeyDown guard (target === currentTarget)
+          // keeps a keyboard press on them from also opening the editor.
           <article
             key={s.name}
             role="button"
@@ -611,14 +586,12 @@ export default function SkillsPanel() {
               'focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)]',
             )}
           >
-            {/* enabled/disabled spine */}
             <span
               aria-hidden="true"
               className={cn('absolute inset-y-0 left-0 w-1 transition-[width] group-hover:w-1.5', spine)}
             />
 
             <div className="card-body flex gap-3.5">
-              {/* kind glyph — the face slot */}
               <span
                 className={cn(
                   'grid size-12 flex-none place-items-center border border-ink bg-[var(--ink-softer)]',
@@ -628,12 +601,10 @@ export default function SkillsPanel() {
                 <Icon size={20} strokeWidth={1.75} aria-hidden />
               </span>
 
-              {/* body — text stack + toggle rail as siblings, so the taller rail
-                  never inflates the name row and pushes the description down */}
+              {/* Text stack and toggle rail are siblings, so the taller rail
+                  never inflates the name row. */}
               <div className="flex min-w-0 flex-1 items-start gap-3">
-                {/* text stack — name, description, facets, actions stack tightly */}
                 <div className="grid min-w-0 flex-1 gap-2.5">
-                  {/* name + custom flag */}
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-[17px] font-extrabold tracking-[-0.01em] text-ink">
                       {s.label || s.name}
@@ -663,12 +634,10 @@ export default function SkillsPanel() {
                     </V3Alert>
                   )}
 
-                  {/* brief */}
                   <p className="line-clamp-2 text-[12px] leading-[1.55] text-muted italic">
                     <SkillDescription text={s.description} keyUrl={s.keyUrl} />
                   </p>
 
-                  {/* facets — cadence, reach, tags */}
                   <div className="flex flex-wrap gap-1">
                     <MetaChip>{cooldownLabel(s.cooldownMs)}</MetaChip>
                     {assign && <MetaChip>{assign}</MetaChip>}
@@ -678,9 +647,6 @@ export default function SkillsPanel() {
                     ))}
                   </div>
 
-                  {/* actions — Run now on the left, Edit affordance on the right.
-                      Same cart-pad language as the dash DJ segment pads, slimmed
-                      to one line — LED arms on hover, blinks while running. */}
                   <div className="flex items-center justify-between gap-3">
                     <button
                       type="button"
@@ -697,7 +663,6 @@ export default function SkillsPanel() {
                   </div>
                 </div>
 
-                {/* right rail — the toggle + its state */}
                 <div className="flex flex-none flex-col items-end gap-1 text-right">
                   <span onClick={e => e.stopPropagation()}>
                     <Toggle
@@ -715,7 +680,6 @@ export default function SkillsPanel() {
         );
       })}
 
-      {/* ── COMMUNITY CATALOG MODAL ──────────────────────────────────────── */}
       <Modal
         open={communityOpen}
         onOpenChange={setCommunityOpen}
@@ -817,7 +781,6 @@ export default function SkillsPanel() {
         </div>
       </Modal>
 
-      {/* ── EDIT / CREATE MODAL ──────────────────────────────────────────── */}
       {modal && (
         <SkillEditModal
           mode={modal.mode}

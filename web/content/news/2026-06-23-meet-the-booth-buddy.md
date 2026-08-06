@@ -10,7 +10,7 @@ The player has a new resident. It's a small pixel creature that sits at the head
 
 ## What's new
 
-The booth buddy is a tiny mascot drawn entirely in CSS, so it adds nothing to load and picks up your theme colours on its own. It has five moods:
+The booth buddy is a tiny mascot drawn entirely in CSS, so it adds nothing to load and picks up your [theme colours](/manual/themes) on its own. It has five moods:
 
 - **On air** — open mouth and a pulsing antenna while the DJ is talking.
 - **Curious** — a head tilt and wide eyes while the DJ picks the next track.

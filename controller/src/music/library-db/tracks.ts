@@ -268,6 +268,13 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         -- Same COALESCE shape: a pass with the stem cache off passes null and
         -- must not clear a stamp an earlier stem pass set.
         stems_at            = COALESCE(?, stems_at),
+        -- Success wipes the failure history: analyze_fail_count counts
+        -- CONSECUTIVE failures, so a track that failed twice on a flaky mount
+        -- and then analysed cleanly starts from zero rather than carrying two
+        -- strikes into its next re-analysis years later.
+        analyze_error       = NULL,
+        analyze_failed_at   = NULL,
+        analyze_fail_count  = NULL,
         analysis_version    = ?
       WHERE id = ?`,
     )
@@ -291,15 +298,113 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
     );
 }
 
+// Consecutive failures after which a track drops out of every analysis scope.
+// Three, not one: the common causes of a single failure are transient (a
+// Navidrome hiccup, a busy mount, a request timeout under load) and a track
+// that can be analysed should not be written off for one bad night. Three
+// consecutive failures across three passes is a file, not a moment.
+export const MAX_ANALYSIS_FAILURES = 3;
+
+// The exclusion every analysis scope query shares. Exported as one builder
+// rather than repeated inline in four places because a scope that forgets it
+// re-attempts the dead tracks forever — which is the bug this exists to close,
+// and it would come back the moment the fifth widening is written. `alias` is
+// the tracks-table alias for the queries that join (`t`); the column has to
+// carry it, not the COALESCE around it.
+export function analysisFailureExclusion(alias = ''): string {
+  const col = alias ? `${alias}.analyze_fail_count` : 'analyze_fail_count';
+  return `COALESCE(${col}, 0) < ${MAX_ANALYSIS_FAILURES}`;
+}
+
 // Ids that still need acoustic analysis: never analysed, or analysed by an
-// older ANALYSIS_VERSION. Ordered for stable resumption. `limit` caps a run.
+// older ANALYSIS_VERSION, minus the ones that have failed enough times to be
+// judged unanalysable. Ordered for stable resumption. `limit` caps a run.
 export function needsAnalysisIds(limit?: number): string[] {
   const sql =
     `SELECT id FROM tracks
-       WHERE analysis_version IS NULL OR analysis_version < ?
+       WHERE (analysis_version IS NULL OR analysis_version < ?)
+         AND ${analysisFailureExclusion()}
        ORDER BY id` + (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
   const rows = requireDb().prepare(sql).all(ANALYSIS_VERSION) as Array<{ id: string }>;
   return rows.map(r => r.id);
+}
+
+// Stamp a failed analysis attempt. `error` is the thrown message, trimmed to
+// something a person can read in the admin panel — the whole point of the row.
+export function recordAnalysisFailure(id: string, error: string): void {
+  requireDb()
+    .prepare(
+      `UPDATE tracks SET
+         analyze_error      = ?,
+         analyze_failed_at  = ?,
+         analyze_fail_count = COALESCE(analyze_fail_count, 0) + 1
+       WHERE id = ?`,
+    )
+    .run((error || 'analysis failed').slice(0, 500), new Date().toISOString(), id);
+}
+
+// Forget the failure history for one track (or all of them, id omitted) so the
+// next pass picks it up again. The operator's retry after fixing the cause —
+// and what a --re-analyze does implicitly. Returns the number of rows cleared.
+export function clearAnalysisFailures(id?: string): number {
+  const d = requireDb();
+  const set = `analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL`;
+  const res = id
+    ? d.prepare(`UPDATE tracks SET ${set} WHERE id = ?`).run(id)
+    : d.prepare(`UPDATE tracks SET ${set} WHERE analyze_fail_count IS NOT NULL`).run();
+  return res.changes;
+}
+
+// How many tracks are currently out of scope for having failed too often. The
+// coverage badge — a number that is not zero is the cue to open the list.
+export function analysisFailedCount(): number {
+  return (requireDb().prepare(
+    `SELECT COUNT(*) AS n FROM tracks WHERE COALESCE(analyze_fail_count, 0) >= ${MAX_ANALYSIS_FAILURES}`,
+  ).get() as { n: number }).n;
+}
+
+export interface AnalysisFailureRow {
+  id: string;
+  title: string | null;
+  artist: string | null;
+  error: string | null;
+  failedAt: string | null;
+  attempts: number;
+  // Whether this track has hit MAX_ANALYSIS_FAILURES and left every scope. A
+  // track with one or two failures is still being retried, and saying so is
+  // the difference between "look at this" and "this is being handled".
+  excluded: boolean;
+}
+
+// Tracks that have failed analysis at least once, worst and most recent first.
+// This list is the answer to "nothing tells me WHICH tracks are affected" — the
+// only route to it before was a hand-written query against library.db.
+export function analysisFailures(limit = 200): AnalysisFailureRow[] {
+  const rows = requireDb()
+    .prepare(
+      `SELECT id, title, artist, analyze_error, analyze_failed_at, analyze_fail_count
+         FROM tracks
+        WHERE COALESCE(analyze_fail_count, 0) > 0
+        ORDER BY analyze_fail_count DESC, analyze_failed_at DESC
+        LIMIT ${Math.max(1, Math.floor(limit))}`,
+    )
+    .all() as Array<{
+      id: string;
+      title: string | null;
+      artist: string | null;
+      analyze_error: string | null;
+      analyze_failed_at: string | null;
+      analyze_fail_count: number | null;
+    }>;
+  return rows.map(r => ({
+    id: r.id,
+    title: r.title,
+    artist: r.artist,
+    error: r.analyze_error,
+    failedAt: r.analyze_failed_at,
+    attempts: r.analyze_fail_count || 0,
+    excluded: (r.analyze_fail_count || 0) >= MAX_ANALYSIS_FAILURES,
+  }));
 }
 
 // Drop the acoustic analysis so a --re-analyze can recompute it. `keepVocal`
@@ -319,7 +424,11 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
       key_ranges_json = NULL, outro_json = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
-      audio_moods = NULL, audio_mood_scores_json = NULL`,
+      audio_moods = NULL, audio_mood_scores_json = NULL,
+      -- A --re-analyze is the operator saying the past doesn't apply, so the
+      -- failure history goes with the analysis it describes. Without this, the
+      -- tracks most in need of a retry would be the only ones it skipped.
+      analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL`,
   ).run();
   // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
   // that redoes bpm/key drops them too — the next pass re-embeds from scratch.

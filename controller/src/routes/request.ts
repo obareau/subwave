@@ -491,7 +491,7 @@ async function resolveRequest(entry) {
     const genre = await resolveGenre(matched.genre);
     if (genre) {
       try {
-        const songs = await subsonic.getSongsByGenre(genre, { count: 100 });
+        const songs = await subsonic.getSongsByGenreSampled(genre, { count: 100 });
         pick = randomFresh(songs);
         if (pick) pickSource = `genre:${genre}`;
       } catch (err) {
@@ -509,7 +509,7 @@ async function resolveRequest(entry) {
     const genre = await resolveGenre(matched.language);
     if (genre) {
       try {
-        const songs = await subsonic.getSongsByGenre(genre, { count: 100 });
+        const songs = await subsonic.getSongsByGenreSampled(genre, { count: 100 });
         pick = randomFresh(songs);
         if (pick) pickSource = `language-genre:${genre}`;
       } catch (err) {

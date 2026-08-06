@@ -1,25 +1,20 @@
 'use client';
-// Radio-card grid for picking the primary LLM provider. Replaces the plain
-// dropdown on the Settings LLM tab: every provider is a selectable card showing
-// its name, a one-line blurb and a live status badge (local / self-host / key
-// set / no key) so key availability is visible before you switch and save — the
-// #1 LLM misconfiguration is routing to a cloud provider whose key isn't set.
-// Styled to match the TTS EngineSelector (newsprint RadioOption pattern).
-// Tailwind-only, no inline styles (issue #50). The fallback leg keeps the
-// dropdown — cards there would double the tab's height for a secondary control.
+// Radio-card grid for picking the primary LLM provider. The status badge makes key
+// availability visible before a switch is saved — the #1 LLM misconfiguration is
+// routing to a cloud provider whose key isn't set. Tailwind-only, no inline styles
+// (issue #50). The fallback leg keeps the dropdown, since cards there would double
+// the tab's height for a secondary control.
 import { cn } from '../../../lib/cn';
 import { PROVIDER_META, providerStatus } from './providerMeta';
 
 interface ProviderSelectorProps {
-  // Currently selected provider id.
   value: string;
-  // Which providers to show as cards — pass SettingsResponse.llm.providers so the
-  // grid stays server-authoritative (order + future additions).
+  // Pass SettingsResponse.llm.providers so the grid stays server-authoritative.
   providerIds: string[];
   // SettingsResponse.env — which cloud key vars are present; drives the badge.
   env?: Record<string, unknown>;
-  // false for the onboarding wizard, where there's no live env yet — cloud
-  // providers then read as a neutral "needs key" instead of a red "no key".
+  // false for the onboarding wizard, where there's no live env yet: cloud providers
+  // then read as a neutral "needs key" instead of a red "no key".
   keyAware?: boolean;
   onChange: (id: string) => void;
   className?: string;

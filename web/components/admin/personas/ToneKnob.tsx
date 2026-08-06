@@ -1,9 +1,8 @@
 'use client';
 // Detented rotary knob (0–10). Pointer-draggable AND keyboard-operable
-// (role="slider" with arrow/Home/End/PageUp/Down) so it keeps the accessibility
-// the native range input had. The body is intentionally dark "physical
-// hardware" in both themes; the lit indicator and rings track --accent/--ink so
-// it reads correctly under light and dark palettes. 80px on phones, 96px md+.
+// (role="slider" with arrow/Home/End/PageUp/Down), so it keeps the accessibility
+// the native range input had. The body is dark in both themes; the lit indicator
+// and rings track --accent/--ink so it reads under either palette.
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,

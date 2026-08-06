@@ -1,10 +1,8 @@
 'use client';
-// The global system-prompt library, in a modal — saved templates shared by
-// every persona, one active at a time ('' = the built-in default). Opened from
-// the roster's "System prompt" button. One modal, two views: the library list
-// (switch / manage templates, save bar in the footer) and an editor view for a
-// single template (Back returns to the list). Form data lives in the container;
-// this component only holds which view is showing.
+// The global system-prompt library: templates shared by every persona, one active
+// at a time ('' = the built-in default). Two views — the library list and a single
+// template's editor. Form data lives in the container; this holds only which view
+// is showing.
 import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { Btn, Pill } from '../ui';
@@ -28,10 +26,9 @@ interface SystemPromptModalProps {
   onHouseRulesChange: (v: string) => void;
   defaultPrompt: string;   // the built-in template text
   busy: boolean;
-  // Save is shared with the persona editor — both POST the whole form (personas
-  // + prompt library) — so `canSave` carries the same roster-wide gate. When
-  // it's blocked by something other than the prompts, `allPersonasOk` lets us
-  // say why.
+  // Save is shared with the persona editor (both POST the whole form), so `canSave`
+  // carries the same roster-wide gate; `allPersonasOk` says when the block is
+  // something other than the prompts.
   canSave: boolean;
   allPersonasOk: boolean;
   promptsOk: boolean;      // every preset in the library is valid
@@ -49,8 +46,7 @@ export function SystemPromptModal({
   busy, canSave, allPersonasOk, promptsOk,
   onSetActive, onAddPreset, onPatchPreset, onRemovePreset, onSave, onDiscard,
 }: SystemPromptModalProps) {
-  // Which view the modal shows: null = the library list, 'default' = the
-  // read-only built-in template, otherwise a preset id being edited.
+  // null = the library list, 'default' = the read-only built-in, else a preset id.
   const [editing, setEditing] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
@@ -61,8 +57,7 @@ export function SystemPromptModal({
 
   const addPreset = () => {
     if (presets.length >= PROMPT_PRESET_MAX) return;
-    // Seed from the built-in template so the operator edits from a working
-    // prompt instead of a blank textarea.
+    // Seed from the built-in template rather than a blank textarea.
     const preset: DjPromptPreset = {
       id: clientMintId('dp_'),
       name: `Prompt ${presets.length + 1}`,
@@ -94,14 +89,13 @@ export function SystemPromptModal({
     <div
       key={opts.key}
       className={cn(
-        // Phones drop the actions onto a second row — radio + name + two
-        // buttons can't share a ~320px line without clipping the name.
+        // Phones drop the actions onto a second row: radio + name + two buttons
+        // can't share a ~320px line without clipping the name.
         'grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2.5 border p-2.5',
         'sm:grid-cols-[auto_1fr_auto] sm:gap-3',
         opts.invalid ? 'border-[var(--danger)]' : opts.isActive ? 'border-ink' : 'border-ink/40',
       )}
     >
-      {/* radio-style activate control */}
       <button
         type="button"
         aria-label={opts.isActive ? `${opts.name} is in use` : `Use ${opts.name}`}
@@ -109,8 +103,7 @@ export function SystemPromptModal({
         disabled={opts.isActive}
         className={cn(
           'v3-focus relative grid size-4 flex-none place-items-center rounded-full border border-ink bg-transparent p-0',
-          // Invisible 36px hit box on phones only — the 16px dot is fine with a
-          // mouse but too small for a thumb.
+          // Invisible 36px hit box on phones: the 16px dot is too small for a thumb.
           "before:absolute before:-inset-2.5 before:content-[''] sm:before:content-none",
           opts.isActive ? 'cursor-default' : 'cursor-pointer hover:border-[var(--accent)]',
         )}
@@ -131,10 +124,9 @@ export function SystemPromptModal({
     </div>
   );
 
-  // ── footer per view ──────────────────────────────────────────────────────
-  // Both footers own a full-width wrapping row rather than sitting as bare
-  // children of the modal's non-wrapping footer flex — on a phone the status
-  // line plus two buttons has to break onto two lines.
+  // Both footers own a full-width wrapping row rather than sitting as bare children
+  // of the modal's non-wrapping footer flex: on a phone the status line plus two
+  // buttons has to break onto two lines.
   const libraryFooter = (
     <div className="flex w-full flex-wrap items-center justify-end gap-2">
       <span
@@ -238,10 +230,8 @@ export function SystemPromptModal({
               </Btn>
             </div>
 
-            {/* ── station house rules ─────────────────────────────────────
-                The one operator block that reaches EVERY spoken line — the
-                scripted talk the template wraps AND the tool-using agents
-                (track picker, requests, skill segments) it never touches
+            {/* The one operator block that reaches EVERY spoken line: the scripted
+                talk the template wraps AND the tool-using agents it never touches
                 (issue #1182). */}
             <div className="mt-5 border-t border-ink/40 pt-4">
               <div className="caption mb-1.5">station house rules</div>

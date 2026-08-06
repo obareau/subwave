@@ -1,15 +1,13 @@
 'use client';
-// Hero header + live/active strip for /admin/personas.
 import type { Persona } from './types';
 import { engineLabel } from './helpers';
 import { Eyebrow } from '../ui';
 
 interface PersonaHeroProps {
-  // The persona actually broadcasting (show override aware) — what the live
-  // strip describes. Distinct from the default below.
+  // What the live strip describes; distinct from the default below.
   onAirPersona: Persona | undefined;
-  // The admin-selected default — shown only when a show has overridden it, so
-  // the operator can see who'd be on air without the show.
+  // Shown only when a show has overridden it, so the operator can see who would be
+  // on air without the show.
   defaultPersona: Persona | undefined;
   // The show reassigning the hour, or null when the default is on air.
   onAirShow: { id: string; name: string } | null;
@@ -34,7 +32,7 @@ export function PersonaHero({
         </div>
       </div>
 
-      {/* On-air strip — describes the persona actually broadcasting now, which
+      {/* Describes the persona actually broadcasting now, which
           a scheduled show can make different from the default selection. */}
       <div className="flex flex-wrap items-center gap-3 bg-[var(--ink-softer)] p-3.5">
         <span className="caption text-vermilion">● on air</span>

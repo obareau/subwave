@@ -1,13 +1,11 @@
-// Shared types for the controller HTTP surface (`/now-playing`, `/state`,
-// `/session`) and the live DJ session. These mirror the JSON the controller
-// writes — for runtime guarantees, see the Zod schemas in controller/src
-// (when controller TS migration lands per issue #43).
+// Shared types for the controller HTTP surface. These mirror the JSON the
+// controller writes; runtime guarantees come from the Zod schemas in
+// controller/src (pending the TS migration, issue #43).
 
 export type StationLocale = 'en-GB' | 'en-US';
 
-/** A track currently airing. `subsonic_id` is present for library tracks and
- *  drives MediaSession artwork via the `/api/cover/:id` proxy. Jingles +
- *  scanning have no id. */
+/** `subsonic_id` drives MediaSession artwork via the `/api/cover/:id` proxy;
+ *  jingles and scanning have no id. */
 export interface NowPlayingTrack {
   title?: string;
   artist?: string;
@@ -15,9 +13,7 @@ export interface NowPlayingTrack {
   year?: number;
   duration?: number;
   subsonic_id?: string;
-  // Analysis/tag data merged in by the controller's /now-playing handler from
-  // the library DB. All optional — a not-yet-tagged track omits them and the
-  // player's metadata strip renders nothing.
+  // Merged in from the library DB. A not-yet-tagged track omits all of these.
   genre?: string | null;
   bpm?: number | null;
   musicalKey?: string | null;
@@ -43,51 +39,35 @@ export interface TimeContext {
 
 export interface ActiveShow {
   name?: string;
-  /** `id` and `avatar` are surfaced so the player can paint the on-air host
-   *  next to the now-playing card and on the lock screen. `avatar` is the
-   *  full public URL (e.g. `/api/persona-avatar/p_default0`) — the controller
-   *  serves a transparent 1×1 placeholder when no avatar is set. */
+  /** `avatar` is a full public URL (e.g. `/api/persona-avatar/p_default0`);
+   *  the controller serves a transparent 1×1 when no avatar is set. */
   persona?: { id?: string; name?: string; avatar?: string };
-  /** Guest co-hosts on the current show (same shape as persona). Empty or
-   *  absent = solo show. */
+  /** Empty or absent = solo show. */
   guests?: { id?: string; name?: string; avatar?: string }[];
-}
-
-/** `/dj` response used by Landing + lock-screen artwork. */
-export interface DjPublic {
-  name?: string;
-  tagline?: string;
-  soul?: string;
-  frequency?: string;
-  avatar?: string;
-  station?: string;
-  location?: string;
-  locale?: StationLocale;
 }
 
 /** `/schedule` response — listener-safe view of the week. */
 export interface SchedulePersona {
   id: string;
   name: string;
-  /** Public one-liner; '' when the operator hasn't set one. Optional only
-   *  because an older controller may omit the field entirely. */
+  /** '' when the operator hasn't set one; optional only because an older
+   *  controller may omit the field entirely. */
   tagline?: string;
   avatar: string;
-  /** The persona's soul blurb — only when the station opted into publishing
-   *  souls (settings.privacy.publishPersonaSouls). Absent otherwise. */
+  /** Present only when settings.privacy.publishPersonaSouls is on. */
   soul?: string;
 }
 export interface ScheduleShow {
   id: string;
   name: string;
   topic: string;
-  /** Lead mood — derived from moods[0] server-side (back-compat). */
+  /** Lead mood — moods[0], derived server-side for back-compat. */
   mood: string;
   /** Full multi-value mood list (#929). */
   moods?: string[];
   personaId: string;
-  /** Guest co-hosts, as ids into the payload's `personas` index (already
-   *  filtered to personas that still exist). Empty/absent = solo show. */
+  /** Ids into the payload's `personas` index, already filtered to personas
+   *  that still exist. Empty/absent = solo show. */
   guestPersonaIds?: string[];
 }
 /** 7 entries (Sun=0..Sat=6), each a 24-slot array of showId|null. */
@@ -102,8 +82,7 @@ export interface SchedulePayload {
   locale?: StationLocale;
 }
 
-/** Context envelope returned by `/now-playing` — driven by controller's
- *  `context.getFullContext()`. Priority for the dominant mood is
+/** From controller's `context.getFullContext()`. Dominant-mood priority is
  *  festival > weather > time. */
 export interface StationContext {
   time?: TimeContext;
@@ -114,8 +93,7 @@ export interface StationContext {
 }
 
 export interface DjState {
-  // Opaque DJ status blob — shape varies per provider/persona. Consumers treat
-  // it as displayable diagnostics.
+  // Opaque: shape varies per provider/persona. Displayable diagnostics only.
   [key: string]: unknown;
 }
 
@@ -126,10 +104,8 @@ export interface ListenerCount {
   [key: string]: unknown;
 }
 
-/** Structured description of the live broadcast mounts (`stream` on
- *  `/now-playing`). mount/format/bitrate describe the always-served MP3 floor;
- *  the *Enabled flags advertise which optional mounts (`/stream.opus`,
- *  `/stream.flac`, `/stream.aac`) are also live. */
+/** mount/format/bitrate describe the always-served MP3 floor; the *Enabled
+ *  flags say which optional mounts are also live. */
 export interface StreamInfo {
   mount?: string;
   format?: string;
@@ -155,9 +131,9 @@ export interface NowPlayingResponse {
   streamOnline?: boolean;
   /** kbps of the first attached broadcast mount; null when offline. */
   streamBitrate?: number | null;
-  /** Broadcast mount descriptor — drives the listener stream-format picker. */
+  /** Drives the listener stream-format picker. */
   stream?: StreamInfo;
-  /** Cumulative since-boot LLM token total — the player's token ticker. */
+  /** Cumulative since-boot LLM token total. */
   llmTokens?: number | null;
   /** Station IANA timezone — render on-air timestamps in it (issue #418). */
   timezone?: string;
@@ -173,6 +149,10 @@ export interface QueueEntry {
   requestedBy?: string;
   /** ISO timestamp present on history entries. */
   t?: string;
+  /** The track arrives via a pre-rendered stem blend rather than a plain
+   *  crossfade. Stamped once the seam's clip is queued, so it's definitive,
+   *  not a prediction (#1257). */
+  stemSeam?: boolean;
   [key: string]: unknown;
 }
 
@@ -186,7 +166,6 @@ export interface RequestTrack {
   subsonic_id?: string;
 }
 
-/** Result of a listener request — drives the RequestDrawer card. */
 export interface RequestResult {
   success: boolean;
   pending?: boolean;
@@ -205,29 +184,25 @@ export interface DjLogEntry {
   [key: string]: unknown;
 }
 
-/** `/state` response — controller's upcoming queue + recent history + DJ log. */
+/** `/state` response. */
 export interface StationState {
   upcoming: QueueEntry[];
   history: QueueEntry[];
   djLog: DjLogEntry[];
   timezone?: string;
   locale?: StationLocale;
-  /** Station-wide listener-player UI settings (from GET /state). `skin` is
-   *  the operator's player-skin pick (see components/skins); `tuneInOverlay`
-   *  gates the full-bleed tap-to-tune gate (default on). */
+  /** Operator player defaults. `skin` indexes components/skins;
+   *  `tuneInOverlay` gates the tap-to-tune gate (default on). */
   ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
   /** Private-station flags (#478) — booleans only, never credentials.
    *  `privatePlayer` swaps the player pages for a "private station" screen;
-   *  `listenerAuth` means the stream mounts demand a password, so the shell
-   *  prompts for the shared listener password before tune-in. Absent on
-   *  older controllers (treated as fully public). */
+   *  `listenerAuth` means the mounts demand the shared listener password
+   *  before tune-in. Absent on older controllers = fully public. */
   privacy?: { privatePlayer?: boolean; listenerAuth?: boolean };
 }
 
-/** A single turn in the live DJ session — `voice` (spoken on-air), `dj` (the
- *  agent's reasoning), `track` (something that aired), `system` (state events).
- *  `role` originates as 'segment' for spoken bits and is reclassified to
- *  'voice' by `turnClass()`. */
+/** `role` arrives as 'segment' for spoken bits and is reclassified to 'voice'
+ *  by `turnClass()`. */
 export type SessionRole = 'segment' | 'dj' | 'track' | 'system' | string;
 
 export interface SessionTurn {
@@ -249,10 +224,9 @@ export interface SessionPayload {
   messages: SessionTurn[];
 }
 
-/** Cloud TTS provider option. */
 export interface CloudVoice {
   id: string;
   label: string;
 }
 
-export type CloudProvider = 'openai' | 'elevenlabs' | 'openai-compatible';
+export type CloudProvider = 'openai' | 'elevenlabs' | 'fish-audio' | 'openai-compatible';

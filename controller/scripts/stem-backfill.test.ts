@@ -20,7 +20,7 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -100,6 +100,35 @@ async function main() {
     db.clearAnalysis({ keepVocal: true, clearStems: true });
     assert.deepEqual(db.needsStemsIds(), ['t1', 't2', 't3', 't4', 't5', 't6']);
     assert.equal(db.stemsCachedCount(), 0);
+  });
+
+  console.log('stem cache path containment:');
+
+  await test('dirFor never resolves outside the cache root', () => {
+    // path.basename() strips separators but hands back "." / ".." / "" AS IS,
+    // and path.join(root, "..") resolves to the PARENT of the cache root — so
+    // a degenerate or hostile track id used to point stem writes at
+    // <stateDir> itself. Nothing there collides by name (write_stems only ever
+    // writes <window>-<stem>.flac + tail-meta.json), so the damage was stray
+    // files OUTSIDE scanDirs()' reach: the LRU sweep only walks entries under
+    // the root, so they would leak past every eviction, forever.
+    const root = stemCache.stemsRoot();
+    for (const id of ['..', '.', '', '...', 'a/..', 'x/../..', '/etc/passwd']) {
+      const dir = stemCache.dirFor(id);
+      assert.ok(dir.startsWith(root + sep), `dirFor(${JSON.stringify(id)}) escaped: ${dir}`);
+      assert.ok(
+        stemCache.stemPath(id, 'tail', 'vocals').startsWith(root + sep),
+        `stemPath(${JSON.stringify(id)}) escaped`,
+      );
+    }
+  });
+
+  await test('a well-formed track id still maps to its own dir', () => {
+    // The guard must not rewrite the normal case — a renamed dir would orphan
+    // every already-cached stem set and re-separate the whole library.
+    const id = 'a1b2c3d4-0000-4000-8000-abcdefabcdef';
+    assert.equal(stemCache.dirFor(id), join(stemCache.stemsRoot(), id));
+    assert.notEqual(stemCache.dirFor('t1'), stemCache.dirFor('t2'));
   });
 
   console.log('stem cache budget headroom:');

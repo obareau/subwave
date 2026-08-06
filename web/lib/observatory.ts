@@ -31,16 +31,14 @@ interface BulkResponse {
   stats: ObservatoryStats;
 }
 
-// Loads the tagged library (up to `max` nodes), lays it out by genre cluster,
-// and falls back to a seeded mock when the library is empty (fresh install) so
-// the view is never blank. `enabled` gates the fetch on admin auth being ready.
-// Changing `max` (the MAP SIZE control) refetches with a higher/lower cap;
-// `max: null` sends no cap so the server's own default (OBSERVATORY_MAX)
-// applies — the response's `max` reports what was used.
-// On a fetch error the mock only fills an EMPTY view (never a dead screen, but
-// never clobbering a map a previous load produced) and `error` stays set so
-// the UI can say the controller was unreachable; `reload()` refetches in place
-// (the retry button, and the refresh after a projection run completes).
+// Loads the tagged library (up to `max` nodes) and falls back to a seeded mock
+// on an empty library so the view is never blank. `enabled` gates the fetch on
+// admin auth being ready. `max: null` sends no cap, so the server's own default
+// (OBSERVATORY_MAX) applies and the response's `max` reports what was used.
+//
+// On a fetch error the mock only fills an EMPTY view — never clobbering a map a
+// previous load produced — and `error` stays set so the UI can say the
+// controller was unreachable.
 export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: number | null): ObservatoryResult {
   const [data, setData] = useState<LibraryData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -96,8 +94,7 @@ export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: nu
   return { data, loading, error, reload };
 }
 
-// Lazily fetches the rich per-track dossier (full record + embeddings +
-// mix-next). Cached in-memory for the session so re-opening a node is instant.
+// Cached in-memory for the session so re-opening a node is instant.
 export function useTrackDetail(adminFetch: AdminFetch) {
   const cache = useRef<Map<string, TrackDetail>>(new Map());
   const [detail, setDetail] = useState<TrackDetail | null>(null);
@@ -123,7 +120,7 @@ export function useTrackDetail(adminFetch: AdminFetch) {
         if (!res.ok) throw new Error(String(res.status));
         const body = (await res.json()) as TrackDetail;
         cache.current.set(id, body);
-        // Only commit if the user hasn't moved on to another node meanwhile.
+        // Only commit if the selection hasn't moved on meanwhile.
         setLoadingId((cur) => {
           if (cur === id) setDetail(body);
           return cur === id ? null : cur;

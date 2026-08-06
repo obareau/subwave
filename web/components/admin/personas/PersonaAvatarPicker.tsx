@@ -1,5 +1,4 @@
 'use client';
-// Avatar square + Upload / Generate / Remove buttons for the focused persona.
 import { useRef } from 'react';
 import type { Persona } from './types';
 import { API_BASE } from './constants';
@@ -18,9 +17,9 @@ interface PersonaAvatarPickerProps {
 
 export function PersonaAvatarPicker({ persona, tick, uploading, onPick, onGenerate, onClear }: PersonaAvatarPickerProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
-  // The public endpoint serves a 1×1 transparent placeholder when no avatar
-  // is set; rather than render that as a tiny grey square, fall back to
-  // initials in the admin UI. The ?v=… buster forces a refetch after upload.
+  // The public endpoint serves a 1×1 transparent placeholder when no avatar is set,
+  // so the admin UI falls back to initials. The ?v=… buster forces a refetch after
+  // upload.
   const hasAvatar = !!persona.avatar;
   const src = hasAvatar
     ? `${API_BASE}/persona-avatar/${encodeURIComponent(persona.id)}?v=${tick}`
@@ -32,7 +31,7 @@ export function PersonaAvatarPicker({ persona, tick, uploading, onPick, onGenera
         className="relative grid h-[96px] w-[96px] place-items-center overflow-hidden border border-ink bg-[var(--ink-softer)]"
         aria-label={hasAvatar ? `${persona.name} avatar` : 'No avatar set'}
       >
-        {/* Initials behind the image so a missing / transparent / broken avatar
+        {/* Initials behind the image so a transparent or broken avatar
             still shows a readable placeholder. */}
         <span className="text-[22px] font-extrabold tracking-[-0.02em] text-muted">
           {initialsFor(persona.name)}

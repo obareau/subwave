@@ -16,7 +16,7 @@ export default function ManualInstall() {
     <SetupPage
       eyebrow="SETUP · 03"
       title="Run the commands yourself."
-      intro="The no-CLI route: same result, no `subwave` binary on your host. Reach for it if you'd rather not run an installer, you're scripting the deploy, or you just like typing the commands yourself. Four steps get you a public single-host deploy: Caddy on the edge, Cloudflare in front, and Icecast, Controller, and Web kept internal."
+      intro="The no-CLI route: same result, no subwave binary on your host. Reach for it if you'd rather not run an installer, you're scripting the deploy, or you just like typing the commands yourself. Four steps get you a public single-host deploy: Caddy on the edge, Cloudflare in front, and Icecast, Controller, and Web kept internal."
       current="/setup/manual"
     >
       <section className="bs-section">

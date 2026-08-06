@@ -22,6 +22,22 @@ const largeLibraryWindows = recencyWindowsForLibrary(80);
 assert.equal(largeLibraryWindows.trackHours, DEFAULT_TRACK_RECENCY_HOURS);
 assert.equal(largeLibraryWindows.artistHours, DEFAULT_ARTIST_RECENCY_HOURS);
 
+// ── large-library boost (repeated-songs fix) ────────────────────────────────
+// The windows scale UP with track count: 12h blocks under 2% of a 10k-50k
+// catalogue, far too little memory to force exploration. Keys on track count,
+// never artists — a 500-track library must NOT get boosted.
+assert.equal(recencyWindowsForLibrary(80, 500).trackHours, DEFAULT_TRACK_RECENCY_HOURS);
+assert.equal(recencyWindowsForLibrary(80, 3000).trackHours, 18);
+assert.equal(recencyWindowsForLibrary(80, 8000).trackHours, 24);
+assert.equal(recencyWindowsForLibrary(80, 20000).trackHours, 36);
+assert.equal(recencyWindowsForLibrary(80, 20000).artistHours, 6);
+// The small-library shrink still wins: few artists shrink the window even
+// when the track count is (implausibly) large.
+assert(
+  recencyWindowsForLibrary(10, 20000).trackHours < 36,
+  'small-artist shrink must still apply under the boost',
+);
+
 const songs = [
   { id: 'song-1', title: 'One', artist: 'A' },
   { id: 'song-2', title: 'Two', artist: 'B' },

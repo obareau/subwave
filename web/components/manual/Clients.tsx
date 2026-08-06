@@ -31,7 +31,7 @@ export default function Clients() {
     <ManualPage
       eyebrow="MANUAL · 03"
       title="Listen with other apps."
-      intro="The browser player is the front door to SUB/WAVE, but it isn't the only way in. Underneath, the station is a single Icecast MP3 stream — and any app that can open an internet-radio URL can listen along, in perfect sync with everyone else."
+      intro="The browser player is the front door to SUB/WAVE, but it isn't the only way in. Underneath, the station is a single Icecast MP3 stream, and any app that can open an internet-radio URL can listen along, in perfect sync with everyone else."
       current="/manual/clients"
     >
       <section className="bs-section">
@@ -96,8 +96,30 @@ export default function Clients() {
           <p>
             The apps default to the public station, but they aren&rsquo;t tied to it. Add
             any other SUB/WAVE instance by its address and switch between saved stations
-            from inside the app &mdash; the same way you&rsquo;d point the audio-only
+            from inside the app, the same way you&rsquo;d point the audio-only
             players below at a stream URL.
+          </p>
+        </div>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">STATION BEHIND A PASSWORD</div>
+          <p>
+            If a station sits behind HTTP Basic Auth (a reverse proxy asking for a
+            username and password before anything reaches the controller), put the
+            credentials in the address you add:{' '}
+            <code className="bs-code-inline">https://dj:secret@radio.example.com</code>.
+            The API polls and the artwork authenticate straight off that URL; the audio
+            stream gets an explicit{' '}
+            <code className="bs-code-inline">Authorization</code> header instead, because
+            iOS&rsquo;s AVPlayer silently drops{' '}
+            <code className="bs-code-inline">user:pass@</code> from a media URL. That is
+            why such a station could fail in the app while the same address
+            played fine in a browser. The same form works for a station using
+            SUB/WAVE&rsquo;s own <strong>stream password</strong>: any username will do,
+            the password is what gets checked. Percent-encode an{' '}
+            <code className="bs-code-inline">@</code> in the password as{' '}
+            <code className="bs-code-inline">%40</code>, and note that casting to a
+            Chromecast isn&rsquo;t available for a station with credentials in its
+            address.
           </p>
         </div>
       </section>
@@ -106,7 +128,7 @@ export default function Clients() {
         <p className="bs-eyebrow">MACOS, WINDOWS &amp; LINUX</p>
         <h2>The app on your desk.</h2>
         <p>
-          There is a native desktop player too &mdash; a real windowed app, no browser
+          There is a native desktop player too: a real windowed app, no browser
           and no Electron. It carries the full station experience: now-playing with
           cover art and a live spectrum analyser, the booth feed, the timeline, the
           schedule grid, a request slip, and station themes that repaint the whole
@@ -191,7 +213,7 @@ export default function Clients() {
         <p className="bs-eyebrow">THE EVEN EASIER WAY</p>
         <h2>One-tap tune-in links.</h2>
         <p>
-          Some players — Sonos, moOde, hardware internet radios, car receivers —
+          Some players (Sonos, moOde, hardware internet radios, car receivers)
           want a <em>playlist file</em>, not a bare stream address. The station
           serves both, each a one-line wrapper around the{' '}
           <code className="bs-code-inline">/stream.mp3</code> mount above:
@@ -199,7 +221,7 @@ export default function Clients() {
         <ListenLinks />
         <p className="text-muted">
           Paste either link where the player asks for a station or stream URL and it
-          tunes straight in — no need to type the raw address.{' '}
+          tunes straight in, with no need to type the raw address.{' '}
           <code className="bs-code-inline">.pls</code> is the most widely supported
           (Sonos, VLC, foobar2000); <code className="bs-code-inline">.m3u</code> is the
           fallback for anything that prefers it. Both follow whatever domain you are
@@ -333,6 +355,12 @@ export default function Clients() {
           internet-radio URL can tune in, and more client guides will be added here over time.
           Running the station yourself rather than listening along? That&rsquo;s covered in{' '}
           <Link href="/setup" className="bs-link">the setup guide</Link>.
+        </p>
+        <p>
+          This page covers tuning in with players that already exist. For apps and
+          integrations built specifically for SUB/WAVE (alternative players, bots,
+          terminal clients, MCP servers), see the{' '}
+          <Link href="/apps" className="bs-link">apps directory</Link>.
         </p>
       </section>
     </ManualPage>

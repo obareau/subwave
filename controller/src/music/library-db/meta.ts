@@ -17,30 +17,45 @@ export function getEmbeddingMeta(): {
   model: string;
   dim: number;
   textMode: EmbeddingTextMode | null;
+  textFormat: number | null;
 } | null {
   const row = requireDb()
-    .prepare('SELECT model, dim, text_mode FROM embedding_meta WHERE pk = 1')
-    .get() as { model: string; dim: number; text_mode: string | null } | undefined;
+    .prepare('SELECT model, dim, text_mode, text_format FROM embedding_meta WHERE pk = 1')
+    .get() as
+      | { model: string; dim: number; text_mode: string | null; text_format: number | null }
+      | undefined;
   if (!row) return null;
   return {
     model: row.model,
     dim: row.dim,
     textMode: row.text_mode === 'prefixed' || row.text_mode === 'plain' ? row.text_mode : null,
+    // NULL (pre-#1246 rows) reads as format 1 — the head + Last.fm + lyrics
+    // shape every index carried before the Sound line existed. Deliberately not
+    // null-as-unknown: an index written by an older build is a KNOWN shape.
+    textFormat: Number.isFinite(row.text_format as number) ? Number(row.text_format) : 1,
   };
 }
 
+// `textFormat` is deliberately required, not defaulted: a NULL write reads
+// back as format 1 (see getEmbeddingMeta), so a caller that forgot the arg
+// would silently regress the recorded shape to v1 and re-fire the re-embed
+// advisory even after a reseed. Callers must resolve it explicitly
+// (embeddings.resolveIndexTextFormat).
 export function setEmbeddingMeta(
   model: string,
   dim: number,
-  textMode: EmbeddingTextMode | null = null,
+  textMode: EmbeddingTextMode | null,
+  textFormat: number,
 ): void {
   requireDb()
     .prepare(
-      `INSERT INTO embedding_meta (pk, model, dim, set_at, text_mode) VALUES (1, ?, ?, ?, ?)
+      `INSERT INTO embedding_meta (pk, model, dim, set_at, text_mode, text_format)
+       VALUES (1, ?, ?, ?, ?, ?)
        ON CONFLICT(pk) DO UPDATE SET model = excluded.model, dim = excluded.dim,
-         set_at = excluded.set_at, text_mode = excluded.text_mode`,
+         set_at = excluded.set_at, text_mode = excluded.text_mode,
+         text_format = excluded.text_format`,
     )
-    .run(model, dim, new Date().toISOString(), textMode);
+    .run(model, dim, new Date().toISOString(), textMode, textFormat);
 }
 
 // Audio-embedding provenance — which CLAP model wrote the current audio

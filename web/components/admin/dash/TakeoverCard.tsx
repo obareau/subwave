@@ -1,19 +1,8 @@
 'use client';
 
-// Show takeover (#930) — pin one show over the weekly grid for a bounded
-// window, after which the schedule picks up again on its own.
-//
-// This lived as a strip on the Rundown, but it is a live on-air action rather
-// than a piece of programming the week: it belongs beside the manual mic and
-// the segment pads, and its old home spent a row of chrome above a 24-hour
-// board on every load for something reached a few times a month. The Rundown
-// still SHOWS a live takeover — its Now band would otherwise name the show the
-// grid says is on air, which the pin outranks — and links here to change it.
-//
-// Part of the dash/ split — see ../DashPanel.tsx. Unlike the other dash cards
-// this one fetches for itself: GET /schedule and the two /schedule/override
-// mutations are the only calls on this screen no other card wants, so routing
-// them through DashPanel's poll would buy nothing.
+// Show takeover (#930) — pin one show over the weekly grid for a bounded window.
+// Unlike the other dash cards this one fetches for itself: GET /schedule and the two
+// /schedule/override mutations are the only calls on this screen no other card wants.
 
 import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
@@ -34,7 +23,6 @@ interface ScheduleOverride {
   expiresAt: number;
 }
 
-/** The slice of GET /schedule's show list this card needs. */
 interface TakeoverShow {
   id: string;
   name: string;
@@ -58,11 +46,9 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
-  // GET /schedule carries both halves of this card — the show roster and the
-  // pin in force (expired or dangling ones already report as null). The 30s
-  // beat is slow enough to disappear next to the dash's 3s live poll, and it
-  // doubles as the clock behind "min left", so a takeover pinned from another
-  // tab or lapsing on its own lands here without a reload.
+  // GET /schedule carries the roster and the pin in force (expired or dangling ones
+  // already report as null). The 30s beat doubles as the clock behind "min left", so a
+  // pin made in another tab or lapsing on its own lands here without a reload.
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     let cancelled = false;
@@ -88,8 +74,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
     };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Same index-into-the-roster colour the board and the shows page paint with,
-  // so a pinned show wears the swatch the operator already knows it by.
+  // Same index-into-the-roster colour the board and the shows page paint with.
   const colorOf = (id: string): string => {
     const idx = shows.findIndex(s => s.id === id);
     return idx >= 0 ? (SHOW_COLORS[idx % SHOW_COLORS.length] ?? 'transparent') : 'transparent';
@@ -142,14 +127,9 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   return (
     <Card
       title="Takeover"
-      // No sub while one is live: the pill and the block below both say it, and
-      // a third line of the same news pushes the header onto two rows.
+      // No sub while one is live — a third line of the same news wraps the header.
       sub={onAir ? undefined : 'jump a show to the front'}
-      // A pin outranks the whole week, so a live one wants to catch the eye of
-      // an operator scrolling past — but softly: the tinted block and the
-      // on-air pill inside already say it, and a solid vermilion ring shouted
-      // over every other card on the dash. The ring is a box-shadow rather
-      // than a border because `.admin-root .card` owns the border at a higher
+      // Box-shadow, not a border: `.admin-root .card` owns the border at a higher
       // specificity than any utility class can beat.
       className={cn(onAir && 'shadow-[0_0_0_2px_color-mix(in_oklab,var(--accent)_28%,transparent)]')}
       right={
@@ -197,11 +177,8 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
         <div className="grid gap-2.5">
           <SlotMenu
             ariaLabel="Pin a show"
-            // justify-self, not self-start: the grid stretches its items across
-            // the column, and a slot underlined the full width of the card
-            // reads as a text field rather than a value you pick. No chip until
-            // a show is chosen — an empty one is the board's SILENT swatch, and
-            // it lands here looking like an unticked checkbox.
+            // justify-self, not self-start: the grid otherwise stretches the slot to
+            // full width, where it reads as a text field rather than a value you pick.
             className="min-h-9 justify-self-start text-[12px] sm:min-h-0"
             label={showById(pinShowId)?.name ?? 'Pin a show…'}
             chipColor={pinShowId ? colorOf(pinShowId) : undefined}
@@ -209,8 +186,6 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
             onSelect={setPinShowId}
           />
           <div className="flex flex-wrap items-center gap-2.5">
-            {/* The presets are the whole control for most pins; the field is
-                the escape hatch, and a typed value simply lights no preset. */}
             <Seg
               value={String(minutes)}
               options={PRESETS.map(p => ({ id: String(p.minutes), label: p.label }))}

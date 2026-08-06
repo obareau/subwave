@@ -63,6 +63,11 @@ const DANGER = '#c5302a';
 const isUntrustedCa = (msg?: string) =>
   !!msg && /trust anchor|certpathvalidator|certification path|certificate.*(invalid|not trusted)/i.test(msg);
 
+// Did the address we probed already carry `user:pass@` userinfo? Same shape
+// splitCredentials() matches in lib/api.ts, so "the app read credentials off
+// this URL" and "this returns true" are the same question.
+const hasUserinfo = (candidates: string[]) => candidates.some((c) => /^https?:\/\/[^/@]+@/i.test(c));
+
 // Turn a failed health probe into a human diagnostic for the failure card. The
 // network case names the usual "works in the browser, fails in the app" culprit
 // (a TLS chain Android rejects but the browser tolerates) — the most common and
@@ -71,6 +76,25 @@ function describeFail(fail: HealthResult | null, candidates: string[]): string |
   if (!fail || fail.ok) return undefined;
   if (fail.kind === 'timeout')
     return 'No response in time — the box may be asleep, on another network, or blocked by a firewall.';
+  // 401 is its own diagnosis, not a routing problem: the station sits behind
+  // HTTP Basic Auth (auth_basic on the reverse proxy, or SUB/WAVE's own stream
+  // password), and the generic "check your /api/* route" advice below sends
+  // people hunting a proxy bug that isn't there — the reported symptom is
+  // "works in the browser, in VLC and in curl, fails in the app" (#1300, bug
+  // 8). The app DOES support it, via credentials in the URL, which nothing
+  // told anyone. Split on whether the tried address ALREADY carried them: if it
+  // did, they were rejected, and the usual reason is an unencoded special
+  // character (splitCredentials cuts the userinfo at the first `@`, so a raw
+  // `@` in the password takes the host with it).
+  if (fail.kind === 'http' && fail.status === 401)
+    return hasUserinfo(candidates)
+      ? "The station rejected the credentials in the address (HTTP 401). Check the username and password — and percent-encode an @ inside them as %40, since the address is cut at the first @: the password p@ss is typed dj:p%40ss@radio.yourhost.com."
+      : "The station asked for a password (HTTP 401) — it sits behind HTTP Basic Auth, either on the reverse proxy in front of it or via SUB/WAVE's own stream password. Put the credentials in the address as user:pass@host (e.g. dj:secret@radio.yourhost.com); the app carries them through to the API, the artwork and the audio stream.";
+  // 407 comes from a proxy between THIS DEVICE and the station, not from the
+  // station — credentials in the station address never reach it, so the advice
+  // above would be actively wrong here.
+  if (fail.kind === 'http' && fail.status === 407)
+    return "A proxy on this network is asking for a password (HTTP 407) — that sits between this device and the station, so credentials in the station address never reach it. Check this network's proxy settings, or try another network.";
   if (fail.kind === 'http')
     return `The server answered with HTTP ${fail.status ?? '?'}, so the address is reachable but the request never reached the controller. Check that your reverse proxy routes /api/* to the controller on port 7701.`;
   // The device doesn't trust the station's cert. Two real-world causes, same
@@ -369,6 +393,7 @@ export default function Onboarding() {
                   the prefix to force one or the other. */}
               <Text className="font-mono text-muted" style={{ fontSize: 10.5, lineHeight: 16, marginTop: 7 }}>
                 Tap the prefix to switch HTTPS / HTTP. HTTPS auto-falls back to HTTP.
+                {'\n'}Password-protected station? Type user:pass@host.
               </Text>
 
               <Pressable

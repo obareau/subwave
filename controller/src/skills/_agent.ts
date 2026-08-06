@@ -276,6 +276,9 @@ export const directorAgent = defineAgent({
   // things worse, not better, and was the direct cause of a run burning the
   // FULL agentTimeoutMs internally (45002ms observed) before recovery ever got
   // a turn. Left unset before, silently inheriting djAgent's default of 8.
+  // The per-provider discovery widening is opt-in (providerDiscoveryBudget on
+  // the pick/request agents) precisely so it can never override this cap —
+  // the director deliberately does NOT opt in.
   maxSteps: 2,
   // Wall-clock ceiling, mirroring the picker (dj-agent.ts). Without it a
   // gemma-class model that ignores toolChoice can drive the done-tool recovery
@@ -761,10 +764,6 @@ export function skillCatalog() {
       requiresKey,
       keyUrl,
       hint,
-      // News feed surfaced so /admin/skills can show/edit the current feed
-      // without a second fetch. Undefined on every other capability.
-      feed: c.feed || null,
-      feedMaxItems: c.feedMaxItems || null,
       // The "right now" fields this segment's situation may include (issue
       // #471). Resolved to the default profile (no weather) when unset, so the
       // admin UI can render the current tick-box selection without guessing.

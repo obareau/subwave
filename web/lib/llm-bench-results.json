@@ -1,6 +1,43 @@
 {
- "updatedAt": "2026-07-10",
+ "updatedAt": "2026-08-05",
  "models": [
+  {
+   "model": "openrouter:openai/gpt-5.6-luna",
+   "route": "openrouter",
+   "benchedAt": "2026-08-05",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "pickAgent+requests+scripts+segAgent+shows",
+   "overall": {
+    "ok": 72,
+    "total": 72
+   },
+   "groups": {
+    "pickAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 15,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 21,
+     "total": 21
+    },
+    "shows": {
+     "ok": 24,
+     "total": 24
+    }
+   },
+   "poolPickP50s": null,
+   "verdict": "agent-capable",
+   "notes": "Agent-only bench: zero rule violations, and the only model on record that genuinely explores multi-round — up to three discovery tools per pick (13–22 s picks, well inside the deadline)."
+  },
   {
    "model": "ollama:gemma4:31b-cloud",
    "route": "ollama",
@@ -90,6 +127,43 @@
    "poolPickP50s": 0.7,
    "verdict": "agent-capable",
    "notes": "The value pick: matches the 31B-class overall, agent 18/18, and the fastest picks benched (0.7 s median)."
+  },
+  {
+   "model": "openrouter:google/gemma-4-26b-a4b-it",
+   "route": "openrouter",
+   "benchedAt": "2026-08-05",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "pickAgent+requests+scripts+segAgent+shows",
+   "overall": {
+    "ok": 71,
+    "total": 72
+   },
+   "groups": {
+    "pickAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 15,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 21,
+     "total": 21
+    },
+    "shows": {
+     "ok": 23,
+     "total": 24
+    }
+   },
+   "poolPickP50s": null,
+   "verdict": "agent-capable",
+   "notes": "Re-benched agent-only 2026-08-05: the ~38 s serving that demoted it is gone (~5 s picks). Explores a single round and leans on the recovery net; one banter over-length. Pool figures last measured 2026-07-10 (91/96 full coverage)."
   },
   {
    "model": "google:gemini-3.5-flash",
@@ -270,51 +344,6 @@
    "poolPickP50s": 3.6,
    "verdict": "agent-capable",
    "notes": "Routing A/B vs native openrouter (91/96 same day): identical score through the openai-compatible transport pointed at openrouter.ai/api/v1 — the body-injection path is transport-clean for cloud backends with non-thinking models."
-  },
-  {
-   "model": "openrouter:google/gemma-4-26b-a4b-it",
-   "route": "openrouter",
-   "benchedAt": "2026-07-10",
-   "iterations": 3,
-   "reasoning": false,
-   "coverage": "full",
-   "overall": {
-    "ok": 91,
-    "total": 96
-   },
-   "groups": {
-    "pickPool": {
-     "ok": 9,
-     "total": 12
-    },
-    "pickAgent": {
-     "ok": 6,
-     "total": 6
-    },
-    "segPool": {
-     "ok": 12,
-     "total": 12
-    },
-    "segAgent": {
-     "ok": 6,
-     "total": 6
-    },
-    "requests": {
-     "ok": 15,
-     "total": 15
-    },
-    "scripts": {
-     "ok": 21,
-     "total": 21
-    },
-    "shows": {
-     "ok": 22,
-     "total": 24
-    }
-   },
-   "poolPickP50s": 4.6,
-   "verdict": "pool-mode",
-   "notes": "Structurally clean in pool mode but ~38 s median picks as currently served — too slow to prefer over Qwen."
   },
   {
    "model": "openrouter:qwen/qwen3.5-9b",
@@ -710,49 +739,41 @@
    "notes": "Re-benched on AI SDK 7 branch: 75/96 (was 82). think:false honored on a raw probe but 7 cells still leaked thinking on complex prompts — intermittent relay/model-side, same class as the minimax regression, milder. Plus 3 hallucinated ids. Direct deepseek provider (85/96) is the better route for this model now."
   },
   {
-   "model": "ollama:minimax-m2.7:cloud",
+   "model": "ollama:minimax-m3:cloud",
    "route": "ollama",
-   "benchedAt": "2026-07-10",
+   "benchedAt": "2026-08-05",
    "iterations": 3,
    "reasoning": false,
-   "coverage": "full",
+   "coverage": "pickAgent+requests+scripts+segAgent+shows",
    "overall": {
-    "ok": 60,
-    "total": 96
+    "ok": 38,
+    "total": 72
    },
    "groups": {
-    "pickPool": {
-     "ok": 1,
-     "total": 12
-    },
     "pickAgent": {
-     "ok": 1,
+     "ok": 2,
      "total": 6
     },
-    "segPool": {
-     "ok": 12,
-     "total": 12
-    },
     "segAgent": {
-     "ok": 5,
+     "ok": 4,
      "total": 6
     },
     "requests": {
-     "ok": 12,
+     "ok": 15,
      "total": 15
     },
     "scripts": {
-     "ok": 18,
+     "ok": 10,
      "total": 21
     },
     "shows": {
-     "ok": 11,
+     "ok": 7,
      "total": 24
     }
    },
-   "poolPickP50s": 18,
+   "poolPickP50s": null,
    "verdict": "avoid (re-test)",
-   "notes": "Collapsed 90->86->60: Ollama cloud now IGNORES think:false for this family (raw-API verified: 594ch of thinking on a one-word ask) - thinks on every call, 27 leak cells, plans run 105-178s. Server-side, not routing; re-test after a relay/model update."
+   "notes": "Replaces M2.7 in the record, and inherits its diagnosis: Ollama cloud still ignores think:false for the MiniMax family, so every one of its 34 misses is a thinking leak into spoken output (plans and links 0%; requests clean). Server-side, not routing — re-test after a relay/model update."
   }
  ]
 }

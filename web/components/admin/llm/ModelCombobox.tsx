@@ -1,11 +1,7 @@
 'use client';
-// Searchable model picker. Renders as a trigger button that shows the selected
-// model (or placeholder). Clicking opens an inline popover with a text filter +
-// scrollable list built on cmdk. Falls back (at the call site) to a plain input
-// when no models are available (discovery hasn't run / returned nothing).
-//
-// Extracted from SettingsPanel so the admin Settings tab and the onboarding
-// wizard share one model picker instead of each rolling their own.
+// Searchable model picker built on cmdk, shared by the admin Settings tab and the
+// onboarding wizard. Call sites fall back to a plain input when discovery returned
+// no models.
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../../lib/cn';
@@ -30,7 +26,6 @@ export function ModelCombobox({ models, value, onChange, placeholder = 'Select a
   const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
   const [direction, setDirection] = useState<'up' | 'down'>('down');
 
-  // Recompute position when opening
   const openDropdown = () => {
     if (triggerRef.current) {
       const r = triggerRef.current.getBoundingClientRect();
@@ -48,7 +43,6 @@ export function ModelCombobox({ models, value, onChange, placeholder = 'Select a
     setSearch('');
   };
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
@@ -64,7 +58,6 @@ export function ModelCombobox({ models, value, onChange, placeholder = 'Select a
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  // Close on scroll/resize
   useEffect(() => {
     if (!open) return;
     const close = (e: Event) => {

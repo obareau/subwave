@@ -1,43 +1,33 @@
-# GPU opt-in overlay for the tts-heavy sidecar — runs Chatterbox on CUDA.
-#
-# The default tts-heavy image is CPU-only on purpose: a GPU device reservation
-# can't live in the base compose because `docker compose up` errors on a host
-# without the NVIDIA runtime, which would break every CPU install. This overlay
-# adds the reservation, switches the engine to cuda, and forces a local build
-# (the published image ships CPU-only torch).
-#
-# Layer it on top of your prod compose file, with the CUDA wheel index set:
+# GPU opt-in overlay for the tts-heavy sidecar — Chatterbox on CUDA.
+# A device reservation can't live in the base compose (`up` errors on hosts
+# without the NVIDIA runtime). This overlay adds it, switches the engine to
+# cuda, and forces a local build (the published image ships CPU-only torch).
 #
 #   echo 'CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124' >> .env
 #   docker compose -f docker-compose.yml -f docker-compose.tts-heavy-gpu.yml \
 #     --profile tts-heavy up -d --build
+#   (BYO hosts: swap in docker-compose.byo.yml.)
 #
-# (BYO reverse-proxy hosts: swap docker-compose.yml for docker-compose.byo.yml.)
-#
-# RTX 50-series (Blackwell / sm_120): chatterbox-tts pins torch==2.6.0, which has
-# no sm_120 kernels, so the default cu124 build loads but 500s at synthesis. Use
-# a cu128 index AND override the pin:
+# RTX 50-series (Blackwell / sm_120): chatterbox-tts pins torch==2.6.0, which
+# has no sm_120 kernels — the cu124 build loads but 500s at synthesis. Use a
+# cu128 index AND override the pin:
 #
 #   echo 'CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128' >> .env
 #   echo 'CHATTERBOX_TORCH_SPEC=torch==2.9.1 torchaudio==2.9.1' >> .env
 #
-# Requirements: an NVIDIA GPU with the driver + NVIDIA Container Toolkit
-# installed. Pick the cuXXX wheel tag that matches your driver — see
-# https://pytorch.org/get-started/locally/. Full guide: docs/gpu-tts.md.
+# Requirements: NVIDIA driver + Container Toolkit; pick the cuXXX wheel tag
+# matching your driver (https://pytorch.org/get-started/locally/). Full guide:
+# docs/gpu-tts.md.
 services:
   tts-heavy:
     # Build the CUDA image locally instead of pulling the published CPU one.
     pull_policy: build
     environment:
-      # Load the Chatterbox model onto the GPU. The worker falls back to cpu if
-      # CUDA isn't actually visible, so a misconfigured host degrades, not fails.
+      # The worker falls back to cpu if CUDA isn't actually visible.
       - TTS_HEAVY_DEVICE=cuda
-    # Hand the GPU into the container (needs the NVIDIA Container Toolkit).
-    #
-    # The deploy.resources reservation below is the modern (CDI) path. On hosts
-    # where the NVIDIA runtime is registered in LEGACY mode, that reservation
-    # fails with "could not select device driver nvidia"; there, delete the
-    # `deploy:` block and instead use the legacy runtime:
+    # The deploy.resources reservation is the modern (CDI) path. On hosts where
+    # the NVIDIA runtime is registered in LEGACY mode it fails with "could not
+    # select device driver nvidia"; there, delete the `deploy:` block and use:
     #
     #   runtime: nvidia
     #   environment:

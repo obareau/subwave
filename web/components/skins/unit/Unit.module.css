@@ -1,19 +1,12 @@
-/* Unit SW-9 — the station as a tabletop receiver. Milled-aluminium chassis,
-   soft-touch keys, weighted knobs, and every live fact inside one glowing
-   dot-matrix window. Design ref: design_handoff_unit_sw9 (Skins Canvas 5a).
-
-   The hardware palette derives from the theme tokens (--bg / --ink / --muted
-   / --accent) with color-mix, shaded by light physics — white highlights,
-   black shadows — so the default light theme reproduces the handoff's
-   aluminium while dark and exotic themes recast the same unit as their own
-   hardware. The display glass and its dot-matrix readout stay fixed
-   near-black/warm-white: it is self-lit hardware, like Subamp's LCD; only
-   its accent lines follow the theme. Everything that moves is a co-located
-   keyframe idling at `paused` until `.playing` lands, so a tuned-out unit
-   sits still and html.lite's global keyframe kill stops the whole panel for
-   free. The meter bars are the one hybrid: they run on the real stream
-   spectrum when the Web Audio analyser can attach (`.live`, driven from
-   UnitSkin's Bars) and fall back to their keyframe when it can't. */
+/* The hardware palette derives from the theme tokens (--bg / --ink / --muted /
+   --accent) via color-mix, with white highlights and black shadows layered on
+   top. The display glass and its dot-matrix readout are deliberately off-token
+   (fixed near-black/warm-white, self-lit hardware); only their accent lines
+   follow the theme. Everything that moves is a co-located keyframe idling at
+   `paused` until `.playing` lands, so a tuned-out unit sits still and
+   html.lite's global keyframe kill stops the whole panel for free. The meter
+   bars are the one hybrid: real spectrum when the Web Audio analyser attaches
+   (`.live`, from UnitSkin's Bars), keyframe fallback when it can't. */
 
 @keyframes unit-bar {
   0%, 100% { transform: scaleY(0.28); }
@@ -25,17 +18,16 @@
   50% { opacity: 0.3; }
 }
 
-/* ── chassis ──────────────────────────────────────────────────────────── */
+/* chassis */
 
 .chassis {
-  /* Shared derived colours for the hardware descendants. */
   --u-line: color-mix(in srgb, var(--ink) 34%, transparent);
-  /* Key-face lettering: paper dimmed a step toward ink (≈ #ded8cc on the
-     default light theme), and its faded sibling. */
+  /* Key-face lettering: paper dimmed toward ink (≈ #ded8cc on the default
+     light theme). */
   --u-keytext: color-mix(in oklab, var(--bg) 87%, var(--ink));
   --u-keytext-dim: color-mix(in srgb, var(--u-keytext) 60%, transparent);
-  /* Cover-art tint (useCoverColors) — overridden from JS while art is on
-     air; the default resolves every tinted formula back to plain metal. */
+  /* Cover-art tint, overridden from JS (useCoverColors) while art is on air;
+     the default resolves every tinted formula back to plain metal. */
   --u-tint: color-mix(in oklab, var(--bg) 90%, var(--ink));
   border: 1px solid var(--ink);
   background: linear-gradient(
@@ -47,7 +39,6 @@
   color: var(--ink);
 }
 @media (max-width: 1023px) {
-  /* Mobile frame carries its mid-stop a touch lower (design spec). */
   .chassis {
     background: linear-gradient(
       180deg,
@@ -58,9 +49,8 @@
   }
 }
 
-/* Milled-metal striation, full-bleed over the frame — a physical highlight,
-   so it stays white in every theme. Kept faint: at full design strength the
-   pinstripes read as glare, especially on dark chassis. */
+/* Deliberately white in every theme (a highlight, not a token). Kept faint —
+   at full strength the pinstripes read as glare on dark chassis. */
 .striation {
   opacity: 0.12;
   background-image: repeating-linear-gradient(
@@ -70,7 +60,6 @@
   );
 }
 
-/* Engraved lettering — ink pressed into the metal, white catch below. */
 .engraved {
   color: var(--ink);
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
@@ -80,18 +69,14 @@
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
 }
 
-/* Speaker grille — perforated field, pure CSS. The base paints the metal and
-   its dark holes; .grilleArt lays the on-air cover over it, masked to the
-   SAME dot grid (blurred + desaturated), so each perforation carries a shade
-   of the artwork while the panel still reads as a grille. .grilleShade holds
-   the recess shadows above the art so the edges stay sunken. */
+/* .grille paints the base perforation, .grilleArt lays the on-air cover over
+   it masked to the SAME dot grid, .grilleShade holds the recess shadows above
+   the art. All three masks must stay on one 9px pitch. */
 .grille {
   border: 1px solid var(--u-line);
-  /* The metal field takes a shade of the artwork's dominant colour so the
-     halftone square sits in a matching panel instead of on bare metal. */
   background-color: color-mix(
     in oklab,
-    var(--u-tint) 22%,
+    var(--u-tint) 30%,
     color-mix(in oklab, var(--bg) 88%, var(--ink))
   );
   background-image: radial-gradient(
@@ -101,29 +86,27 @@
   );
   background-size: 9px 9px;
 }
-/* Full-bleed, heavily blurred copy of the cover glowing through every hole —
-   the bridge that lets the sharp centre square melt into the panel. Same dot
-   mask as the art layer so all holes read one size. */
+/* Same dot mask as the art layer so all holes read one size. */
 .grilleWash {
   background-image: var(--u-cover);
   background-size: cover;
   background-position: center;
   filter: blur(22px) saturate(1.2);
-  opacity: 0.5;
+  opacity: 0.6;
   -webkit-mask-image: radial-gradient(circle at center, #000 3.4px, transparent 3.8px);
   -webkit-mask-size: 9px 9px;
   mask-image: radial-gradient(circle at center, #000 3.4px, transparent 3.8px);
   mask-size: 9px 9px;
 }
-/* The dot mask + filter live on this full-bleed layer so the halftone grid
-   stays aligned with the base perforation; the artwork itself paints in the
-   centred square box below — whole sleeve, never cropped. */
+/* The mask + filter live on this full-bleed layer so the halftone grid stays
+   aligned with the base perforation; the artwork paints in the square box
+   below, never cropped. */
 .grilleArt {
   display: flex;
   justify-content: center;
   filter: blur(1px) saturate(1.15);
-  /* Art dots run larger than the base perforation (3.4px vs 2.1px on the
-     same 9px pitch) so the sleeve reads clearly while staying a dot grid. */
+  /* Art dots run larger than the base perforation (3.4px vs 2.1px) on the
+     same 9px pitch, so the sleeve reads while staying a dot grid. */
   -webkit-mask-image: radial-gradient(circle at center, #000 3.4px, transparent 3.8px);
   -webkit-mask-size: 9px 9px;
   mask-image: radial-gradient(circle at center, #000 3.4px, transparent 3.8px);
@@ -133,8 +116,8 @@
   height: 100%;
   max-width: 100%;
   aspect-ratio: 1;
-  /* A dark wash multiplied into the cover keeps every hole visibly darker
-     than the metal field, so bright artwork can't dissolve the perforation. */
+  /* The multiplied dark wash keeps every hole darker than the metal field, so
+     bright artwork can't dissolve the perforation. */
   background-image:
     linear-gradient(rgba(23, 21, 15, 0.25), rgba(23, 21, 15, 0.25)),
     var(--u-cover);
@@ -149,7 +132,6 @@
     inset 0 -1px 0 rgba(255, 255, 255, 0.4);
 }
 
-/* Recessed knob rail. */
 .rail {
   border: 1px solid var(--u-line);
   background: linear-gradient(
@@ -160,7 +142,7 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
-/* ── keys & pads ──────────────────────────────────────────────────────── */
+/* keys & pads */
 
 .key {
   border-radius: 3px;
@@ -204,7 +186,7 @@
   color: #fff4ec;
 }
 
-/* ── knobs & fader ────────────────────────────────────────────────────── */
+/* knobs & fader */
 
 .knobOuter {
   border-radius: 50%;
@@ -250,7 +232,7 @@
   box-shadow: 0 3px 6px rgba(0, 0, 0, 0.45);
 }
 
-/* ── lamps & LEDs ─────────────────────────────────────────────────────── */
+/* lamps & LEDs */
 
 .lamp {
   border-radius: 50%;
@@ -263,7 +245,7 @@
     inset 0 1px 1px rgba(255, 255, 255, 0.5);
   animation: unit-pulse 2.4s ease-in-out infinite;
 }
-/* Net lamp keeps its phosphor green — a status colour, not a theme one. */
+/* Phosphor green is deliberately off-token: a status colour, not a theme one. */
 .lampNet {
   background: #8fa88c;
   box-shadow:
@@ -276,14 +258,14 @@
   background: var(--accent, #d94b2a);
   box-shadow: 0 0 9px color-mix(in srgb, var(--accent, #d94b2a) 95%, transparent);
 }
-/* Lit warm-white — a saved lamp glows the same in any theme. */
+/* Deliberately off-token: a saved lamp glows the same in any theme. */
 .ledSaved {
   background: #efeadd;
   box-shadow: 0 0 7px rgba(239, 234, 221, 0.7);
 }
 .ledOff { background: color-mix(in oklab, var(--ink) 78%, var(--bg)); }
 
-/* ── the display glass (fixed: self-lit hardware) ─────────────────────── */
+/* display glass — fixed colours, deliberately off-token (self-lit hardware) */
 
 .glass {
   border: 1px solid #0a0908;
@@ -297,7 +279,7 @@
 }
 .windowShadow { box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55); }
 
-/* The dot-matrix face — Doto rides a global next/font variable. */
+/* Doto rides a global next/font variable. */
 .doto {
   font-family: var(--font-doto), var(--font-mono), monospace;
   font-weight: 900;
@@ -310,7 +292,7 @@
   background: var(--accent, #d94b2a);
 }
 
-/* ── meter bars ───────────────────────────────────────────────────────── */
+/* meter bars */
 
 /* Segment heights ride --u-s1/--u-s2 so the mobile meter's finer stripe
    (8px/11px vs 14px/19px) is a container override, not a second bar class. */
@@ -328,12 +310,10 @@
   animation-play-state: paused;
 }
 .playing .bar { animation-play-state: running; }
-/* Audio-driven: UnitSkin's Bars writes each bar's scaleY from the shared Web
-   Audio analyser. A running keyframe would win over that inline transform, so
-   the loop's own class stands the animation down — it's only present while
-   real spectrum data is landing, and drops the moment the analyser dies
-   (iOS/Safari silence, tune-out) so the keyframes take the meter straight
-   back. */
+/* UnitSkin's Bars writes each bar's scaleY inline from the Web Audio analyser;
+   a running keyframe would win over that, so .live stands the animation down.
+   It drops the moment the analyser dies (iOS/Safari silence, tune-out) and the
+   keyframes take the meter straight back. */
 .live .bar { animation: none; }
 .bar:nth-child(1) { animation-duration: 1.4s; animation-delay: 0s; }
 .bar:nth-child(2) { animation-duration: 1.9s; animation-delay: 0.2s; }
@@ -343,15 +323,14 @@
 .bar:nth-child(6) { animation-duration: 2s; animation-delay: 0.6s; }
 .bar:nth-child(7) { animation-duration: 1.3s; animation-delay: 0.45s; }
 
-/* Reduced motion freezes the meter at its resting height. The JS meter gates
-   itself on the same query (Bars in UnitSkin.tsx) — this is the keyframe half,
-   so the fallback path can't keep bouncing under a listener who asked for
-   stillness. html.lite gets this for free from the global animation kill. */
+/* The keyframe half of the reduced-motion gate; the JS meter gates itself on
+   the same query (Bars in UnitSkin.tsx). html.lite gets this for free from the
+   global animation kill. */
 @media (prefers-reduced-motion: reduce) {
   .bar { animation: none; }
 }
 
-/* ── window chrome ────────────────────────────────────────────────────── */
+/* window chrome */
 
 .rowSelected {
   background: color-mix(in srgb, var(--accent, #d94b2a) 14%, transparent);

@@ -4,6 +4,14 @@
 // undefined → services.fetchHeadlines falls back to the env-configured feed.
 export const description = 'Fetch current news headlines from the configured feed. Returns only headlines not already read on air.';
 
+// The operator knobs this skill exposes in /admin/skills. Declared HERE rather
+// than gated on `kind === 'news'` in the route, so a copy of this skill under a
+// different name (a second news source) still gets a feed field — issue #1300.
+export const configFields = {
+  feed: { type: 'url', label: 'News feed · RSS 2.0', placeholder: 'https://…/rss.xml' },
+  feedMaxItems: { type: 'number', label: 'Max items', min: 1, max: 50, integer: true, placeholder: '10' },
+};
+
 export default async function getHeadlines(ctx, state, services, config) {
   if (!(state.seenHeadlines instanceof Set)) state.seenHeadlines = new Set();
   const maxItems = config?.feedMaxItems ? Number(config.feedMaxItems) : undefined;

@@ -25,7 +25,7 @@ Find a clean clip of the voice you want. A few seconds of clear speech is plenty
 state/voices/morning-host.wav
 ```
 
-Then open a DJ persona in admin and set its voice to that filename. Save. The next time that persona is on the desk, it speaks in the cloned voice. If a clone ever fails to load, PocketTTS falls back to one of its built-in voices so the segment still airs.
+Then open a DJ persona in admin and set its voice to that filename. Save. The next time that persona is on the desk, it speaks in the cloned voice. If a clone ever fails to load, PocketTTS falls back to one of its built-in voices so the segment still airs. Haven't switched a heavy engine on yet? [The setup nudge](/news/heavy-tts-setup-guide) walks you through it, and the manual's [Voices & TTS](/manual/voices) page covers every engine.
 
 Already had clips in the old `chatterbox-voices/` folder? Leave them. SUB/WAVE still reads that folder, so nothing breaks on upgrade.
 

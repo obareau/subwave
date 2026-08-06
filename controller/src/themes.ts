@@ -187,15 +187,6 @@ export async function listThemesAnnotated(): Promise<ThemeListItem[]> {
   return (await listThemes()).map(t => ({ ...t, builtin: BUILTIN_IDS.has(t.id) }));
 }
 
-export async function getTheme(id: string): Promise<Theme> {
-  const all = await listThemes();
-  return (
-    all.find(t => t.id === id)
-    ?? all.find(t => t.id === DEFAULT_THEME_ID)
-    ?? all[0]!
-  );
-}
-
 export async function isValidThemeId(id: string): Promise<boolean> {
   const all = await listThemes();
   return all.some(t => t.id === id);

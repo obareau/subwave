@@ -2,16 +2,13 @@ import * as React from "react"
 
 import { cn } from "@/lib/cn"
 
-/* Newsprint skeleton — sharp corners, faint ink fill (matches the console's
-   loading placeholders). The base `Skeleton` is a single bar; the named shapes
-   below (Rows / Cards / Tiles / Form / Text) compose it into the handful of
-   content silhouettes the admin panels actually render, so a panel swaps its
-   old `<div>loading…</div>` for the shape closest to its real layout.
+/* Newsprint skeleton. The base `Skeleton` is a single bar; the named shapes
+   below compose it into the content silhouettes the admin panels render.
 
    `motion-reduce:animate-none` kills the pulse for reduced-motion users. Bar
-   widths come from a fixed cycle (never Math.random) so server and client
-   render identical markup — random widths would hydration-mismatch and trip
-   the same lint rule the rest of the console avoids. */
+   widths come from a fixed cycle, never Math.random, so server and client render
+   identical markup — random widths would hydration-mismatch and trip the repo's
+   react purity rule. */
 function Skeleton({
   className,
   ...props
@@ -27,19 +24,18 @@ function Skeleton({
   )
 }
 
-// Deterministic width cycle for text-ish bars — indexed by position so the
-// silhouette looks organic without any per-render randomness.
+// Indexed by position so the silhouette looks organic with no per-render
+// randomness.
 const BAR_W = ["w-[68%]", "w-[82%]", "w-[54%]", "w-[76%]", "w-[46%]", "w-[88%]"]
 const widthAt = (i: number) => BAR_W[i % BAR_W.length]
 
 interface ShapeProps {
   className?: string
-  /** Announced to screen readers via the shape's live region. */
   label?: string
 }
 
-/* Shared wrapper: one polite live region + visually-hidden label per shape, so
-   assistive tech hears "Loading …" once while the bars stay aria-hidden. */
+/* One polite live region + visually-hidden label per shape, so assistive tech
+   hears "Loading …" once while the bars stay aria-hidden. */
 function LoadingBox({
   className,
   label = "Loading",
@@ -53,7 +49,6 @@ function LoadingBox({
   )
 }
 
-/** A stack of text lines — small widgets, prose blocks, generic fallback. */
 function SkeletonText({
   lines = 3,
   className,
@@ -72,7 +67,6 @@ function SkeletonText({
   )
 }
 
-/** A bordered list/table — Skills, Shows, Debug calls, Webhooks, Personas. */
 function SkeletonRows({
   rows = 5,
   className,
@@ -99,7 +93,6 @@ function SkeletonRows({
   )
 }
 
-/** A responsive grid of asset cards — Imaging, Moods, Library results. */
 function SkeletonCards({
   cards = 6,
   className,
@@ -124,7 +117,6 @@ function SkeletonCards({
   )
 }
 
-/** A row of stat tiles — Dash widgets, Stats figures. */
 function SkeletonTiles({
   tiles = 4,
   className,
@@ -145,7 +137,6 @@ function SkeletonTiles({
   )
 }
 
-/** A stack of label + field rows — Settings sections, edit modals. */
 function SkeletonForm({
   fields = 4,
   className,

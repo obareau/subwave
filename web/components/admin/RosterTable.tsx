@@ -1,17 +1,9 @@
 'use client';
 
-// Shared roster table — the "list" half of the cards/list toggle on
-// /admin/skills, /admin/shows and /admin/personas. One row per item at ~40px
-// instead of a ~160px slate card, so a long roster fits one screen and columns
-// line up for comparison.
-//
-// Hand-rolled in the house table style already used by StatsPanel and
-// DashPanel (caption header typography, hairline row rules, mono-num figures)
-// rather than pulling in a table dependency.
-//
-// The row keeps the same contract as the card it replaces: the whole row is
-// the edit target, and any control inside it (an enable switch, a Run now pad)
-// still acts in place.
+// The "list" half of the cards/list toggle on /admin/skills, /admin/shows and
+// /admin/personas. Hand-rolled in the house table style (StatsPanel, DashPanel)
+// rather than pulling in a table dependency. The whole row is the edit target,
+// and any control inside it still acts in place.
 
 import type { ReactNode } from 'react';
 import { useRef } from 'react';
@@ -20,19 +12,16 @@ import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 
 export interface RosterColumn<R> {
   key: string;
-  // Header cell content. Empty for the spine and face columns, which are
-  // decoration rather than data.
+  // Empty for the spine and face columns, which are decoration rather than data.
   label: ReactNode;
   align?: 'left' | 'right' | 'center';
-  // Per-cell classes — responsive column hiding (`hidden md:table-cell`) and
-  // width hints live here.
+  // Per-cell classes: responsive column hiding and width hints.
   className?: string;
   headClassName?: string;
   // When set, the header renders as a sort button calling `onSort(sortMode)`.
   sortMode?: string;
-  // aria-sort for the active header. Sort modes here are named presets
-  // ("enabled first", "cooldown"), not asc/desc toggles, so 'other' is the
-  // honest default; a genuine A–Z column passes 'ascending'.
+  // Sort modes are named presets ("enabled first"), not asc/desc toggles, so
+  // 'other' is the honest default; a genuine A–Z column passes 'ascending'.
   sortAria?: 'ascending' | 'other';
   render: (row: R) => ReactNode;
 }
@@ -43,11 +32,9 @@ export interface RosterTableProps<R> {
   rowKey: (row: R) => string;
   // aria-label for the row's button role, e.g. "Edit Weather".
   rowLabel: (row: R) => string;
-  // CSS colour for the row's left spine — the same status signal the card's
-  // spine carries. Omit for no spine.
+  // CSS colour for the row's left spine; omit for no spine.
   rowSpine?: (row: R) => string;
   onRowClick: (row: R) => void;
-  // Active sort mode, and the setter the sortable headers call.
   sort?: string;
   onSort?: (mode: string) => void;
   // Visually-hidden <caption> naming the table for screen readers.
@@ -62,11 +49,10 @@ interface RosterRowProps<R> {
   onClick: () => void;
 }
 
-// One row. Its own component so it can hold the ref the spine colour needs —
-// the `style` prop is lint-forbidden (issue #50), so dynamic colours go
-// through useDynamicStyle. A left border on the first cell spans the full row
-// height natively, which is why the spine is a border rather than a stretched
-// span.
+// Its own component so it can hold the ref the spine colour needs: the `style`
+// prop is lint-forbidden (issue #50), so dynamic colours go through
+// useDynamicStyle. The spine is a first-cell left border because that spans the
+// full row height natively.
 function RosterRow<R>({ row, cols, label, spine, onClick }: RosterRowProps<R>) {
   const spineRef = useRef<HTMLTableCellElement>(null);
   useDynamicStyle(spineRef, { borderLeftColor: spine });
@@ -78,8 +64,8 @@ function RosterRow<R>({ row, cols, label, spine, onClick }: RosterRowProps<R>) {
       aria-label={label}
       onClick={onClick}
       onKeyDown={(e) => {
-        // Same guard as the slate cards: a keyboard press on an inner control
-        // must not bubble up and also open the editor.
+        // A keyboard press on an inner control must not bubble up and also open
+        // the editor.
         if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); }
       }}
@@ -111,8 +97,8 @@ export function RosterTable<R>({
   cols, rows, rowKey, rowLabel, rowSpine, onRowClick, sort, onSort, caption,
 }: RosterTableProps<R>) {
   return (
-    // The wrapper scrolls horizontally as the floor. At the documented
-    // breakpoints the responsive column hiding should mean it never has to.
+    // Horizontal scroll is the floor; responsive column hiding should mean the
+    // documented breakpoints never reach it.
     <div className="card overflow-x-auto">
       <table className="w-full border-collapse">
         <caption className="sr-only">{caption}</caption>
@@ -172,4 +158,3 @@ export function RosterTable<R>({
   );
 }
 
-export default RosterTable;

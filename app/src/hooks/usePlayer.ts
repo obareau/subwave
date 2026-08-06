@@ -49,6 +49,20 @@ const WATCHDOG_MS = 6000;
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 60_000;
 
+// Buffering-churn guard. On a throttled network (stream stalls right after
+// each connect burst), the native player retries the SAME URL internally
+// every ~9s forever: each retry gets a fresh Icecast burst, so from here it
+// looks like quick Buffering→Playing flaps — each too short for the 6s
+// watchdog, and never a PlaybackError for the backoff to catch. Meanwhile
+// every abandoned connection lingers at the origin as a phantom listener
+// (2026-07-31: one device held ~35 Icecast slots this way). ExoPlayer can't
+// be configured out of this from JS, so we count entries into Buffering:
+// past CHURN_LIMIT inside CHURN_WINDOW_MS, force a full reload — a fresh
+// cache-busted URL that also releases the wedged native source. Tune-in and
+// a one-off mid-song stall stay well under the limit.
+const CHURN_WINDOW_MS = 60_000;
+const CHURN_LIMIT = 4;
+
 export function usePlayer(
   api: StationApi | null,
   initialVolume = 1,
@@ -71,6 +85,14 @@ export function usePlayer(
   // Consecutive failed reconnects since the last successful 'playing' — drives
   // the exponential backoff below.
   const retryCount = useRef(0);
+  // Timestamps of recent entries into Buffering — the churn guard's window.
+  // Deliberately NOT reset on 'playing': brief recoveries between flaps are
+  // exactly what the guard exists to see through.
+  const bufferFlapsRef = useRef<number[]>([]);
+  // Last raw PlaybackState, so the guard counts only Playing→Buffering stalls
+  // (a ref, not `status` from the closure — two quick events can land between
+  // renders and read a stale value).
+  const lastPlaybackStateRef = useRef<State | null>(null);
   useEffect(() => { tunedInRef.current = tunedIn; }, [tunedIn]);
   useEffect(() => { apiRef.current = api; }, [api]);
   useEffect(() => { formatRef.current = streamFormat; }, [streamFormat]);
@@ -173,6 +195,7 @@ export function usePlayer(
         // before the re-render) can't re-arm the watchdog.
         clearWatchdog();
         retryCount.current = 0;
+        bufferFlapsRef.current = [];
         tunedInRef.current = false;
         setTunedIn(false);
         setStatus('idle');
@@ -187,6 +210,8 @@ export function usePlayer(
       }
       // PlaybackState
       const state = event.state;
+      const prevState = lastPlaybackStateRef.current;
+      lastPlaybackStateRef.current = state;
       if (state === State.Playing) {
         clearWatchdog();
         retryCount.current = 0;
@@ -201,6 +226,21 @@ export function usePlayer(
         }
       } else if (state === State.Buffering || state === State.Loading) {
         setStatus((s) => (s === 'playing' ? 'connecting' : s));
+        // Churn guard (see CHURN_* above). Only stalls out of Playing count —
+        // tune-in and watchdog reloads enter Loading without a preceding
+        // Playing, so they never feed the window.
+        if (prevState === State.Playing && tunedInRef.current) {
+          const now = Date.now();
+          const flaps = bufferFlapsRef.current.filter((t) => now - t < CHURN_WINDOW_MS);
+          flaps.push(now);
+          bufferFlapsRef.current = flaps;
+          if (flaps.length >= CHURN_LIMIT) {
+            bufferFlapsRef.current = [];
+            plog(`churn guard: ${CHURN_LIMIT} stalls inside ${CHURN_WINDOW_MS / 1000}s — forcing reload`);
+            reconnect();
+            return;
+          }
+        }
         armWatchdog(WATCHDOG_MS);
       } else if (state === State.Error) {
         if (tunedInRef.current) armWatchdog(nextRetryDelay());
@@ -230,6 +270,7 @@ export function usePlayer(
       // "recovers" the stream and the phantom listener is back.
       clearWatchdog();
       retryCount.current = 0;
+      bufferFlapsRef.current = [];
       tunedInRef.current = false;
       setTunedIn(false);
       setStatus('idle');
@@ -259,6 +300,7 @@ export function usePlayer(
 
   const stop = useCallback(() => {
     clearWatchdog();
+    bufferFlapsRef.current = [];
     setTunedIn(false);
     setStatus('idle');
     teardown().catch(() => {});
@@ -299,8 +341,9 @@ export function usePlayer(
     }
     const a = apiRef.current;
     if (!a) return;
-    // A fresh tune-in restarts the backoff ladder.
+    // A fresh tune-in restarts the backoff ladder and the churn window.
     retryCount.current = 0;
+    bufferFlapsRef.current = [];
     setTunedIn(true);
     setStatus('connecting');
     loadAndPlay({ url: a.streamUrl(formatRef.current), headers: a.streamHeaders() })

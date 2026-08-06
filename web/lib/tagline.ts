@@ -1,8 +1,7 @@
 import type { StationContext } from './types';
 
-// Compact, mood-flavored context tagline: festival > show + vibe + weather.
-// Examples: "late · late hours · 6° clear" · "diwali · festival · 18° clear".
-// Shown in the header on desktop and in the footer on mobile.
+// Compact context tagline, festival > show + vibe + weather. e.g.
+// "late · late hours · 6° clear".
 export function buildTagline(context: StationContext | null | undefined): string | null {
   if (!context) return null;
   const parts: string[] = [];

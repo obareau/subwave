@@ -1,16 +1,13 @@
 'use client';
 
-// Shared "describe it → draft it" block for the create/edit forms. The operator
-// types what they want, hits Generate, and the parent merges the returned draft
-// into its form fields for review (nothing is saved here). Backed by the
-// admin-gated /generate/* endpoints, which ride the station's configured LLM.
+// Hands the returned draft to the parent for review — nothing is saved here.
 import { useId, useState } from 'react';
 import { Textarea } from '../ui/textarea';
 import { Btn } from './ui';
 import { errorMessage } from '../../lib/notify';
 
 interface AiFillProps<T> {
-  // e.g. '/generate/persona' — the admin-gated generator endpoint.
+  // e.g. '/generate/persona'
   endpoint: string;
   // The key the entity is returned under (e.g. 'persona' for { ok, persona }).
   resultKey: string;
@@ -77,8 +74,7 @@ export function AiFill<T = unknown>({
           if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') generate();
         }}
       />
-      {/* Wraps so a long generator error drops under the button on a phone
-          rather than squeezing it or running past the panel edge. */}
+      {/* Wraps so a long error drops under the button on a phone. */}
       <div className="flex flex-wrap items-center gap-3">
         <Btn tone="accent" sm onClick={generate} disabled={busy || disabled || !desc.trim()}>
           {busy ? 'Generating…' : 'Generate'}

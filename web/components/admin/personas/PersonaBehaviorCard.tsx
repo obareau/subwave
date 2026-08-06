@@ -1,10 +1,7 @@
 'use client';
-// How this persona talks: talk frequency, script length, DJ mode, and the tone
-// dials. Two columns from lg up (settings on the left, dials on the right) so
-// the knobs stay grouped instead of spreading across the full editor width.
-// Frequency and script length are stepped faders (discrete named stops with
-// real scheduling consequences), deliberately distinct from the continuous
-// rotary tone knobs.
+// How this persona talks: talk frequency, script length, DJ mode and the tone
+// dials. Frequency and script length are stepped faders (discrete named stops),
+// deliberately distinct from the continuous rotary tone knobs.
 import type { Persona } from './types';
 import { FREQUENCIES, SCRIPT_LENGTHS, TONE_DIALS, toneBandIndex } from './constants';
 import { Card, Toggle } from '../ui';
@@ -20,7 +17,6 @@ export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProp
   return (
     <Card flat title="Behaviour" sub="how this persona talks">
       <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8">
-        {/* LEFT — frequency, script length, DJ mode */}
         <div>
           <div className="rule-label">talk frequency</div>
           <SteppedFader
@@ -56,7 +52,6 @@ export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProp
           </div>
         </div>
 
-        {/* RIGHT — tone dials */}
         <div className="mt-4 lg:mt-0">
           <div className="rule-label">tone dials</div>
           <div className="grid grid-cols-3 gap-2 sm:gap-4">

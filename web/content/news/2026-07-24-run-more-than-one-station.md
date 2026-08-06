@@ -25,4 +25,4 @@ To put a different station on air, hit **Make live** (on its card, or straight f
 
 ## Why it helps
 
-The obvious use is a second identity, a weekend jazz channel or a festival pop-up, without renting a second server. The less obvious one is a scratch station: duplicate your real one, point the DJ at a strange prompt, and see what happens. Whatever you break stays inside that station's folder. The station people actually listen to never notices.
+The obvious use is a second identity, a weekend jazz channel or a festival pop-up, without renting a second server. Each one can take its own place [on the map](/news/put-your-station-on-the-map) too. The less obvious one is a scratch station: duplicate your real one, point the DJ at a strange prompt, and see what happens. Whatever you break stays inside that station's folder. The station people actually listen to never notices.

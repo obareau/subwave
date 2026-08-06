@@ -1,11 +1,7 @@
 'use client';
 
-/* Shared admin section-tab row — the inverted-ink editorial tabs first used on
-   the Imaging page, now the single implementation across Imaging / Moods /
-   Connect (unified so the three pages can't drift). Renders as the foot of a
-   hero card: edge-to-edge, a top hairline, the active cell filled in ink with
-   an accent top-rule. Wraps to two columns on phones for 4+ tabs so the labels
-   never overlap; three-or-fewer tabs keep a single row and just shrink. */
+/* The one section-tab row shared by Imaging / Moods / Connect, so the three
+   pages can't drift. Renders as the foot of a hero card. */
 
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/cn';
@@ -17,8 +13,8 @@ export interface SectionTab {
   icon: LucideIcon;
 }
 
-// Mobile columns → desktop columns. 4+ tabs drop to a 2-col grid on phones
-// (a single row of long uppercase labels overflows a ~390px screen).
+// 4+ tabs drop to a 2-col grid on phones: one row of long uppercase labels
+// overflows a ~390px screen.
 const COLS: Record<number, string> = {
   1: 'grid-cols-1',
   2: 'grid-cols-2',
@@ -40,9 +36,8 @@ export function SectionTabs({
   onChange: (id: string) => void;
   label: string;
 }) {
-  // 4+ tabs wrap to 2 columns on mobile, so the dividers must follow the wrap
-  // (left rule on the right column, top rule on the second row). Fewer tabs
-  // stay a single row and just need a left rule between cells.
+  // When the grid wraps, dividers must follow it: left rule on the right
+  // column, top rule on the second row.
   const wraps = tabs.length >= 4;
   return (
     <nav

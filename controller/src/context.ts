@@ -6,7 +6,8 @@ import { fetchWithTimeout } from './util/fetch-timeout.js';
 import { resolveActiveShow, resolveOnAirLocation, get as getSettings, moodScheduleFor, weatherMoodFor } from './settings.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
-import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase } from './time.js';
+import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrase } from './time.js';
+// fs/path : état persistant de Shortwave (divergence locale, cf. CLAUDE.md)
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -292,6 +293,10 @@ export function getClockContext(date = new Date()) {
     // in the morning") — computed here so the model never converts 24-hour
     // digits itself (it says "one in the morning" at 00:03).
     spokenHour: spokenHourPhrase(h),
+    // Minute-aware variant for the hourly time check — "just gone six" only
+    // near :00, "half past six" mid-hour (#1282: a manual trigger at 18:31
+    // still announced "just gone six in the evening").
+    spokenTime: spokenTimePhrase(h, m),
     isWeekend: dow === 0 || dow === 6,
     isLateNight: h < 5,
     isCommute: (minutesOfDay >= 450 && minutesOfDay < 570) ||  // 07:30-09:30

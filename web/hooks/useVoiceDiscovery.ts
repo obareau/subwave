@@ -1,12 +1,11 @@
-// Pulls the voice list from a cloud TTS provider so the persona + station
-// voice fields can offer a dropdown instead of a free-text box. The TTS twin
-// of useModelDiscovery — same debounce / stale-response / abort contract.
+// Pulls the voice list from a cloud TTS provider so the voice fields can offer a
+// dropdown. The TTS twin of useModelDiscovery — same debounce / stale-response /
+// abort contract.
 //
 // Only `openai-compatible` and `elevenlabs` are discoverable (see
 // controller/src/llm/internal/speech/voice-catalog.ts); `openai` has a fixed
-// published voice set that lives in lib/cloudVoices.ts. Discovery failing is a
-// normal outcome, not an error state to shout about — the caller falls back to
-// the free-text input it used before.
+// published voice set in lib/cloudVoices.ts. Discovery failing is a normal
+// outcome — the caller falls back to a free-text input.
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface DiscoveredVoice {
@@ -83,11 +82,9 @@ export function useVoiceDiscovery({
   // Auto-discover on input change, debounced. The AbortController cancels an
   // in-flight request when the inputs change again before it resolves.
   useEffect(() => {
-    // The list on screen belongs to the PREVIOUS provider/server. Drop it now
-    // rather than when the new response lands: discovery can take seconds (or
-    // time out), and until then the old provider's voices would sit there
-    // labelled as this one's — an ElevenLabs field offering a local server's
-    // speaker ids, which would save a voice that provider can't synthesize.
+    // Drop the previous provider's list now rather than when the new response
+    // lands: discovery can take seconds, and until then its voices would sit
+    // there labelled as this provider's, saving a voice it can't synthesize.
     setVoices([]);
     setError(null);
     if (!enabled || !provider) {

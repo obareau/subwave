@@ -1,7 +1,5 @@
-/* Drift skin — the washes. Each wash is a radial gradient whose color rides
-   a registered custom property, so a track change crossfades the whole room
-   over 20 seconds (the type waits; the color arrives first). Browsers
-   without @property support just switch instantly — acceptable. */
+/* Wash colours ride a registered custom property so a track change crossfades
+   over 20s. Browsers without @property support switch instantly. */
 
 @property --sw-drift-c {
   syntax: '<color>';
@@ -18,16 +16,26 @@
   will-change: transform;
 }
 
-/* Lite mode (html.lite, globals.css) drops the looping drift keyframes via
-   its global animation kill, but transitions are exempted there ("only fire
-   on interaction") — this one is a 20-second full-viewport gradient repaint
-   at every track change, exactly the continuous cost lite exists to avoid.
-   Colors switch instantly instead. */
+/* Dark themes need a static saturation/brightness lift (the 20s --sw-drift-c
+   transition is untouched). Both routes to dark need it: the explicit pin, and
+   a dark OS with no pin at all (no [data-theme], so the attribute selector
+   alone would miss that listener). */
+:global([data-theme='dark']) .wash {
+  filter: saturate(1.35) brightness(1.2);
+}
+@media (prefers-color-scheme: dark) {
+  :global(:root:not([data-theme='light'])) .wash {
+    filter: saturate(1.35) brightness(1.2);
+  }
+}
+
+/* html.lite (globals.css) kills looping keyframes but exempts transitions;
+   this one is a 20s full-viewport gradient repaint per track change, exactly
+   the cost lite exists to avoid. Colors switch instantly instead. */
 :global(html.lite) .wash {
   transition: none;
 }
 
-/* A few pixels a minute — the room breathes, nothing dances. */
 @keyframes drift-a {
   to { transform: translate(34px, 22px) scale(1.06); }
 }

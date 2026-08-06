@@ -18,13 +18,11 @@ function stationClockOptions(locale: StationLocale): Intl.DateTimeFormatOptions 
   return locale === 'en-US' ? { hour12: true } : { hour12: false };
 }
 
-// Wall-clock time-of-day for an on-air event, rendered in the station's zone.
-// The DJ speaks the time in the configured station timezone (controller's
-// time.ts), so log/booth timestamps must use that same zone — otherwise an
-// operator or listener viewing from a different timezone sees stamps that
-// disagree with what the DJ just said (issue #418). `tz` is the IANA zone from
-// /now-playing | /state | /debug; falls back to the browser's local zone when
-// it's absent. Returns '' for a missing timestamp so callers can `|| '—'`.
+// Rendered in the STATION's zone. The DJ speaks the time in the configured
+// station timezone, so log/booth stamps must match or a viewer in another
+// timezone sees stamps that disagree with what the DJ just said (issue #418).
+// `tz` is the IANA zone from /now-playing | /state | /debug, falling back to
+// the browser's local zone. Returns '' for a missing timestamp.
 export function fmtClock(
   t: string | number | null | undefined,
   tz?: string | null,
@@ -62,12 +60,10 @@ export function fmtClockMinute(
 
 const DOW: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
-// Day-of-week (0=Sun, matching Date.getDay()) and hour (0-23) for `date` as it
-// reads on the wall clock in `tz`. Mirrors the controller's zonedParts so the
-// schedule grid's "now" marker lands on the same cell the controller resolves
-// the active show from — without this the highlight follows the operator's own
-// browser zone, not the station's (issue #418). Falls back to the local zone
-// when `tz` is absent.
+// Day-of-week (0=Sun) and hour (0-23) for `date` on the wall clock in `tz`.
+// Mirrors the controller's zonedParts so the schedule grid's "now" marker lands
+// on the same cell the controller resolves the active show from; otherwise the
+// highlight follows the operator's browser zone, not the station's (#418).
 export function zonedDayHour(date: Date, tz?: string | null): { dow: number; hour: number } {
   if (!tz) return { dow: date.getDay(), hour: date.getHours() };
   try {
@@ -79,7 +75,7 @@ export function zonedDayHour(date: Date, tz?: string | null): { dow: number; hou
     }).formatToParts(date);
     const out: Record<string, string> = {};
     for (const p of parts) out[p.type] = p.value;
-    // en-GB with hour12:false can render midnight as "24" — normalise.
+    // en-GB with hour12:false can render midnight as "24".
     return { dow: DOW[out.weekday ?? ''] ?? date.getDay(), hour: Number(out.hour) % 24 };
   } catch {
     return { dow: date.getDay(), hour: date.getHours() };

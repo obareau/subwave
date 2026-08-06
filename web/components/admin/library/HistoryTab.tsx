@@ -1,9 +1,5 @@
 'use client';
 
-// The play-history tab - what actually went to air, newest first.
-//
-// Part of the library/ split - see ../LibraryPanel.tsx.
-
 import { Fragment } from 'react';
 import { RefreshCw, ListPlus } from 'lucide-react';
 import { Card, Btn } from '../ui';
@@ -122,10 +118,7 @@ export function HistoryTab({ rows, total, page, setPage, loading, queuing, onQue
   );
 }
 
-// ---------------------------------------------------------------------------
-// ManualTagEditor — inline mood/energy editor under a track row. Operator-set
-// tags (source='manual') feed songsByMood() → the picker exactly like the
-// LLM tagger's, and "apply to whole album" tags every track on the album so a
-// folder/album of content can be targeted at once (discussion #336).
-// ---------------------------------------------------------------------------
+// ManualTagEditor lives in ManualTagEditor.tsx: operator tags (source='manual') feed
+// songsByMood() like the LLM tagger's, and "apply to whole album" targets a whole
+// album at once (discussion #336).
 

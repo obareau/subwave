@@ -1,41 +1,107 @@
 #!/usr/bin/env bash
-# SUB/WAVE broadcast supervisor.
+# SUB/WAVE broadcast supervisor: resolves the icecast secrets, renders
+# icecast.xml, launches icecast2 + liquidsoap, and exits as soon as either dies
+# so the container's restart policy bounces the pair together.
 #
-# Bash (not /bin/sh) because we need `wait -n` to react to whichever child
-# exits first. The savonet/liquidsoap base image's /bin/sh is dash, which
-# lacks `wait -n`; bash is in the same image (debian) so this is free.
-#
-# Launches icecast2 and liquidsoap in one container and exits as soon as
-# either dies, so the container's restart policy bounces the pair together.
-# This replaces the earlier two-container split (subwave-icecast +
-# subwave-liquidsoap) and the icecast-secrets handshake that bridged them.
-#
-# Boot sequence:
-#   1. Pre-create the shared /var/sub-wave subdirs with mode 777 so the
-#      controller (running as a different uid) can write into them. Same role
-#      the old subwave-icecast entrypoint played for the wider stack — it just
-#      happens to also be where this container's own state lives now.
-#   2. Resolve the three ICECAST_*_PASSWORD values. Precedence (unchanged):
-#        env override > persisted state/icecast-secrets.env > freshly generated.
-#      The resolved values are still written back to state/icecast-secrets.env
-#      for operator visibility and to keep the documented "delete the file +
-#      restart to rotate" path working.
-#   3. Render icecast.xml from the baked-in template.
-#   4. Launch icecast2 (as icecast2 user) in the background.
-#   5. Wait for icecast to accept HTTP connections (so liquidsoap doesn't
-#      immediately fail its source connect).
-#   6. Launch liquidsoap (as liquidsoap user) in the background with the
-#      resolved ICECAST_SOURCE_PASSWORD + ICECAST_HOST=localhost in its env.
-#   7. `wait -n` for whichever exits first; tear the other down; exit.
+# Bash (not /bin/sh) because we need `wait -n`; the base image's /bin/sh is
+# dash, which lacks it.
 
 set -eu
 
+# ---- Shared state bootstrap -------------------------------------------------
+# Creates the dirs the controller, analyzer and liquidsoap share and opens them
+# to mode 777: those containers write here as OTHER uids, so an operator would
+# otherwise have to chown every bind-mount source before first boot.
+#
+# NOTHING in here is fatal (#1300 bug 10). Under `set -eu` the old bulk
+# `mkdir -p a b c` / `chmod 777 a b c` made every state path load-bearing: one
+# on a mount that refuses the change — a read-only bind, an NFS export without
+# the right perms, the exFAT/NTFS disk people move the stem cache to — aborted
+# this script BEFORE icecast started, and compose surfaced that as
+# `dependency failed to start: container sub-wave-broadcast is unhealthy`,
+# naming neither the path nor the chmod. A station that refuses to boot over a
+# permission convenience is strictly worse than one running on a degraded
+# mount: icecast still serves and the dead-air guard still airs the emergency
+# loop, but an exited container airs nothing.
+#
+# Kept byte-for-byte in step with docker/aio/supervisor.sh's copy (same
+# function, same list, same messages) — scripts/state-bootstrap.test.ts drives
+# both through one table.
+state_warn() { echo "broadcast: WARNING $*" >&2; }
+
+# True when `other` can write the dir. This — not chmod's exit status — is
+# what the warning keys on: a mount that is already world-writable and simply
+# refuses chmod is a WORKING configuration, and a line printed on every boot of
+# a healthy station is a line operators learn to skip past.
+state_writable_by_others() {
+    case "$(stat -c %a "$1" 2>/dev/null || echo 0)" in
+        *[2367]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+state_prepare_dir() {
+    local p=$1
+    mkdir -p "$p" 2>/dev/null || true
+    if [ ! -d "$p" ]; then
+        state_warn "state dir $p could not be created — a read-only or unwritable mount; the station boots, but anything writing there will fail"
+        return 0
+    fi
+    chmod 777 "$p" 2>/dev/null || true
+    if [ ! -w "$p" ] || ! state_writable_by_others "$p"; then
+        state_warn "state dir $p is mode $(stat -c %a "$p" 2>/dev/null || echo '?') and chmod could not change it — the controller and analyzer containers write there as other uids; chown/chmod it on the host"
+    fi
+    return 0
+}
+
+state_prepare_file() {
+    local p=$1
+    local mode=${2:-}
+    touch "$p" 2>/dev/null || true
+    if [ ! -f "$p" ]; then
+        state_warn "state file $p could not be created — a read-only or unwritable mount"
+        return 0
+    fi
+    [ -n "$mode" ] && chmod "$mode" "$p" 2>/dev/null || true
+    return 0
+}
+
+bootstrap_state_dirs() {
+    local root=$1
+    local dir=$2
+    local sub
+    state_prepare_dir "$root"
+    state_prepare_dir "$dir"
+    # stems + transitions belong to the analyzer (uid 10001) — the stem cache
+    # and the rendered transition clips. They are also the only two dirs worth
+    # relocating to a bigger disk, and the ONLY way to do that is a bind mount
+    # at <state>/stems (music/stem-cache.ts stemsRoot() is <stateDir>/stems,
+    # with no setting behind it). A fresh bind mount lands root-owned 755, so
+    # without the same 777 treatment the rest of the state dir gets, the
+    # analyzer cannot write the cache it was just pointed at.
+    for sub in voice voices archive jingles logs sessions sfx stems transitions; do
+        state_prepare_dir "$dir/$sub"
+    done
+    # Liquidsoap's reload_mode="watch" playlists need the files to exist.
+    state_prepare_file "$dir/auto.m3u" 666
+    state_prepare_file "$dir/jingles.m3u" 666
+    # Keep a co-located Navidrome from scanning the hourly archive mixdowns in
+    # as junk "HH-00" tracks (issue #273). Harmless when paths don't overlap.
+    state_prepare_file "$dir/archive/.ndignore"
+    return 0
+}
+
+# Sourcing with SUBWAVE_BROADCAST_LIB=1 defines the helpers above WITHOUT
+# booting a station, so scripts/state-bootstrap.test.ts can drive them.
+if [ "${SUBWAVE_BROADCAST_LIB:-}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
+fi
+
 # ---- Multi-station pointer resolution ---------------------------------------
-# state/stations/active.json (controller-written, {"activeId":"<slug>"}) picks
-# which station dir this boot serves. Everything below reads from $STATE_DIR;
-# only install-level files (icecast secrets) stay at $STATE_ROOT. No jq in
-# this image — the sed matches the controller's canonical output and the slug
-# charset [a-z0-9-], so a hand-mangled file falls back to the root.
+# state/stations/active.json ({"activeId":"<slug>"}) picks the station dir this
+# boot serves; install-level files (icecast secrets) stay at $STATE_ROOT. No jq
+# in this image — the sed matches the controller's canonical output and the
+# slug charset [a-z0-9-]; a hand-mangled file falls back to the root.
 STATE_ROOT=/var/sub-wave
 STATE_DIR="$STATE_ROOT"
 ACTIVE_FILE="$STATE_ROOT/stations/active.json"
@@ -55,47 +121,16 @@ TEMPLATE=/etc/icecast2/icecast.xml.template
 RENDERED=/etc/icecast2/icecast.xml
 
 # ---- Bootstrap shared state dirs --------------------------------------------
-# The controller container (different uid) also writes here. Mode 777 keeps
-# this hands-off — operators don't have to chown bind-mount sources before
-# the first boot succeeds.
+bootstrap_state_dirs "$STATE_ROOT" "$STATE_DIR"
 
-mkdir -p "$STATE_ROOT" \
-         "$STATE_DIR" \
-         "$STATE_DIR/voice" \
-         "$STATE_DIR/voices" \
-         "$STATE_DIR/archive" \
-         "$STATE_DIR/jingles" \
-         "$STATE_DIR/logs" \
-         "$STATE_DIR/sessions" \
-         "$STATE_DIR/sfx"
-chmod 777 "$STATE_ROOT" \
-          "$STATE_DIR" \
-          "$STATE_DIR/voice" \
-          "$STATE_DIR/voices" \
-          "$STATE_DIR/archive" \
-          "$STATE_DIR/jingles" \
-          "$STATE_DIR/logs" \
-          "$STATE_DIR/sessions" \
-          "$STATE_DIR/sfx"
-# Bootstrap empty m3u files Liquidsoap's reload_mode="watch" needs to see.
-touch "$STATE_DIR/auto.m3u" "$STATE_DIR/jingles.m3u"
-chmod 666 "$STATE_DIR/auto.m3u" "$STATE_DIR/jingles.m3u"
-# Tell a co-located Navidrome to skip the archive dir — its hourly mixdowns are
-# the station's own recordings, not library tracks, and otherwise get scanned in
-# as junk "HH-00" entries that confuse the DJ (issue #273). Harmless when
-# Navidrome lives elsewhere / doesn't overlap this path.
-touch "$STATE_DIR/archive/.ndignore"
-
-# Liquidsoap writes radio.log to /var/log/liquidsoap as uid 10000. Compose
-# usually bind-mounts ${STATE_DIR}/logs over this path; that bind mount lands
-# owned by root on first boot, so chown it to the liquidsoap user.
+# The compose logs bind mount lands owned by root on first boot; liquidsoap
+# (uid 10000) writes radio.log there.
 mkdir -p /var/log/liquidsoap
 chown -R liquidsoap:liquidsoap /var/log/liquidsoap 2>/dev/null || true
 
-# Rotate radio.log on boot once it passes 50MB. Liquidsoap has no size-based
-# rotation of its own and appends forever (200MB+ after a couple of months);
-# boot is the one safe moment to move it since liquidsoap isn't holding the
-# fd yet. One .old generation caps disk at ~2x the threshold.
+# Rotate radio.log on boot once it passes 50MB — liquidsoap has no size-based
+# rotation and appends forever; boot is the one safe moment (fd not yet held).
+# One .old generation caps disk at ~2x the threshold.
 RADIO_LOG=/var/log/liquidsoap/radio.log
 if [ -f "$RADIO_LOG" ] && [ "$(stat -c %s "$RADIO_LOG" 2>/dev/null || echo 0)" -gt 52428800 ]; then
     mv -f "$RADIO_LOG" "$RADIO_LOG.old"
@@ -103,6 +138,7 @@ if [ -f "$RADIO_LOG" ] && [ "$(stat -c %s "$RADIO_LOG" 2>/dev/null || echo 0)" -
 fi
 
 # ---- Resolve passwords ------------------------------------------------------
+# Precedence: env override > persisted secrets file > freshly generated.
 # Capture env values FIRST so sourcing the secrets file can't clobber them.
 
 ENV_SRC="${ICECAST_SOURCE_PASSWORD:-}"
@@ -114,42 +150,36 @@ if [ -f "$SECRETS" ]; then
     . "$SECRETS"
 fi
 
-# Env values win when present (operator override via root .env).
 [ -n "$ENV_SRC" ] && ICECAST_SOURCE_PASSWORD="$ENV_SRC"
 [ -n "$ENV_ADM" ] && ICECAST_ADMIN_PASSWORD="$ENV_ADM"
 [ -n "$ENV_REL" ] && ICECAST_RELAY_PASSWORD="$ENV_REL"
 
-# Anything still empty gets a fresh random value.
 [ -z "${ICECAST_SOURCE_PASSWORD:-}" ] && ICECAST_SOURCE_PASSWORD="$(openssl rand -hex 16)"
 [ -z "${ICECAST_ADMIN_PASSWORD:-}"  ] && ICECAST_ADMIN_PASSWORD="$(openssl rand -hex 16)"
 [ -z "${ICECAST_RELAY_PASSWORD:-}"  ] && ICECAST_RELAY_PASSWORD="$(openssl rand -hex 16)"
 
+# Written back for operator visibility + the documented "delete + restart to
+# rotate" path.
 cat > "$SECRETS" <<EOF
 ICECAST_SOURCE_PASSWORD=$ICECAST_SOURCE_PASSWORD
 ICECAST_ADMIN_PASSWORD=$ICECAST_ADMIN_PASSWORD
 ICECAST_RELAY_PASSWORD=$ICECAST_RELAY_PASSWORD
 EOF
-# 0600: the file holds the Icecast passwords. Only root reads it — this
-# entrypoint sources it (as root, before dropping to the icecast2/liquidsoap
-# users via sudo -E), and the controller container (also root) reads it off the
-# shared /var/sub-wave mount in broadcast/listeners.ts. No non-root reader
-# needs it, so keep it owner-only.
+# 0600 — only root reads it (this entrypoint, and the controller container off
+# the shared mount in broadcast/listeners.ts).
 chmod 600 "$SECRETS"
 
 export ICECAST_SOURCE_PASSWORD ICECAST_ADMIN_PASSWORD ICECAST_RELAY_PASSWORD
-# Liquidsoap connects to icecast over loopback inside this container.
-# radio.liq reads ICECAST_HOST (default "icecast"); override here so the
-# stock script keeps working without a code edit.
+# Liquidsoap connects over loopback inside this container; radio.liq reads
+# ICECAST_HOST (default "icecast").
 export ICECAST_HOST=localhost
 
 # ---- Render icecast.xml -----------------------------------------------------
-# Plain sed is enough for four placeholders; the secrets are hex and the
-# listener cap numeric, so there's no escaping risk. Using `|` as the sed
-# delimiter keeps slashes safe.
+# Plain sed with `|` delimiters — the secrets are hex and the caps numeric, so
+# there's no escaping risk.
 
-# Concurrent-listener ceiling (<limits><clients>). Empty/unset → the stock 100.
-# A non-numeric value would render invalid XML and fail icecast at boot, so
-# fall back to the default with a warning instead of taking the stream down.
+# Concurrent-listener ceiling. A non-numeric value would render invalid XML and
+# fail icecast at boot, so fall back to 100 with a warning instead.
 ICECAST_MAX_CLIENTS="${ICECAST_MAX_CLIENTS:-100}"
 case "$ICECAST_MAX_CLIENTS" in
     *[!0-9]*|'')
@@ -158,19 +188,11 @@ case "$ICECAST_MAX_CLIENTS" in
         ;;
 esac
 
-# Listener buffer depth (<burst-size>) — audio bursted to a client on connect
-# so a coverage gap drains the buffer instead of stalling (issue #993).
-#
-# Sized in SECONDS and converted to bytes here, because burst-size is a byte
-# count and a fixed one means wildly different depths per bitrate: the old
-# hardcoded 512 KB was ~22s at 192k but ~66s at 64k, so the stations least able
-# to afford lag got the most of it (issue #1114). Deriving from the live
-# bitrate keeps the depth an operator picks the depth they actually get.
-#
-# Sources, in precedence order: env override > settings (written by the
-# controller on save) > default. Read from the shared state dir rather than
-# passed in, so a settings change applies on the next broadcast bounce with no
-# compose edit.
+# Listener buffer depth (<burst-size>, #993/#1114). Sized in SECONDS and
+# converted per bitrate here, because burst-size is a byte count — a fixed one
+# means wildly different depths per mount (512 KB was ~22s at 192k but ~66s at
+# 64k). Sources: env override > settings files (written by the controller) >
+# default; read from state so a settings change applies on the next bounce.
 read_state_num() {
     # $1 = filename, $2 = fallback. Non-numeric or missing → fallback.
     _v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)
@@ -186,10 +208,8 @@ case "$STREAM_BITRATE" in *[!0-9]*|'') STREAM_BITRATE=192 ;; esac
 case "$BUFFER_SECONDS" in *[!0-9]*|'') BUFFER_SECONDS=22 ;; esac
 [ "$BUFFER_SECONDS" -gt 60 ] && BUFFER_SECONDS=60
 
-# Per-mount bitrates for the optional encoders, same sources as above. FLAC is
-# VBR with no bitrate setting — 900 kbps is a typical average for 44.1/16
-# stereo at default compression, close enough for a buffer depth (the players
-# align their displays to MEASURED lag, not this figure).
+# FLAC is VBR with no bitrate setting — ~900 kbps is a typical average for
+# 44.1/16 stereo, close enough for a buffer depth.
 OPUS_BITRATE="${ICECAST_OPUS_BITRATE:-$(read_state_num liquidsoap_opus_bitrate.txt 96)}"
 AAC_BITRATE="${ICECAST_AAC_BITRATE:-$(read_state_num liquidsoap_aac_bitrate.txt 192)}"
 case "$OPUS_BITRATE" in *[!0-9]*|'') OPUS_BITRATE=96 ;; esac
@@ -201,24 +221,19 @@ ICECAST_BURST_SIZE=$(( BUFFER_SECONDS * STREAM_BITRATE * 125 ))
 
 # queue-size is the per-client backlog before Icecast drops a lagging listener.
 # It must comfortably exceed burst-size or a client is evicted the moment it
-# falls behind its own primed buffer. 4x the burst (floored at the historical
-# 2 MB) preserves the ~minute of rope issue #993 wanted at the default depth
-# while still scaling with a deeper buffer.
+# falls behind its own primed buffer; 4x (floored at the historical 2 MB)
+# preserves #993's ~minute of rope while scaling with a deeper buffer.
 ICECAST_QUEUE_SIZE=$(( ICECAST_BURST_SIZE * 4 ))
 [ "$ICECAST_QUEUE_SIZE" -lt 2097152 ] && ICECAST_QUEUE_SIZE=2097152
 
 echo "broadcast: listener buffer ${BUFFER_SECONDS}s @ mp3 ${STREAM_BITRATE}kbps" \
      "/ opus ${OPUS_BITRATE}kbps / aac ${AAC_BITRATE}kbps / flac ~${FLAC_BITRATE_EST}kbps" >&2
 
-# Listener auth (#478). The controller writes state/icecast_listener_auth.txt
-# ('true'/'false') from settings.privacy.listenerAuth; only the literal value
-# "true" enables (mirroring the archive_enabled pattern — missing/garbled file
-# means public). When enabled, every stream mount gets an
-# <authentication type="url"> block: icecast POSTs each listener connect to
-# the controller, which admits it with an `icecast-auth-user: 1` header. The
-# password itself lives ONLY in the controller's settings.json — password
-# changes apply live, and this render only matters when the toggle flips
-# (which the admin UI routes through the existing restart-mixer flow).
+# Listener auth (#478): only a literal 'true' in the controller-written flag
+# enables (missing/garbled → public). Each stream mount then gets an
+# <authentication type="url"> block; icecast POSTs listener connects to the
+# controller. The password lives ONLY in settings.json — changes apply live;
+# this render only matters when the toggle flips (which rides restart-mixer).
 LISTENER_AUTH_FLAG=$STATE_DIR/icecast_listener_auth.txt
 LISTENER_AUTH_URL="${LISTENER_AUTH_URL:-http://controller:7701/listener-auth}"
 LISTENER_AUTH=false
@@ -227,14 +242,10 @@ if [ "$(cat "$LISTENER_AUTH_FLAG" 2>/dev/null | tr -d '[:space:]')" = "true" ]; 
     echo "broadcast: listener auth ON — mounts require credentials via $LISTENER_AUTH_URL" >&2
 fi
 
-# One <mount> block per stream mount, ALWAYS rendered (not just under listener
-# auth): burst-size is a BYTE count, so the global <limits> value — sized for
-# the MP3 bitrate — lands wildly wrong on the other mounts (the same 528 KB
-# that means 22s at mp3-192k is ~43s at opus-96k and ~6s of FLAC), and the
-# whole point of sizing in seconds (#1114) is that the operator's chosen depth
-# is the depth every listener gets. queue-size scales with each mount's burst
-# for the same reason it does globally: a client must never be evicted for
-# falling behind its own primed buffer.
+# One <mount> block per stream mount, ALWAYS rendered (not just under auth):
+# burst-size is a byte count, so the global <limits> value — sized for MP3 —
+# lands wildly wrong on the other mounts (22s of mp3-192k is ~43s of opus-96k
+# and ~6s of FLAC). Per-mount queue-size scales for the same reason.
 MOUNTS_XML=/etc/icecast2/stream-mounts.xml
 : > "$MOUNTS_XML"
 emit_mount() {
@@ -262,29 +273,17 @@ emit_mount /stream.opus "$OPUS_BITRATE"
 emit_mount /stream.flac "$FLAC_BITRATE_EST"
 emit_mount /stream.aac  "$AAC_BITRATE"
 
-# Trusted reverse proxies — what makes admin → Listeners show real listener
-# IPs instead of the edge's container address. Icecast's only peer is Caddy,
-# so unless an <x-forwarded-for> element names Caddy's address, every row
-# reads 172.x. icecast-KH matches on an EXACT IP (a CIDR is accepted and then
-# silently never matches), so the address has to be resolved, not described.
+# Trusted reverse proxies — real listener IPs in admin → Listeners instead of
+# the edge's container address. icecast-KH matches an EXACT IP only (a CIDR is
+# accepted and then silently never matches), so the address must be resolved.
+# Precedence: ICECAST_TRUSTED_PROXY_IPS (explicit, wins) > DNS for
+# ICECAST_TRUSTED_PROXY_HOSTS (default 'caddy', the bundled edge).
 #
-# Precedence:
-#   ICECAST_TRUSTED_PROXY_IPS   — explicit addresses (space/comma separated).
-#     The deterministic option: set it when the edge is pinned to a static IP,
-#     lives outside this compose network (byo compose, host-network nginx), or
-#     isn't resolvable by name from here.
-#   ICECAST_TRUSTED_PROXY_HOSTS — names to resolve at render time, default
-#     'caddy' (the bundled edge).
-#
-# The DNS path is deliberately best-effort. On a COLD `compose up` it misses:
-# caddy depends_on this container being healthy, and healthy means icecast is
-# already serving, so the name cannot resolve before this render — measured at
-# ~6s of "unresolved". Every subsequent restart (including the telnet
-# restart-mixer, which bounces this container) lands with caddy up and picks
-# the address up on its own. A miss degrades to today's behaviour — the proxy's
-# IP in the table — never to a wrong listener IP, so nothing downstream has to
-# handle a half-applied state. Operators who want it right from first boot pin
-# the edge and set ICECAST_TRUSTED_PROXY_IPS (see docs/deployment.md).
+# The DNS path is deliberately best-effort: on a COLD `compose up` caddy can't
+# be running yet (it depends_on this container being healthy), so the name
+# doesn't resolve — every later restart picks it up. A miss degrades to the old
+# behaviour (proxy IP shown), never to a wrong IP. Operators who want first-boot
+# accuracy pin the edge and set ICECAST_TRUSTED_PROXY_IPS (docs/deployment.md).
 TRUSTED_XML=/etc/icecast2/trusted-proxies.xml
 : > "$TRUSTED_XML"
 TRUSTED_LIST=""
@@ -292,17 +291,17 @@ if [ -n "${ICECAST_TRUSTED_PROXY_IPS:-}" ]; then
     TRUSTED_LIST=$(echo "$ICECAST_TRUSTED_PROXY_IPS" | tr ',' ' ')
 else
     for _host in $(echo "${ICECAST_TRUSTED_PROXY_HOSTS:-caddy}" | tr ',' ' '); do
-        # ahosts, not hosts: `getent hosts` returns ONE address family, so on
-        # a dual-stack network it can hand back only the IPv6 while Caddy
-        # dials icecast over IPv4 — and an exact-IP match then never fires.
+        # ahosts, not hosts: `getent hosts` returns ONE address family, so on a
+        # dual-stack network it can hand back only the IPv6 while Caddy dials
+        # icecast over IPv4 — and the exact-IP match then never fires.
         _found=$(getent ahosts "$_host" 2>/dev/null | awk '{print $1}' | sort -u || true)
         [ -n "$_found" ] && TRUSTED_LIST="$TRUSTED_LIST $_found"
     done
 fi
 
 # Only hex/dot/colon runs are addresses. A malformed entry is dropped rather
-# than interpolated — it would otherwise render XML icecast refuses to parse,
-# turning a cosmetic setting into a station that won't boot.
+# than interpolated — invalid XML here would turn a cosmetic setting into a
+# station that won't boot.
 TRUSTED_COUNT=0
 for _ip in $TRUSTED_LIST; do
     case "$_ip" in
@@ -320,9 +319,8 @@ else
     echo "broadcast: no trusted proxy resolved — listener IPs will show the connecting peer" >&2
 fi
 
-# `r` splices the generated mount blocks (empty file = nothing) where the
-# marker sits, then the marker line itself is deleted. Same for the trusted
-# proxy elements.
+# `r` splices the generated blocks (empty file = nothing) where each marker
+# sits, then the marker line itself is deleted.
 sed \
     -e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
     -e "s|\${ICECAST_ADMIN_PASSWORD}|$ICECAST_ADMIN_PASSWORD|g" \
@@ -343,9 +341,8 @@ echo "broadcast: starting icecast2" >&2
 sudo -E -u icecast2 icecast2 -n -c "$RENDERED" &
 ICECAST_PID=$!
 
-# Wait up to ~10s for icecast to accept HTTP. Without this, liquidsoap can
-# beat icecast to the punch and bail with "Cannot connect to remote host" on
-# its very first source connect.
+# Wait up to ~10s for icecast to accept HTTP, or liquidsoap can beat it and
+# bail with "Cannot connect to remote host" on its first source connect.
 for i in 1 2 3 4 5 6 7 8 9 10; do
     if curl -fsS http://localhost:7702/ > /dev/null 2>&1; then
         echo "broadcast: icecast accepting connections after ${i}s" >&2
@@ -358,20 +355,15 @@ done
 
 echo "broadcast: starting liquidsoap" >&2
 # TEMPORARY (re-harden later): run liquidsoap as root instead of dropping to
-# the `liquidsoap` user. The savonet base image bump 2.2.5 -> 2.4.4 changed the
-# `liquidsoap` user's uid (10000 -> 100), so the persisted state files under the
-# bind-mounted /var/sub-wave (e.g. now-playing.json, owned 10000:10001 mode 644
-# by the old image) became unwritable to uid 100 — every on_meta write EACCES'd
-# and the UI froze one song behind. Root ignores those perms. Restore the
-# privilege drop once the state files are chowned to the new liquidsoap uid
+# the `liquidsoap` user. The savonet base bump 2.2.5 → 2.4.4 changed that
+# user's uid (10000 → 100), making state files persisted by the old image
+# unwritable — every on_meta write EACCES'd and the UI froze one song behind.
+# Restore the privilege drop once the state files are chowned to the new uid
 # (needs settings.init.allow_root reverted in radio.liq too).
 liquidsoap /etc/liquidsoap/radio.liq &
 LIQ_PID=$!
 
 # ---- Wait for either to die, then exit -------------------------------------
-# `wait -n` is a bash builtin (and not yet in dash, which is /bin/sh on the
-# savonet image — hence the bash shebang at the top). If either child exits,
-# kill the other and propagate the exit code so docker restarts the container.
 
 trap 'kill -TERM "$ICECAST_PID" "$LIQ_PID" 2>/dev/null || true' INT TERM
 

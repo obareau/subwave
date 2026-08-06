@@ -1,13 +1,9 @@
 'use client';
 
-/* Magical Playlist Builder — the "studio console" screen.
-
-   Two panes: a fixed RECIPE rail (vibe prompt + seeds + tuning → Generate /
-   Regenerate / More) and a RESULT pane that is a real state machine — result,
-   empty, generating, no-match, error — with an energy-over-running-order bar
-   graph, AI-curated vs rules-based-fallback attribution, and a save modal
-   (overwrite vs create + keep-in-sync). Saves land in Navidrome via the
-   existing /playlists routes, so the set immediately feeds the Shows picker. */
+/* Playlist Builder: a RECIPE rail (prompt + seeds + tuning) beside a RESULT
+   pane state machine (result / empty / generating / no-match / error). Saves
+   land in Navidrome via the /playlists routes, so the set feeds the Shows
+   picker immediately. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -60,12 +56,9 @@ import {
   rowToDraft,
 } from './playlist-builder/types';
 
-// ─────────────────────────────────────────────────────────────────────────────
-
 export default function PlaylistBuilderPanel() {
   const { adminFetch } = useAdminAuth();
 
-  // Recipe state
   const [prompt, setPrompt] = useState('');
   const [seeds, setSeeds] = useState<SeedChip[]>([]);
   const [seedArtist, setSeedArtist] = useState('');
@@ -90,7 +83,6 @@ export default function PlaylistBuilderPanel() {
   const [instrumentalOnly, setInstrumentalOnly] = useState(false);
   const [recentlyAdded, setRecentlyAdded] = useState(false);
 
-  // Result state
   const [view, setView] = useState<View>('empty');
   const [name, setName] = useState('');
   const [description, setDescription] = useState<string | null>(null);
@@ -98,10 +90,9 @@ export default function PlaylistBuilderPanel() {
   const [reasons, setReasons] = useState<string[]>([]);
   const [usedFallback, setUsedFallback] = useState(false);
   const [poolSize, setPoolSize] = useState<number | null>(null);
-  // What the last generation op actually did — frozen so manual edits to the
-  // deck don't rewrite history in the "chose N from M in pool" line. `poolVerb`
-  // keeps 'more' honest: its pool excludes the current deck, so the line
-  // describes that op ("added 15 from 23 in pool"), never a mixed total.
+  // Frozen at the last generation so manual deck edits don't rewrite the
+  // "chose N from M in pool" line. 'more' reports 'added', since its pool
+  // excludes the current deck and the figure is never a mixed total.
   const [chosenCount, setChosenCount] = useState(0);
   const [poolVerb, setPoolVerb] = useState<'chose' | 'added'>('chose');
   const [errorMsg, setErrorMsg] = useState('');
@@ -111,18 +102,15 @@ export default function PlaylistBuilderPanel() {
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Modals + toast
   const [modal, setModal] = useState<null | 'open' | 'save'>(null);
   const [saveName, setSaveName] = useState('');
   const [saveMode, setSaveMode] = useState<'overwrite' | 'create'>('create');
   const [saveSync, setSaveSync] = useState(false);
   const [playlists, setPlaylists] = useState<PlaylistSummary[] | null>(null);
   const [playlistQuery, setPlaylistQuery] = useState('');
-  // Two-click armed delete in the Open modal (the only delete surface since
-  // the old Library Playlists tab became a pointer here).
+  // Two-click armed delete in the Open modal — the only delete surface.
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
 
-  // Deck chrome state — the list is the star, everything above it collapses.
   const [graphOpen, setGraphOpen] = useState(true);
   const [caveatsOpen, setCaveatsOpen] = useState(false);
   const [hotRow, setHotRow] = useState<number | null>(null);
@@ -130,7 +118,6 @@ export default function PlaylistBuilderPanel() {
   const hotTimer = useRef<number | null>(null);
   const [toast, setToast] = useState('');
 
-  // Search (seeds + manual add)
   const [seedQuery, setSeedQuery] = useState('');
   const [seedResults, setSeedResults] = useState<RawTrackRow[] | null>(null);
   const [addQuery, setAddQuery] = useState('');
@@ -144,11 +131,9 @@ export default function PlaylistBuilderPanel() {
   const lastMode = useRef<GenMode>('fresh');
   const generatingRef = useRef(false);
 
-  // Fill the viewport: measure where the frame actually starts (header height,
-  // Navidrome banner, breadcrumb wrap all vary) and stretch it to the bottom,
-  // leaving the shell's 24px page gutter. The class-based calc() is only the
-  // first-paint estimate. (The sidebar is a fixed full-height rail now, so it
-  // no longer dictates a minimum frame height the way the old nav column did.)
+  // Header height, Navidrome banner and breadcrumb wrap all vary, so the frame
+  // top is measured and stretched to the viewport bottom less the 24px page
+  // gutter. The class-based calc() is only the first-paint estimate.
   const frameRef = useRef<HTMLDivElement>(null);
   const [frameH, setFrameH] = useState<number | null>(null);
   useEffect(() => {
@@ -174,8 +159,8 @@ export default function PlaylistBuilderPanel() {
     toastTimer.current = window.setTimeout(() => setToast(''), 4200);
   }, []);
 
-  // Escape closes whichever modal is up. Document-level rather than on the
-  // dialog markup, so it fires wherever focus happens to be.
+  // Document-level rather than on the dialog markup, so Escape fires wherever
+  // focus happens to be.
   useEffect(() => {
     if (!modal) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setModal(null); };
@@ -183,9 +168,8 @@ export default function PlaylistBuilderPanel() {
     return () => window.removeEventListener('keydown', onKey);
   }, [modal]);
 
-  // Move focus into the dialog when it opens and hand it back to whatever
-  // opened it on close. Without this the modal is only reachable by tabbing
-  // through the page behind it, and closing leaves focus on <body>.
+  // Without this the modal is only reachable by tabbing through the page behind
+  // it, and closing leaves focus on <body>.
   const modalPanelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!modal) return;
@@ -194,8 +178,8 @@ export default function PlaylistBuilderPanel() {
     return () => restoreTo?.focus?.();
   }, [modal]);
 
-  // Energy-bar → track-row jump: center the row inside the LIST's own scroll
-  // context (scrollIntoView would drag the page along) and flare it briefly.
+  // Centres the row inside the LIST's own scroll context — scrollIntoView would
+  // drag the page along.
   const jumpToRow = useCallback((i: number) => {
     // ScrollArea scrolls its internal radix viewport, not the Root that listRef
     // points at — resolve it so scrollTop/scrollTo act on the right element.
@@ -297,8 +281,7 @@ export default function PlaylistBuilderPanel() {
     }
   }, [tracks, adminFetch, buildBody, flash, name]);
 
-  // Seed search (debounced; `stale` guards a slow response from clobbering a
-  // newer query's results)
+  // Seed search; `stale` guards a slow response clobbering a newer query.
   useEffect(() => {
     const q = seedQuery.trim();
     if (q.length < 2) { setSeedResults(null); return; }
@@ -535,14 +518,10 @@ export default function PlaylistBuilderPanel() {
 
   return (
     <div className="min-w-0">
-      {/* Open canvas — no box. One hairline divides recipe from deck; the page
-          itself is the surface and the track list takes every spare pixel. */}
       <div ref={frameRef} className="flex min-w-0 flex-col lg:h-[calc(100dvh-146px)] lg:min-h-[480px] lg:flex-row">
 
-        {/* ============ LEFT: RECIPE ============ */}
-        {/* The recipe rail is a lifted controls panel (--card-bg, matching the
-            other admin panels) so it reads distinct from the page/deck; the deck
-            on the right stays the open canvas. */}
+        {/* --card-bg matches the other admin panels, keeping the rail distinct
+            from the deck. */}
         <aside className="flex min-h-0 flex-none flex-col border-b border-ink bg-[var(--card-bg)] lg:w-[380px] lg:border-r lg:border-b-0">
           <ScrollArea className="min-h-0 flex-1">
             <div className="px-5 pt-4 pb-[26px]">
@@ -552,7 +531,6 @@ export default function PlaylistBuilderPanel() {
               Describe the set
             </h1>
 
-            {/* vibe */}
             <div className="mb-[22px]">
               <div className="mb-[7px]"><Eyeb>Vibe</Eyeb></div>
               <textarea
@@ -565,7 +543,6 @@ export default function PlaylistBuilderPanel() {
               />
             </div>
 
-            {/* seeds */}
             <div className="mb-[22px]">
               <div className="mb-[7px] flex items-center justify-between">
                 <Eyeb>Seeds</Eyeb>
@@ -631,7 +608,6 @@ export default function PlaylistBuilderPanel() {
 
             <div className="mb-5 h-px bg-separator-strong" />
 
-            {/* target length */}
             <div className="mb-5">
               <div className="mb-[9px] flex items-center justify-between">
                 <Eyeb>Target length</Eyeb>
@@ -641,7 +617,6 @@ export default function PlaylistBuilderPanel() {
               <div className="mt-[5px] flex justify-between font-mono text-[9px] text-muted"><span>5</span><span>60</span></div>
             </div>
 
-            {/* artist spacing */}
             <div className="mb-5">
               <div className="mb-[9px] flex items-center justify-between">
                 <Eyeb>Artist spacing</Eyeb>
@@ -650,7 +625,6 @@ export default function PlaylistBuilderPanel() {
               <input type="range" min={0} max={5} value={artistSpacing} onChange={e => setArtistSpacing(+e.target.value)} aria-label="Artist spacing" className="w-full accent-[var(--accent)]" />
             </div>
 
-            {/* track-length band — min/max anchors on one track */}
             <div className="mb-5">
               <div className="mb-[9px] flex items-center justify-between">
                 <Eyeb muted={!capOn}>Track length</Eyeb>
@@ -679,7 +653,6 @@ export default function PlaylistBuilderPanel() {
               </div>
             </div>
 
-            {/* bpm band — analyzer tempo */}
             <div className="mb-5">
               <div className="mb-[9px] flex items-center justify-between">
                 <Eyeb muted={!bpmOn}>Tempo</Eyeb>
@@ -710,7 +683,6 @@ export default function PlaylistBuilderPanel() {
 
             <div className="mb-5 h-px bg-separator-strong" />
 
-            {/* energy arc */}
             <div className="mb-5">
               <div className="mb-[9px]"><Eyeb>Energy arc</Eyeb></div>
               <div className="flex flex-wrap gap-1.5">
@@ -720,7 +692,6 @@ export default function PlaylistBuilderPanel() {
               </div>
             </div>
 
-            {/* moods */}
             <div className="mb-5">
               <div className="mb-[9px]"><Eyeb>Moods</Eyeb></div>
               <div className="flex flex-wrap gap-1.5">
@@ -730,7 +701,6 @@ export default function PlaylistBuilderPanel() {
               </div>
             </div>
 
-            {/* energy levels */}
             <div className="mb-5">
               <div className="mb-[9px]"><Eyeb>Energy levels</Eyeb></div>
               <div className="flex flex-wrap gap-1.5">
@@ -742,7 +712,6 @@ export default function PlaylistBuilderPanel() {
               </div>
             </div>
 
-            {/* release year band */}
             <div className="mb-5">
               <div className="mb-[9px] flex items-center justify-between">
                 <Eyeb>Release year</Eyeb>
@@ -769,7 +738,6 @@ export default function PlaylistBuilderPanel() {
               </div>
             </div>
 
-            {/* genres */}
             <div className="mb-5">
               <div className="mb-[9px]"><Eyeb>Genres</Eyeb></div>
               <div className="relative">
@@ -816,7 +784,6 @@ export default function PlaylistBuilderPanel() {
               )}
             </div>
 
-            {/* artists — allow-list filter */}
             <div className="mb-5">
               <div className="mb-[9px] flex items-center justify-between">
                 <Eyeb>Artists</Eyeb>
@@ -860,7 +827,6 @@ export default function PlaylistBuilderPanel() {
 
             <div className="mb-[18px] h-px bg-separator-strong" />
 
-            {/* boolean toggles */}
             <div className="grid gap-[13px]">
               <SwitchRow label="Instrumental only" hint="skip vocal-forward tracks · best-effort" on={instrumentalOnly} onToggle={setInstrumentalOnly} />
               <SwitchRow label="Recently added" hint="source from new library arrivals" on={recentlyAdded} onToggle={setRecentlyAdded} />
@@ -869,7 +835,6 @@ export default function PlaylistBuilderPanel() {
             </div>
           </ScrollArea>
 
-          {/* generate footer */}
           <div className="flex-none border-t border-ink px-5 py-3.5">
             <div className="mb-[9px] flex gap-2">
               <Button
@@ -905,19 +870,14 @@ export default function PlaylistBuilderPanel() {
           </div>
         </aside>
 
-        {/* ============ RIGHT: RESULT ============ */}
         <section className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
 
-            {/* RESULT */}
             {showResult && (
               <div className="flex min-h-0 flex-1 flex-col">
-                {/* Deck head — one title row with the toolbar, one meta strip.
-                    Caveats and sync fold into the strip; the list gets the rest. */}
                 <div className="flex-none border-b border-ink px-4 pt-1.5 pb-2.5 sm:px-6">
-                  {/* The three deck actions eat ~185px, which leaves a 24px
-                      title field about eight characters at 390px — give the
-                      name its own line and let the actions wrap under it. */}
+                  {/* The three deck actions eat ~185px, leaving ~8 characters of
+                      title at 390px, so the name takes its own line. */}
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                     <input
                       value={name}
@@ -988,7 +948,6 @@ export default function PlaylistBuilderPanel() {
                   </div>
                 </div>
 
-                {/* caveats detail — opt-in fold, auto-opened on fallback */}
                 {caveatsOpen && (reasons.length > 0 || usedFallback) && (
                   <div className="flex-none border-b border-separator-soft bg-ink-soft px-4 py-2 font-mono text-[11px] leading-[1.6] text-muted sm:px-6">
                     {usedFallback && (
@@ -1008,7 +967,6 @@ export default function PlaylistBuilderPanel() {
                   onBarClick={jumpToRow}
                 />
 
-                {/* add track (slim) */}
                 <div className="relative flex flex-none items-center gap-2.5 border-b border-separator-soft px-4 py-2 sm:px-6">
                   <Search className="size-4 flex-none text-muted" />
                   <input
@@ -1038,7 +996,6 @@ export default function PlaylistBuilderPanel() {
                   )}
                 </div>
 
-                {/* track list — the star of the screen; every spare pixel is here */}
                 <ScrollArea ref={listRef} className="flex-1">
                   <div className="pb-8">
                   {tracks.map((t, i) => (
@@ -1085,9 +1042,8 @@ export default function PlaylistBuilderPanel() {
                           </div>
                         )}
                       </div>
-                      {/* The duration/energy block beside three 30px icon
-                          buttons is ~170px wide — stacked, the trailing column
-                          costs 90px and the title keeps the rest. */}
+                      {/* Beside three 30px icon buttons this block is ~170px;
+                          stacked it costs 90px and the title keeps the rest. */}
                       <div className="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
                         <div className="flex flex-col items-end gap-[3px]">
                           <span className="font-mono text-xs text-ink">{fmtDur(t.durationSec || 0)}</span>
@@ -1097,9 +1053,8 @@ export default function PlaylistBuilderPanel() {
                           </span>
                         </div>
                         <div className="flex items-center gap-0.5 transition-opacity lg:opacity-0 lg:group-hover:opacity-100">
-                          {/* Reorder has no drag handle on mobile (the grip is
-                              `sm:` only), so these are the only way to move a
-                              row — size them for a thumb. */}
+                          {/* The drag grip is `sm:` only, so on mobile these are
+                              the only way to move a row: size them for a thumb. */}
                           <IconBtn className="size-9 sm:size-[30px]" onClick={() => move(i, i - 1)} disabled={i === 0} title="Move up"><ArrowUp className="size-[15px]" /></IconBtn>
                           <IconBtn className="size-9 sm:size-[30px]" onClick={() => move(i, i + 1)} disabled={i === tracks.length - 1} title="Move down"><ArrowDown className="size-[15px]" /></IconBtn>
                           <IconBtn className="size-9 sm:size-[30px]" onClick={() => removeAt(i)} title="Remove"><X className="size-[15px]" /></IconBtn>
@@ -1112,7 +1067,6 @@ export default function PlaylistBuilderPanel() {
               </div>
             )}
 
-            {/* EMPTY */}
             {showEmpty && (
               <div className="flex flex-1 items-center justify-center p-8 lg:p-10">
                 <div className="w-full max-w-[520px]">
@@ -1146,7 +1100,6 @@ export default function PlaylistBuilderPanel() {
               </div>
             )}
 
-            {/* GENERATING */}
             {view === 'generating' && (
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="flex flex-none items-center justify-center gap-4 px-6 pt-10 pb-[26px]">
@@ -1166,7 +1119,6 @@ export default function PlaylistBuilderPanel() {
               </div>
             )}
 
-            {/* NO MATCH */}
             {view === 'nomatch' && (
               <div className="flex flex-1 items-center justify-center p-8 lg:p-10">
                 <div className="max-w-[460px] text-center">
@@ -1182,7 +1134,6 @@ export default function PlaylistBuilderPanel() {
               </div>
             )}
 
-            {/* ERROR */}
             {view === 'error' && (
               <div className="flex flex-1 items-center justify-center p-8 lg:p-10">
                 <div className="w-full max-w-[480px]">
@@ -1201,7 +1152,6 @@ export default function PlaylistBuilderPanel() {
         </section>
       </div>
 
-      {/* TOAST */}
       {toast && (
         <div className="fixed top-[70px] right-4 left-4 z-[60] flex items-center gap-3 bg-ink px-3.5 py-3 text-bg shadow-drawer sm:right-6 sm:left-auto sm:max-w-[340px]">
           <span className="text-[13px] leading-[1.4]">{toast}</span>
@@ -1211,17 +1161,14 @@ export default function PlaylistBuilderPanel() {
         </div>
       )}
 
-      {/* OPEN-EXISTING MODAL */}
       {modal === 'open' && (
         <div
-          // Backdrop only — no role, no tabIndex. Making it a `role="button"`
-          // would put a full-viewport control in the tab order *and* wrap the
-          // dialog in a role whose children are presentational, hiding the real
-          // controls from assistive tech. Escape is handled once at the document
-          // level (see the effect above) so it works wherever focus sits.
+          // Backdrop keeps no role and no tabIndex: `role="button"` would put a
+          // full-viewport control in the tab order and hide the dialog's real
+          // controls from assistive tech. Escape is handled at the document level.
           className="fixed inset-0 z-[80] flex items-start justify-center bg-[rgba(20,18,14,0.42)] p-5 pt-16"
-          // Close on a click landing on the backdrop itself (not bubbled from
-          // the panel), so the panel needs no onClick stopPropagation of its own.
+          // Only a click on the backdrop itself closes, so the panel needs no
+          // stopPropagation of its own.
           onClick={e => { if (e.target === e.currentTarget) setModal(null); }}
         >
           <div
@@ -1303,7 +1250,6 @@ export default function PlaylistBuilderPanel() {
         </div>
       )}
 
-      {/* SAVE MODAL */}
       {modal === 'save' && (
         <div
           // See the OPEN modal above: backdrop stays a plain div; Escape is

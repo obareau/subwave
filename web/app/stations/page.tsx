@@ -23,17 +23,16 @@ export const metadata = pageMeta({
 // options win over the force-dynamic no-store default).
 export const dynamic = 'force-dynamic';
 
-// Submission opens a GitHub Issue Form in the community catalog repo (no fork, no
-// JSON). A workflow there turns the issue into a one-file PR. The old new-file
-// editor link forced non-collaborators to fork the repo (discussion #296), so we
-// route through an issue: anyone with a GitHub account can submit in one click.
+// Submission opens a GitHub Issue Form in the community catalog repo; a workflow
+// turns the issue into a one-file PR. The old new-file editor link forced
+// non-collaborators to fork the repo (discussion #296).
 const SUBMIT_URL = stationSubmitUrl();
 // Report / takedown for a listed station — opens the report-station issue form.
 const REPORT_URL = reportStationUrl();
 
-// The catalog-backed regions. Each takes the in-flight promise rather than
-// calling getAllStations() itself, so one render issues one catalog fetch
-// regardless of how many boundaries read it.
+// Each region takes the in-flight promise rather than calling getAllStations()
+// itself, so one render issues one catalog fetch however many boundaries read
+// it.
 
 async function StationsStat({ stations }: { stations: Promise<Station[]> }) {
   const { count, countries } = stationStats(await stations);
@@ -53,8 +52,8 @@ async function StationsStat({ stations }: { stations: Promise<Station[]> }) {
   );
 }
 
-// The dot field is a 10k-sample computation on every request (this route is
-// force-dynamic), so it earns its own boundary — the hero shouldn't wait on it.
+// The dot field is a 10k-sample computation on every request (force-dynamic
+// route), so it gets its own boundary and the hero doesn't wait on it.
 async function StationsMap({ stations }: { stations: Promise<Station[]> }) {
   return <StationMap stations={await stations} />;
 }
@@ -78,8 +77,8 @@ async function StationsGrid({ stations }: { stations: Promise<Station[]> }) {
 }
 
 export default function StationsIndex() {
-  // Started, not awaited — see the note on /shows. getAllStations degrades to
-  // an empty list on any catalog failure, so this never rejects.
+  // Started, not awaited — see the note on /shows. getAllStations resolves to an
+  // empty list on any catalog failure, so this never rejects.
   const stations = getAllStations();
 
   return (

@@ -1,15 +1,8 @@
-// The shapes of the controller's /debug response.
-//
-// All admin endpoints return loose JSON, so these are narrowed with
-// optional-chaining at the call sites rather than trusted outright.
-//
-// Part of the debug/ split - see ../DebugPanel.tsx.
+// Shapes of the controller's /debug response. Admin endpoints return loose JSON,
+// so these are narrowed with optional-chaining at call sites, not trusted outright.
 
 import type { StationLocale } from '../../../lib/types';
 
-// All admin endpoints return loose JSON; type as unknown then narrow with
-// optional-chaining at call sites. The shapes mirror the controller's
-// /debug response.
 export interface DebugIcecast {
   listeners?: number;
   peakListeners?: number;
@@ -49,8 +42,8 @@ interface DebugTtsSpoken {
   requested?: string;
 }
 
-/** One entry from the controller's TTS call ring (stats.ts ttsCalls) — every
- * speak() outcome since boot, newest first, incl. silent engine fallbacks. */
+/** One entry from the controller's TTS call ring (stats.ts ttsCalls): every speak()
+ * outcome since boot, newest first, including silent engine fallbacks. */
 export interface TtsCall {
   ok?: boolean;
   kind?: string;
@@ -105,10 +98,8 @@ interface LlmCall {
   messages?: Array<{ role?: string; content?: unknown }>;
   toolCalls?: Array<{ name?: string; args?: unknown; result?: unknown }>;
   response?: string;
-  /** What the model said INSTEAD of the expected structured output on a
-   * failed call (e.g. "agent did not call the done tool") — one labelled
-   * block per attempt that declined. Populated by failureDiagnostics() in
-   * the controller; absent on success (see `response` instead). */
+  /** What the model said INSTEAD of the expected structured output on a failed call.
+   * From the controller's failureDiagnostics(); absent on success (see `response`). */
   responseText?: string;
   steps?: number;
 }
@@ -158,8 +149,7 @@ interface FileEntry {
 
 export type FilesValue = FileEntry[] | { error?: string } | undefined;
 
-// Mirrors the controller's getFullContext() snapshot — what the DJ "feels"
-// right now. Rendered human-friendly by <DjContext>, not as raw JSON.
+// Mirrors the controller's getFullContext() snapshot.
 export interface DebugContext {
   time?: { period?: string; mood?: string; vibe?: string; show?: string };
   weather?: {
@@ -204,9 +194,8 @@ export interface DebugMounts {
   tuneIn: { entryCount: number; pls: string; m3u: string };
 }
 
-/** Daily token budget snapshot (settings.llm.dailyTokenCap) — mirrors the
- * controller's budgetMode() tiers: soft mutes optional segments, hard stops
- * model calls entirely until the UTC day rolls. */
+/** Daily token budget snapshot (settings.llm.dailyTokenCap), mirroring the controller's
+ * budgetMode() tiers: soft mutes optional segments, hard stops model calls. */
 export interface DebugBudget {
   enabled?: boolean;
   cap?: number;

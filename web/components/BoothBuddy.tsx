@@ -4,21 +4,17 @@ import { memo } from 'react';
 import type { CSSProperties } from 'react';
 import { cn } from '@/lib/cn';
 
-// The "Booth Sprite" — a small pure-CSS mascot that leads the DJ thinking line.
-// Ported 1:1 from the field-guide prototype (docs/Booth-Sprite.html): an
-// antenna, a square head with two eyes + a mouth, and two legs, all assembled
-// from <span>s and animated with CSS keyframes (globals.css `buddy-*`).
+// Pure-CSS mascot leading the DJ thinking line, assembled from <span>s and
+// animated with CSS keyframes (globals.css `buddy-*`).
 //
-// Colours come from the theme tokens, never hardcoded hex, so the buddy travels
-// across every listener theme (light / dark / custom). The head fill is the
-// surface (`--bg`) and the features are the foreground (`--ink`), so the creature
-// reads as line-art defined by its border + solid eyes/mouth + accent antenna —
-// the ink-on-bg pairing is legible on any palette by construction.
+// Colours come from theme tokens, never hardcoded hex: head fill is `--bg` and
+// features are `--ink`, so the ink-on-bg pairing is legible on any palette by
+// construction.
 //
-// Decorative only: the whole sprite is aria-hidden (the DJ line carries the
-// readable text + aria-label). Inline styles are intentional — the geometry is
-// computed per-mood and per-size and can't be static Tailwind utilities, so this
-// file is exempt from `react/forbid-dom-props` (see web/eslint.config.mjs).
+// Decorative only — the whole sprite is aria-hidden; the DJ line carries the
+// readable text. Inline styles are intentional (geometry is computed per-mood
+// and per-size), so this file is exempt from `react/forbid-dom-props` (see
+// web/eslint.config.mjs).
 
 export type BuddyMood = 'content' | 'onair' | 'curious' | 'sleepy' | 'spooked';
 
@@ -35,8 +31,7 @@ interface MoodGeom {
   blink: boolean;
 }
 
-// Geometry at scale 1 (head = 64px wide); every value is multiplied by
-// `size / 64`. Numbers are lifted verbatim from the prototype's mood table.
+// Geometry at scale 1 (head = 64px wide); every value is multiplied by size/64.
 const MOODS: Record<BuddyMood, MoodGeom> = {
   content: { eyeW: 8, eyeH: 8, pupil: 0, mouthW: 18, mouthH: 3, open: false, tilt: 0, antTilt: 0, z: false, blink: true },
   onair: { eyeW: 8, eyeH: 8, pupil: 0, mouthW: 22, mouthH: 11, open: true, tilt: 0, antTilt: 0, z: false, blink: true },
@@ -51,9 +46,8 @@ const ACCENT = 'var(--accent)';
 const HEAD_W = 64;
 
 export interface BoothBuddyProps {
-  /** Drives the face/antenna geometry. Defaults to the resting state. */
   mood?: BuddyMood;
-  /** Head width in px; the whole sprite scales from it. Default 20 (≈28px tall). */
+  /** Head width in px; the whole sprite scales from it. */
   size?: number;
   className?: string;
 }
@@ -64,9 +58,9 @@ export default memo(function BoothBuddy({ mood = 'content', size = 20, className
   const px = (n: number) => `${(n * s).toFixed(2)}px`;
   const playing = mood === 'onair';
 
-  // Outer wrapper owns the always-on "breathe"; the inner root owns the static
-  // per-mood tilt — separated so the tilt survives (a CSS animation overrides
-  // an inline transform on the same element for the property it animates).
+  // Outer wrapper owns the always-on "breathe", inner root the per-mood tilt.
+  // Separated so the tilt survives: a CSS animation overrides an inline
+  // transform on the same element for the property it animates.
   const breatheWrap: CSSProperties = {
     display: 'inline-flex',
     transformOrigin: 'center bottom',

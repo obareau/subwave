@@ -4,8 +4,7 @@ import { cva } from "class-variance-authority";
 
 import { cn } from "@/lib/cn"
 
-/* Retuned to SUB/WAVE's newsprint field-label: tiny uppercase letter-spaced
-   ink caption, matching the legacy `.field-label`. */
+/* Retuned to match the legacy `.field-label`. */
 const labelVariants = cva(
   "text-[10px] leading-none font-bold tracking-[0.22em] text-foreground uppercase peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
 )

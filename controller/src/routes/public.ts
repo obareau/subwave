@@ -14,6 +14,7 @@ import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
 import { isIdle } from '../broadcast/stream-idle.js';
+import { currentStarve } from '../broadcast/music-starve.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { getStationTimezone } from '../time.js';
 import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
@@ -24,6 +25,7 @@ import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
 import { publicGuestIds, publicPersonaShape, soulsArePublic } from '../util/public-persona.js';
+import { resolveThemeProvenance } from '../util/theme-provenance.js';
 import { checkAuthRateLimit, clientIp, listenerAuthFailureDelayMs } from '../middleware/ratelimit.js';
 import { STATE_ROOT } from '../config.js';
 import { activeStationId } from '../stations/resolve.js';
@@ -510,12 +512,18 @@ router.get('/state', (req, res) => {
   const activeShow = settings.resolveActiveShow();
   const activeThemeId =
     (activeShow?.themeId && activeShow.themeId) || s?.theme?.active || DEFAULT_THEME_ID;
+  const starve = currentStarve();
   res.json({
     ...snap,
     needsSetup: getSetupStatusSync().needsSetup,
     // True while the idle gate has the programme paused (zero listeners) —
     // lets clients tell "silence because the room is empty" from "broken".
     streamIdle: isIdle(),
+    // True while the mixer reports its music chain starved (#1300 bug 7):
+    // nothing to play, so the emergency loop is on air. Distinct from
+    // streamIdle, which is a deliberate pause for an empty room.
+    musicStarved: starve.starved,
+    musicStarvedSince: starve.since,
     theme: { active: activeThemeId },
     // Listener-player UI settings ride along with /state like the theme does,
     // so the player can flip them live on the next poll. Defaults off if
@@ -634,6 +642,11 @@ router.post(
 // default. ThemeBootstrap doesn't have to know about shows — it just applies
 // whatever id comes back.
 //
+// `activeSource` / `stationDefault` / `activeShow` carry WHY that id won, for
+// the admin UI. A client that only wants a palette can keep reading `active`.
+// The precedence rule + the published shape live in util/theme-provenance.ts
+// (never inline here), pinned by scripts/theme-provenance.test.ts.
+//
 // POST /themes/refresh — admin-gated. Clears the user-themes cache so files
 // freshly dropped into ${STATE_DIR}/themes/ appear in the next /themes read
 // without bouncing the controller.
@@ -642,16 +655,22 @@ router.get('/themes', async (req, res) => {
   try {
     const s = settings.get();
     const themes = await listThemesAnnotated();
-    const stationDefault = s?.theme?.active || DEFAULT_THEME_ID;
-    const activeShow = settings.resolveActiveShow();
-    // Show override wins only if it still resolves to a known theme. A stale
-    // override (operator deleted the file under our feet) silently falls back
-    // to the station default — same fallback strategy as getTheme().
-    const active =
-      activeShow?.themeId && themes.some(t => t.id === activeShow.themeId)
-        ? activeShow.themeId
-        : stationDefault;
-    res.json({ active, themes });
+    // Provenance, not just the answer (#1300 bug 12). Saving a station theme in
+    // admin and watching the whole UI flip back one poll later is the reported
+    // symptom, and it isn't a failed save: an on-air show pins its own theme and
+    // outranks the station default for as long as it's on air. Reporting only
+    // the resolved id made that indistinguishable from the setting not sticking,
+    // and left the admin UI unable to explain it even if it wanted to.
+    //
+    // The third level — the listener's own localStorage override — never reaches
+    // the server and is resolved client-side in ThemeProvider, which is where the
+    // UI reads it from.
+    const provenance = resolveThemeProvenance({
+      stationDefault: s?.theme?.active || DEFAULT_THEME_ID,
+      activeShow: settings.resolveActiveShow(),
+      themeIds: themes.map(t => t.id),
+    });
+    res.json({ ...provenance, themes });
   } catch (err) {
     publicError(res, '/themes', err);
   }

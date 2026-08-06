@@ -773,6 +773,18 @@ export function isElevenLabsV3(model: string): boolean {
   return /^eleven[_-]?v3/i.test(model || '');
 }
 
+// Fish's natural-language bracket cues are an S2.1 capability. Custom model
+// strings remain supported, but fail closed unless they identify that family.
+export function isFishS21Model(model: string): boolean {
+  return /^s2[._-]?1(?:[._-]|$)/i.test(model || '');
+}
+
+export function cloudExpressionCueFamily(provider: string, model: string): 'fish-s21' | 'elevenlabs-v3' | null {
+  if (provider === 'fish-audio' && isFishS21Model(model)) return 'fish-s21';
+  if (provider === 'elevenlabs' && isElevenLabsV3(model)) return 'elevenlabs-v3';
+  return null;
+}
+
 // eleven_v3 only accepts stability ∈ {0, 0.5, 1}; any other value 400s the
 // request, dropping the segment to a local engine that reads v3 audio tags
 // aloud as words (issue #915 review). Snap an arbitrary [0,1] slider value to

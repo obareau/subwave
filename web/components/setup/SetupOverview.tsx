@@ -2,6 +2,29 @@ import Link from 'next/link';
 import SetupPage from './SetupPage';
 import CodeBlock from "@/components/CodeBlock";
 
+const PLATFORMS = [
+  {
+    href: '/setup/macos',
+    label: 'macOS',
+    blurb: 'Docker Desktop or OrbStack, VM sizing, Apple Silicon.',
+  },
+  {
+    href: '/setup/windows',
+    label: 'Windows',
+    blurb: 'WSL2 with the full CLI, or docker compose from PowerShell.',
+  },
+  {
+    href: '/setup/linux',
+    label: 'Linux',
+    blurb: 'Docker Engine, firewall, SELinux, reboot persistence.',
+  },
+  {
+    href: '/setup/unraid',
+    label: 'Unraid',
+    blurb: 'One-click Community App, or the full compose stack.',
+  },
+];
+
 const PATHS = [
   {
     href: '/setup/quick-start',
@@ -26,7 +49,7 @@ export default function SetupOverview() {
       eyebrow="SELF-HOSTED · OPEN SOURCE"
       title="Run your own SUB/WAVE."
       meta="≈ 10 min · 4 commands · needs Navidrome + an LLM"
-      intro="SUB/WAVE points at your Navidrome library and your LLM, which is a local Ollama box by default, or any hosted provider you like. Once it's running, the AI DJ broadcasts from your homelab, picks tracks from your own collection, and takes requests from anyone you share the URL with."
+      intro="SUB/WAVE points at your Navidrome library and a language model. The model is a local Ollama box by default, or any hosted provider you like. Once it's running, the AI DJ broadcasts from your homelab, picks tracks from your own collection, and takes requests from anyone you share the URL with."
       current="/setup"
       heroAside={
         <div className="bs-dj-glyph" aria-hidden="true">
@@ -70,6 +93,28 @@ export default function SetupOverview() {
             covers that path.
           </p>
         </div>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">WHERE ARE YOU INSTALLING?</p>
+        <h2>Follow your platform.</h2>
+        <p>
+          The install is the same everywhere: Docker, one host port, a wizard.
+          What differs is the host: which runtime to install, how much memory the
+          VM gets, which architecture the optional heavy images run on, and the
+          firewall. Each page is the whole path start to finish, so you only need
+          the one:
+        </p>
+        <ul className="bs-list">
+          {PLATFORMS.map((p) => (
+            <li key={p.href}>
+              <Link href={p.href} className="bs-link">
+                <strong>{p.label}</strong>
+              </Link>
+              {`: ${p.blurb}`}
+            </li>
+          ))}
+        </ul>
       </section>
 
       <section className="bs-section">

@@ -1,8 +1,6 @@
 'use client';
 
 // One row in the show-definitions list.
-//
-// Part of the shows/ split - see ../ShowsPanel.tsx.
 
 import { useRef } from 'react';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
@@ -24,11 +22,8 @@ interface ShowDefRowProps {
   onEdit: () => void;
 }
 
-// One show as a "broadcast slate": a colour spine keyed to the weekly grid, the
-// host — and any guest co-hosts overlapping beneath — as faces, mode kickers
-// (Programme / Banter), the weekly airtime as a metric, and a scannable row of
-// music facets over the DJ brief. The whole card is the edit target (the
-// personas "click a show to open it" pattern); Remove lives inside the editor.
+// One show as a "broadcast slate". The whole card is the edit target; Remove lives
+// inside the editor.
 export function ShowDefRow({ show: s, index: i, ok, hrs, host, guests, apiBase, onEdit }: ShowDefRowProps) {
   const spineRef = useRef<HTMLSpanElement>(null);
   useDynamicStyle(spineRef, { background: SHOW_COLORS[i % SHOW_COLORS.length] ?? '#000' });
@@ -53,7 +48,7 @@ export function ShowDefRow({ show: s, index: i, ok, hrs, host, guests, apiBase, 
         'focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)]',
       )}
     >
-      {/* colour spine — the same per-show colour the weekly grid paints with */}
+      {/* The same per-show colour the weekly grid paints with. */}
       <span
         ref={spineRef}
         aria-hidden="true"
@@ -61,7 +56,6 @@ export function ShowDefRow({ show: s, index: i, ok, hrs, host, guests, apiBase, 
       />
 
       <div className="card-body flex gap-3.5">
-        {/* faces — host, then any guest co-hosts overlapping beneath, centred */}
         <div className="flex flex-none flex-col items-center">
           <ShowAvatar persona={host} apiBase={apiBase} size="lg" />
           {guests.length > 0 && (
@@ -79,10 +73,8 @@ export function ShowDefRow({ show: s, index: i, ok, hrs, host, guests, apiBase, 
           )}
         </div>
 
-        {/* body */}
         <div className="grid min-w-0 flex-1 gap-2.5">
           <div className="flex items-start gap-3">
-            {/* name + roster */}
             <div className="min-w-0 flex-1">
               {(s.programme || (s.banter && guests.length > 0)) && (
                 <div className="mb-1 flex flex-wrap items-center gap-1.5">
@@ -105,7 +97,6 @@ export function ShowDefRow({ show: s, index: i, ok, hrs, host, guests, apiBase, 
               </div>
             </div>
 
-            {/* right rail — status, weekly airtime, edit affordance */}
             <div className="flex flex-none flex-col items-end gap-1.5 text-right">
               {!ok && <Pill tone="accent">incomplete</Pill>}
               {hrs > 0 ? (
@@ -122,14 +113,12 @@ export function ShowDefRow({ show: s, index: i, ok, hrs, host, guests, apiBase, 
             </div>
           </div>
 
-          {/* facets — what this show plays */}
           <div className="flex flex-wrap gap-1">
             {facets.map(f => (
               <MetaChip key={f.key} accent={f.accent}>{f.label}</MetaChip>
             ))}
           </div>
 
-          {/* brief */}
           {s.topic.trim() && (
             <p className="line-clamp-2 text-[12px] leading-[1.55] text-muted italic">
               {s.topic.trim()}

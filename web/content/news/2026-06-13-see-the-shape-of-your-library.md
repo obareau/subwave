@@ -10,7 +10,7 @@ The DJ holds a lot in its head: every track's mood, energy, tempo, key, and a pa
 
 ## What's new
 
-It's a full-screen map of every track you've tagged. Each one is a point, sitting near others in its genre, lit on an ink-to-vermilion ramp by how energetic it is. Faint lines wire close neighbours together. Pan around, scroll to zoom.
+It's a full-screen map of every track [you've tagged](/news/your-dj-knows-your-library). Each one is a point, sitting near others in its genre, lit on an ink-to-vermilion ramp by how energetic it is. Faint lines wire close neighbours together. Pan around, scroll to zoom.
 
 The panels down the right keep a running count:
 
@@ -23,11 +23,7 @@ The panels down the right keep a running count:
 
 ## How to use it
 
-Open admin and click Observatory in the nav, or go straight to:
-
-```
-/observatory
-```
+Open admin and click Observatory in the nav, or go straight to [/observatory](/observatory).
 
 Click any point to open its dossier: BPM, key, energy, loudness, its mood and last.fm tags, and the track's text and audio fingerprints. There's a song-shape timeline too, charting the track end to end: its pace curve, where the intro ends, the sections, the vocal passages, and how the key moves over time. Under that sits Mix Next, the closest tracks in vector space, with the links drawn back onto the map. Recolour the map by energy, confidence, tag source, analysis, loudness, pace, or voice from the left rail, and filter by scene, mood, or tag source.
 
@@ -35,7 +31,7 @@ Click any point to open its dossier: BPM, key, energy, loudness, its mood and la
   <img src="/screenshots/observatory-track.webp" alt="The top of a track dossier: title, artist and album, then BPM, key, energy and length, the mood tags and their energy and acoustic meters. Below the crop sit the text and audio embedding fingerprints and the nearest tracks in vector space." />
 </figure>
 
-Big library? Use the MAP SIZE control in the rail. It draws up to 25,000 tracks by default and goes to 100,000. Past that it shows an even sample across genres, so the shape stays honest.
+Big library? Use the MAP SIZE control in the rail. It draws up to 25,000 tracks by default and goes to 100,000. Past that it shows an even sample across genres, so the shape stays honest. Every rail control is documented in the manual's [Library Observatory](/manual/observatory) page.
 
 ## Why it helps
 

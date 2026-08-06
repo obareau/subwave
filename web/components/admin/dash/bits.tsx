@@ -1,10 +1,5 @@
 'use client';
 
-// Small dashboard pieces: the sortable table header, the manual-segment
-// buttons, the toggle rows, and one booth turn's text.
-//
-// Part of the dash/ split - see ../DashPanel.tsx.
-
 import { eventTurnSummary, turnText } from '../../../lib/sessionFeed';
 import type { SessionTurn } from '../../../lib/types';
 import { Toggle } from '../ui';
@@ -55,8 +50,7 @@ interface SegmentButtonProps {
   onFire: () => void;
 }
 
-// A studio cart-machine pad — all visual states live in .seg-pad (globals.css):
-// hover arms the LED, .is-firing blinks it and sweeps the base while on air.
+// All visual states live in .seg-pad (globals.css).
 export function SegmentButton({ label, icon: Icon, busyHere, anyBusy, onFire }: SegmentButtonProps) {
   return (
     <button
@@ -103,21 +97,15 @@ export function classTone(cls: string): string {
   }
 }
 
-// One booth-log message. Long `event` turns (the pick prompt posted to the DJ
-// agent — link/clock/transition coaching) render as a one-line summary; the
-// raw prompt never shows here (it's in the session JSON if ever needed).
+// Long `event` turns render as a one-line summary; the raw pick prompt never shows
+// here (it lives in the session JSON).
 export function BoothTurnText({ turn }: { turn: SessionTurn }) {
-  // Plain text, deliberately not markdown-rendered — booth turns are speech
-  // scripts, not documents.
+  // Deliberately not markdown-rendered — booth turns are speech scripts.
   return <span className="break-words text-ink">{eventTurnSummary(turn) ?? turnText(turn)}</span>;
 }
 
-// Collapse whitespace + truncate, for the one-line request preview in a summary.
 export function oneLine(s: unknown, n = 80): string {
   const t = String(s ?? '').replace(/\s+/g, ' ').trim();
   return t.length > n ? `${t.slice(0, n)}…` : t;
 }
-
-// The Requests card — every listener request and exactly how the AI DJ
-// resolved it. Newest first; each row expands to the full debug trace.
 

@@ -1,6 +1,3 @@
-/* TTY skin — the only styles Tailwind can't express inline: keyframes for the
-   blinking block cursor and the staggered boot log. Flat by creed otherwise. */
-
 @keyframes tty-blink {
   0%, 55% { opacity: 1; }
   56%, 100% { opacity: 0; }
@@ -27,9 +24,9 @@
 .bootline:nth-child(5) { animation-delay: 1.2s; }
 .bootline:nth-child(6) { animation-delay: 1.55s; }
 
-/* Lite mode kills every animation globally (html.lite in globals.css) — but
-   the boot lines only become visible THROUGH their animation, so without this
-   exception the gate is an invisible screen. Show them fully staged instead. */
+/* html.lite (globals.css) kills every animation, but the boot lines only
+   become visible THROUGH theirs — without this exception the gate is an
+   invisible screen. */
 :global(html.lite) .bootline {
   opacity: 1;
   animation: none;

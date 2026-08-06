@@ -15,21 +15,17 @@ import { isDjTurn } from '@/lib/sessionFeed';
 import { useStationClient } from '@/lib/stationClient';
 import type { NowPlayingTrack, QueueEntry, SessionTurn } from '@/lib/types';
 
-/** How close to the end of the current track (seconds) the "up next" tease
- *  fades in. Picks land at the previous track's start, so the queue head is
- *  known well before this — the window is about pacing, not data. */
+/** Seconds before the end of the track that the "up next" tease fades in. The
+ *  queue head is known long before this; the window is pacing, not data. */
 const UP_NEXT_WINDOW_S = 30;
 
-/** Separator for the v3-caption meta strip. Thin spaces instead of word
- *  spaces: the caption's 0.16em tracking applies per character, so a plain
- *  " · " ballooned to ~13px of gap on a 10px font — the items read as
- *  disconnected fragments rather than one line. */
+/** Thin spaces, not word spaces: the caption's 0.16em tracking applies per
+ *  character, so a plain " · " ballooned to ~13px of gap on a 10px font. */
 const SEP = '\u2009·\u2009';
 
-/** The quiet "music nerd" tokens shown under artist/album: genre · BPM · key.
- *  Returned separately from the mood cluster so the latter can carry the accent
- *  colour. Each token is omitted when its field is absent, so an untagged track
- *  yields an empty array and the strip doesn't render at all. */
+/** Genre · BPM · key, kept separate from the mood cluster so that can carry
+ *  the accent colour. An untagged track yields an empty array and the strip
+ *  doesn't render at all. */
 function buildMetaTokens(t: NowPlayingTrack | null): string[] {
   if (!t) return [];
   const tokens: string[] = [];
@@ -39,8 +35,8 @@ function buildMetaTokens(t: NowPlayingTrack | null): string[] {
   return tokens;
 }
 
-/** The mood/energy phrase, e.g. "mellow · low energy". Up to two moods plus the
- *  energy level; empty string when the track carries neither. */
+/** Up to two moods plus the energy level; empty string when the track carries
+ *  neither. */
 function buildMoodPhrase(t: NowPlayingTrack | null): string {
   if (!t) return '';
   const parts: string[] = [];
@@ -49,9 +45,8 @@ function buildMoodPhrase(t: NowPlayingTrack | null): string {
   return parts.join(SEP);
 }
 
-/** The like heart (#991) — one tap stars the on-air track for everyone
- *  listening (and, when the operator enables it, into Navidrome). Renders
- *  nothing when likes are disabled or nothing likeable is on air. */
+/** The like heart (#991). Renders nothing when likes are disabled or nothing
+ *  likeable is on air. */
 function LikeHeart() {
   const { available, liked, pending, count, like } = useTrackLike();
   if (!available) return null;
@@ -89,8 +84,7 @@ export interface CenterStageProps {
   /** Stream confirmed offline (see PlayerApp) — the stage shows an explicit
    *  off-air state instead of a stale "Now playing". */
   offline: boolean;
-  /** Head of the controller's upcoming queue, teased near the end of the
-   *  current track. Null when the queue is empty. */
+  /** Head of the controller's upcoming queue. Null when the queue is empty. */
   upNext: QueueEntry | null;
   onOpenBooth: () => void;
   onOpenTimeline: () => void;
@@ -102,9 +96,8 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
   // only re-renders this subtree — not the whole player (see useElapsed).
   const elapsed = useElapsed(trackStartedAt);
   const has = !!nowPlaying?.title;
-  // Track info is only trustworthy while the stream is up — everything the
-  // stage shows about "now" (title, meta, DJ line, art) gates on `live` so an
-  // outage reads as off-air instead of a frozen now-playing.
+  // Everything the stage shows about "now" gates on `live`, so an outage reads
+  // as off-air instead of a frozen now-playing.
   const live = has && !offline;
   const metaTokens = buildMetaTokens(nowPlaying);
   const moodPhrase = buildMoodPhrase(nowPlaying);
@@ -117,9 +110,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
   // the first-track-arrives transition cross-dissolves the "scanning" line out.
   const titleKey = offline ? 'offline' : has ? `t:${nowPlaying?.title}` : 'placeholder';
 
-  // Clock mode for the caption readout: elapsed (2:31 / 4:05) or remaining
-  // (-1:34 / 4:05). Tapping the readout flips it; persisted like the ticker
-  // preference and hydrated in an effect to avoid an SSR mismatch.
+  // Persisted, and hydrated in an effect to avoid an SSR mismatch.
   const [showRemaining, setShowRemaining] = useState(false);
   useEffect(() => {
     try {
@@ -136,13 +127,10 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
   };
   const remaining = Math.max(0, duration - elapsed);
 
-  // Ripple bursts for ~3s on two signals: every track change (subsonic_id
-  // flip), and every new DJ turn (voice/dj) landing in the feed.
-  // djLineOn is a listener preference for the ticker, not a "talking now"
-  // flag, so it can't gate the ripple.
-  // SessionTurn.t is `string | number | undefined` — ISO timestamps from one
-  // path, unix-ms from another. The value is only ever used as a useEffect
-  // dep (Object.is change detection), so any stable identifier works.
+  // djLineOn is a listener preference for the ticker, not a "talking now" flag,
+  // so it can't gate the ripple. SessionTurn.t is ISO from one path and unix-ms
+  // from another; it's only ever a useEffect dep (Object.is change detection),
+  // so any stable identifier works.
   const latestDjTurnT = useMemo<string | number | null>(() => {
     if (!feed?.length) return null;
     for (let i = feed.length - 1; i >= 0; i--) {
@@ -170,31 +158,21 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
 
   const rippleActive = trackBurst || djBurst;
 
-  // Feed the current cover URL into the CSS `--cover` custom property so the
-  // hover-glitch channel ghosts (globals.css `.v3-cover-*`) can paint copies of
-  // the art. useDynamicStyle keeps this off the lint-forbidden `style` prop.
+  // The hover-glitch ghosts (globals.css `.v3-cover-*`) paint from `--cover`.
+  // useDynamicStyle keeps this off the lint-forbidden `style` prop.
   const coverRef = useRef<HTMLButtonElement>(null);
   useDynamicStyle(coverRef, { '--cover': showArt ? `url("${coverSrc}")` : null });
 
   return (
-    // Bounded region between the header and the waveform band, with the content
-    // centred inside it (justify-center). Previously this was centred in the
-    // whole viewport (top-1/2 -translate-y-[64%]) and grew downward freely, so a
-    // long DJ line — or any line on a short/wide window — spilled over the
-    // bottom-pinned Waveform (issue #576). The bottom reserve clears the
-    // compact waveform (top ≈ 206px from bottom); on tall desktop windows the
-    // waveform grows to its full band, so the reserve grows to match it.
-    // On short/wide windows the content bottom-aligns instead: centring left
-    // the vertical slack as a dead gap between the track info and the band, and
-    // anchoring the bottom edge means long DJ lines grow upward, never over the
-    // waveform. The reserve drops to 212px there to hug the raised 208px band.
-    // The right reserve tracks the DotRail width: slimmed on phones (see
-    // DotRail's <sm sizing) so the title/DJ-line column keeps ~20px more of a
-    // 375px screen, full 96px from sm up.
+    // A bounded region rather than a viewport-centred block: centred in the
+    // viewport it grew downward freely and a long DJ line spilled over the
+    // bottom-pinned Waveform (issue #576). The bottom reserve tracks whichever
+    // waveform shape that breakpoint renders. Short/wide windows bottom-align
+    // so long DJ lines grow upward, never over the band. The right reserve
+    // tracks the DotRail width (slimmed on phones, see DotRail's <sm sizing).
     <div className="absolute top-[72px] right-[80px] bottom-[220px] left-4 flex flex-col items-start justify-center sm:right-24 sm:left-8 [@media(min-width:640px)_and_(max-height:759px)]:bottom-[212px] [@media(min-width:640px)_and_(max-height:759px)]:justify-end [@media(min-width:640px)_and_(min-height:760px)]:bottom-[300px]">
       <div className="isolate flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6">
-        {/* Always rendered — a track without artwork (or an off-air stage) gets
-            the disc-mark placeholder instead of collapsing the slot and jumping
+        {/* Always rendered: without artwork the slot would collapse and jump
             the text column left (see .v3-cover-placeholder). */}
         <button
           ref={coverRef}
@@ -202,15 +180,11 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
           onClick={onOpenTimeline}
           aria-label="Open the timeline"
           className={cn(
-            // Art sizes to width but is capped by viewport height (20vh) so a
+            // Sized to width but capped by viewport height (20vh) so a
             // short/wide window doesn't spend a third of its height on the
-            // cover; roomy viewports resolve to 14vw (a 1440p desktop gets
-            // ~220px, the 240px ceiling only binds on very large displays).
-            // The 96px floor is what phones get (14vw is only ~55px on a
-            // 390px screen — too small a target for the tap-to-timeline it
-            // carries).
+            // cover. The 96px floor is what phones get: 14vw is only ~55px on a
+            // 390px screen, too small a target for the tap-to-timeline.
             'v3-cover-frame v3-focus relative h-[clamp(96px,min(14vw,20vh),240px)] w-[clamp(96px,min(14vw,20vh),240px)] shrink-0 appearance-none border-0 bg-transparent p-0',
-            // Glitch the art in sync with the ripple waves — track change + DJ speaking.
             rippleActive && 'v3-cover-live',
           )}
         >
@@ -221,9 +195,9 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
             numCircles={6}
             className="-inset-[220px] -z-10"
           />
-          <div className="v3-cover-glitch relative h-full w-full overflow-hidden rounded-sm border border-muted">
-            {/* Placeholder sits under the art, so a failed image load (the img
-                hides itself onError) falls back to it too. */}
+          <div className="v3-cover-glitch relative h-full w-full overflow-hidden rounded-sm border border-line">
+            {/* Sits under the art, so a failed image load (the img hides itself
+                onError) falls back to it too. */}
             <span className="v3-cover-placeholder" aria-hidden="true" />
             {showArt && (
               <AnimatePresence mode="popLayout" initial={false}>
@@ -257,8 +231,6 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                 {live && duration > 0 ? (
                   <>
                     {' — '}
-                    {/* Tap the readout to flip elapsed ↔ remaining — radio time
-                        is mostly "how long until the next thing happens". */}
                     <button
                       type="button"
                       onClick={toggleClock}
@@ -313,7 +285,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                     <div className="v3-caption mt-[10px] text-muted">
                       {metaTokens.join(SEP)}
                       {moodPhrase && (
-                        <span className="text-vermilion">
+                        <span className="text-accent-2">
                           {metaTokens.length > 0 ? SEP : ''}↳ {moodPhrase}
                         </span>
                       )}
@@ -335,9 +307,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
         <DjThinkingLine feed={feed} enabled={djLineOn} currentTrackId={subsonicId} buddyOn={boothBuddyOn} onOpenBooth={onOpenBooth} />
       )}
 
-      {/* "Up next" tease — the queue head, fading in for the last stretch of
-          the current track like a real radio board. Needs a known duration to
-          time the window; taps through to the Timeline drawer. */}
+      {/* Needs a known duration to time the window. */}
       <AnimatePresence>
         {live && upNext?.title && duration > 0 && remaining <= UP_NEXT_WINDOW_S && (
           <m.button
@@ -350,7 +320,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
             exit={{ opacity: 0 }}
             className="v3-caption v3-focus mt-[10px] max-w-full cursor-pointer truncate border-0 bg-transparent p-0 text-left text-muted"
           >
-            <span className="text-vermilion">↦ up next</span>
+            <span className="text-accent-2">↦ up next</span>
             {' · '}
             <span className="text-ink">{upNext.title}</span>
             {upNext.artist ? ` — ${upNext.artist}` : ''}

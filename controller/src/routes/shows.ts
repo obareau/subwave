@@ -65,6 +65,7 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
     genres: cs.genres,
     eras: cs.eras,
     energies: cs.energies,
+    vocals: cs.vocals,
     filtersStrict: cs.filtersStrict,
     maxTrackSeconds: cs.maxTrackSeconds,
     playlistIds: [],

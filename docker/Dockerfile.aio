@@ -1,31 +1,15 @@
-# SUB/WAVE all-in-one image — the entire stack in a single container.
+# SUB/WAVE all-in-one image — the entire stack in one container, supervised by
+# docker/aio/supervisor.sh behind a loopback Caddy on :80. Exists because
+# Unraid's Community Applications catalogue is one container per template (also
+# handy for Synology / plain-VPS `docker run`). The split-stack images remain
+# the canonical deployment; nothing here forks app behaviour — internal URLs
+# are just repointed at loopback.
 #
-# Why this exists: Unraid's Community Applications catalogue is strictly one
-# container per template, so the five-service compose stack can't be listed
-# there directly. This image collapses icecast2 + liquidsoap (broadcast), the
-# controller, the Next.js web UI, and Caddy into one container supervised by
-# docker/aio/supervisor.sh, exposing a single port (80, fronted by Caddy). It's
-# also handy anywhere you'd rather run `docker run` once than orchestrate five
-# services (Synology, a plain VPS, Portainer one-shot).
-#
-# The split-stack images (subwave-{caddy,broadcast,controller,web}) remain the
-# canonical deployment. This is an additional packaging of the same source —
-# nothing here forks app behaviour; it only repoints internal URLs at loopback
-# (see docker/aio/supervisor.sh) and bakes in a loopback Caddyfile.
-#
-# NOT bundled (to keep the image lean): the optional tts-heavy engines
-# (Chatterbox / PocketTTS) and the docker-socket-proxy Stats panel. Both degrade
-# gracefully — TTS falls back to the bundled Piper voice, the Stats system panel
-# simply hides. Piper + Kokoro are included, so the DJ has a natural voice.
-#
-# Bundled by default: the lean acoustic analyzer (librosa — bpm/key/intro/
-# loudness). In the split stack it's a separate `analyzer` sidecar; the AIO is
-# one container with no sidecars, so it bakes the venv in and runs it via the
-# controller's in-process local backend (ANALYZE_PYTHON). The heavy CLAP
-# "sounds-like" + Demucs vocal stack is OFF here (kept lean/small); CI publishes
-# a `subwave-aio-heavy` tag (WITH_CLAP=1 WITH_DEMUCS=1) for operators who want it,
-# and a `subwave-aio-cuda` tag (+ WITH_CUDA=1) that runs that same heavy stack on
-# an NVIDIA GPU — see the analyzer block below and docs/unraid.md.
+# NOT bundled (kept lean): tts-heavy engines and the docker-socket-proxy Stats
+# panel — both degrade gracefully. Bundled: Piper + Kokoro TTS and the lean
+# acoustic analyzer as an in-process venv (ANALYZE_PYTHON; no sidecars here).
+# CI also publishes `subwave-aio-heavy` (WITH_CLAP=1 WITH_DEMUCS=1) and
+# `subwave-aio-cuda` (+ WITH_CUDA=1) — see docs/unraid.md.
 
 # ---- web build: Next.js standalone (mirrors web/Dockerfile) ----------------
 FROM node:22-bookworm-slim AS webbuild
@@ -34,15 +18,10 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
 ENV NEXT_TELEMETRY_DISABLED=1
-# The routes that emit absolute URLs (robots, sitemap, canonicals, OG cards)
-# all render per-request and read the RUNTIME SITE_URL env (inherited by the
-# web server via the supervisor), so a generic image works for any domain.
-# This build arg is belt-and-suspenders for source builds only.
+# Source builds only — absolute URLs render per-request off the RUNTIME env.
 ARG SITE_URL
 ENV SITE_URL=${SITE_URL}
-# Admin-console footer version, inlined into the web bundle at build time. See
-# web/next.config.js. Set from `git describe` by the publish-images CI; unset →
-# falls back to web/package.json.
+# Admin footer version, inlined at build time (web/next.config.js).
 ARG SUBWAVE_BUILD_VERSION
 ENV SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 RUN npm run build
@@ -53,24 +32,17 @@ FROM caddy:2 AS caddybin
 # ---- node binary: lift Node 22 from the official image ----------------------
 FROM node:22-bookworm-slim AS nodebin
 
-# ---- final: everything under the liquidsoap (Debian bookworm) base ----------
-# v2.4.5 minimum — same reason as Dockerfile.broadcast: 2.4.4's O(n) clock
-# scan made the per-transition DJ effect chains stall the stream clock.
+# ---- final: everything under the liquidsoap (Debian) base -------------------
+# v2.4.5 minimum — same reason as Dockerfile.broadcast (2.4.4's O(n) clock scan
+# stalled the stream at every DJ-effect crossfade).
 FROM savonet/liquidsoap:v2.4.5
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System packages:
-#  - icecast2: the broadcast server (apt also creates the icecast2 user)
-#  - sudo: lets the supervisor drop privileges to icecast2 / liquidsoap
-#  - openssl: first-boot icecast secret generation
-#  - curl/ca-certificates: liquidsoap's HTTPS Subsonic fetch + health probes
-#  - iputils-ping: `ping` for in-container network debugging (self-host request)
-#  - espeak-ng/libsndfile1: Kokoro phonemisation + audio I/O
-#  - ffmpeg: jingle/SFX transcode on import (audio/audio-import.ts)
-#  - python3/python3-venv: the Kokoro worker venv
-#  - wget/tar/xz-utils: Piper + Kokoro model/binary pulls
+# icecast2 + sudo/openssl/curl: broadcast pair. espeak-ng/libsndfile1: Kokoro.
+# ffmpeg: jingle/SFX import transcode. python3/venv + wget/tar/xz-utils: the
+# TTS/analyzer venvs and model pulls. iputils-ping: in-container debugging.
 RUN apt-get update -qq \
  && apt-get install -y --no-install-recommends \
         icecast2 sudo openssl curl ca-certificates \
@@ -80,10 +52,9 @@ RUN apt-get update -qq \
         wget tar xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
-# Node.js 22 — runs both the controller (tsx) and the web server. Lifted from
-# the official image (same bookworm libc as this base) rather than installed
-# from NodeSource's apt repo: deb.nodesource.com serves per-IP 403s from its
-# CDN (nodesource/distributions#1844) and took out the v1.1.0 publish run.
+# Node.js 22 — lifted from the official image (same bookworm libc) rather than
+# NodeSource's apt repo, whose CDN serves per-IP 403s
+# (nodesource/distributions#1844) and took out the v1.1.0 publish run.
 COPY --from=nodebin /usr/local/bin/node /usr/local/bin/node
 COPY --from=nodebin /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=nodebin /usr/local/include/node /usr/local/include/node
@@ -96,7 +67,7 @@ COPY --from=caddybin /usr/bin/caddy /usr/local/bin/caddy
 ARG WGET_RETRY="--tries=5 --retry-connrefused --waitretry=10 --timeout=60 --retry-on-http-error=429,500,502,503,504"
 
 # --- Piper (default TTS, ~30ms/word) ---------------------------------------
-# TARGETARCH is set by buildx; empty on a plain `docker build` → treat as amd64.
+# TARGETARCH comes from buildx; empty on plain `docker build` → amd64.
 ARG PIPER_VERSION=2023.11.14-2
 ARG TARGETARCH
 RUN cd /tmp && \
@@ -116,15 +87,11 @@ RUN mkdir -p /opt/piper/voices && \
       https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json
 
 # --- Kokoro (optional second TTS, more natural) ----------------------------
-# kokoro_worker.py imports misaki unconditionally, and kokoro-onnx 0.5.0 pairs
-# with misaki 0.9.4 (the controller image's validated combo). But misaki 0.9.4
-# requires Python <3.13, while this base (liquidsoap/Debian trixie) ships 3.13 —
-# so, unlike the controller (bookworm/py3.11), the system python3 can't build
-# the kokoro venv (misaki 0.9.4 has no 3.13 wheel and pip resolves nothing).
-# Provision a standalone CPython 3.12 via uv for THIS venv only; the analyzer
-# venv below stays on the system python3. The final import mirrors the worker's
-# import block, so a broken combo fails the build instead of silently falling
-# back to Piper at runtime.
+# misaki 0.9.4 (kokoro-onnx 0.5.0's validated pair) requires Python <3.13, but
+# this base (Debian trixie) ships 3.13 — so provision a standalone CPython 3.12
+# via uv for THIS venv only (the analyzer venv stays on system python3). The
+# import check mirrors the worker's import block so a broken combo fails the
+# build instead of silently falling back to Piper at runtime.
 COPY --from=ghcr.io/astral-sh/uv:0.11.27 /uv /usr/local/bin/uv
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN uv venv --python 3.12 /opt/kokoro/venv && \
@@ -141,46 +108,21 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
     KOKORO_PYTHON=/opt/kokoro/venv/bin/python
 
 # --- Acoustic analyzer (librosa + optional CLAP + Demucs) -------------------
-# The controller's analyze pass (bpm/key/intro/loudness, "sounds-like" CLAP
-# embeddings, Demucs vocal ranges) runs librosa, which isn't in the base
-# controller image — the split stack ships it as the separate `analyzer`
-# sidecar. The AIO has no sidecars, so we bake the same venv in and point the
-# controller at it via ANALYZE_PYTHON (music/analyzer.ts's local backend). The
-# analyze_worker.py copied with controller/scripts below is the single source of
-# truth; ffmpeg + libsndfile1 (installed above) give librosa codec coverage.
+# The split stack's `analyzer` sidecar, baked in as a venv and run via the
+# controller's local backend (ANALYZE_PYTHON). analyze_worker.py (copied with
+# controller/scripts below) is the single source of truth.
 #
-# CLAP ("sounds-like") + Demucs (vocal ranges) are the heavy tier — they add a
-# shared CPU-torch stack (~900MB on top of the lean venv) and are **OFF by
-# default**, so the default `subwave-aio` image stays lean (bpm/key/intro/
-# loudness only). CI also publishes a `subwave-aio-heavy`
-# tag built with WITH_CLAP=1 WITH_DEMUCS=1 — Unraid one-click users who want the
-# extra dimensions repoint their container at that tag. When on, both lazy-load
-# their weights the first time the admin toggles them during a rescan (into
-# HF_HOME, under the persisted state dir).
+# CLAP + Demucs are OFF by default (lean image); `subwave-aio-heavy` bakes
+# them, and `subwave-aio-cuda` (#1186) adds cu124 torch — WITH_CUDA implies the
+# heavy tier (CUDA torch alone would be dead weight), and the worker still
+# picks the device itself (ANALYZE_DEVICE=auto), so it degrades to CPU on a
+# driverless host. Host needs only the NVIDIA driver + container runtime; on
+# Unraid see docs/unraid.md.
 #
-# Version pins mirror the analyzer venv in docker/Dockerfile.analyzer — keep the
-# two in lockstep (same wheels, reproducible rebuilds). torch/torchaudio are held
-# at 2.6.0 repo-wide; WITH_CUDA only switches which 2.6.0 BUILD is installed —
-# the cpu wheel index (default) or cu124.
-#
-# WITH_CUDA=1 is the `subwave-aio-cuda` flavour (#1186): heavy + NVIDIA GPU, for
-# operators who run the one-click container on a box with a card and want CLAP +
-# Demucs off the CPU. It implies the heavy tier (CUDA torch with no CLAP/Demucs
-# would be several GB of dead weight), so CI builds it WITH_CLAP=1 WITH_DEMUCS=1.
-# The cu124 wheels vendor the CUDA runtime as nvidia-*-cu12 pip deps, so the base
-# image stays as-is and the host needs only the NVIDIA driver + container runtime
-# (on Unraid: the Nvidia Driver plugin, plus `--runtime=nvidia` and
-# NVIDIA_VISIBLE_DEVICES in the container's extra parameters — see docs/unraid.md).
-# Nothing else changes: analyze_worker.py picks the device itself (ANALYZE_DEVICE
-# defaults to auto — cuda when torch sees a GPU, else cpu with a logged warning),
-# so this image degrades to CPU on a driverless host rather than failing. It is
-# several GB larger than -heavy; the split stack's equivalent is the
-# subwave-analyzer-cuda image via the docker-compose.analyzer-gpu.yml overlay.
-#
-# NOTE: the analyzer venv runs on this base's system python3 (liquidsoap/Debian
-# trixie → 3.13, unlike Dockerfile.analyzer's python:3.11-slim). torch 2.6.0
-# publishes cp313 wheels on both the cpu and cu124 indexes, so the shared pin
-# holds on either side of the switch.
+# Pins mirror docker/Dockerfile.analyzer — keep the two in lockstep. This venv
+# runs on the system python3 (trixie → 3.13, unlike the analyzer image's 3.11);
+# torch 2.6.0 publishes cp313 wheels on both the cpu and cu124 indexes, so the
+# shared pin holds.
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ARG WITH_CUDA=0
@@ -190,10 +132,8 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
     if [ "$WITH_CLAP" = "1" ]; then \
-      # onnxruntime stays the CPU build even under WITH_CUDA: the ONNX path is
-      # the optional CLAP_MODEL_PATH custom-export route, and onnxruntime-gpu
-      # drags in a fragile CUDA/cuDNN version matrix. The default transformers
-      # path is what runs on the GPU.
+      # onnxruntime stays the CPU build even under WITH_CUDA — see
+      # docker/Dockerfile.analyzer.
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
@@ -201,12 +141,9 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
-      # diffq: decompressor for demucs' quantized checkpoints (mdx_q, …). Tiny,
-      # but without it a DEMUCS_MODEL=*_q override makes demucs fatal() at load.
-      # It ships sdist-only (Cython ext), so lend it gcc + Python headers for the
-      # install and purge in the SAME layer — the lean image never pays for any
-      # of this. Unlike the analyzer image (python:3.11-slim ships headers), this
-      # base's apt python3 has none, so python3-dev is required for Python.h.
+      # diffq (quantized-checkpoint decompressor) ships sdist-only: lend it a
+      # toolchain and purge in the SAME layer. Unlike the analyzer image, this
+      # base's apt python3 has no headers — python3-dev supplies Python.h.
       apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev python3-dev && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
@@ -216,22 +153,17 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       apt-get purge -y gcc libc6-dev python3-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
-# ANALYZE_PYTHON flips on the controller's local analyze backend; HF_HOME points
-# CLAP/Demucs weight downloads at the persisted state dir so they survive
-# recreates. ANALYZE_WORKER defaults to /app/scripts/analyze_worker.py (copied
-# below), so it needs no override here.
+# ANALYZE_PYTHON flips on the controller's local analyze backend; HF_HOME puts
+# CLAP/Demucs weights under the persisted state dir so they survive recreates.
+# ANALYZE_WORKER defaults to /app/scripts/analyze_worker.py (copied below).
 ENV ANALYZE_PYTHON=/opt/analyzer/venv/bin/python \
     HF_HOME=/var/sub-wave/hf-cache
 
 # --- Controller app ---------------------------------------------------------
 WORKDIR /app
 # .npmrc carries `legacy-peer-deps=true` (OpenRouter provider still declares a
-# stale `peer ai@^6` after the AI SDK v7 upgrade); it must land before install
-# or npm hits ERESOLVE.
+# stale `peer ai@^6`); it must land before install or npm hits ERESOLVE.
 COPY controller/package*.json controller/.npmrc ./
-# npm ci (not install): controller ships a package-lock.json, so ci gives a
-# reproducible, lockfile-exact install. The package*.json glob above already
-# brings the lockfile in before this runs.
 RUN npm ci --omit=dev
 COPY controller/src ./src
 COPY controller/scripts ./scripts
@@ -241,8 +173,8 @@ COPY controller/scripts ./scripts
 COPY --from=webbuild /web/.next/standalone /web
 COPY --from=webbuild /web/.next/static /web/.next/static
 COPY --from=webbuild /web/public /web/public
-# The /news routes (and the sitemap) render per-request, so the dispatch
-# markdown is read at runtime — the standalone trace doesn't include it.
+# /news + sitemap read the dispatch markdown at runtime — the standalone trace
+# doesn't include it.
 COPY --from=webbuild /web/content /web/content
 
 # --- Broadcast + edge config + bundled audio --------------------------------
@@ -257,16 +189,15 @@ RUN chmod +x /usr/local/bin/subwave-supervisor
 RUN mkdir -p /var/sub-wave && chmod 777 /var/sub-wave
 
 # Re-declared for the final stage (ARGs don't cross stage boundaries) so the
-# controller process reports the same version (backup manifest) as the web
-# build above. Same source as the webbuild-stage arg.
+# controller reports the same version as the web build above.
 ARG SUBWAVE_BUILD_VERSION
 ENV NODE_ENV=production \
     STATE_DIR=/var/sub-wave \
     SOUNDS_DIR=/sounds \
     SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 
-# Single public port: Caddy on :80. Health = the controller's liveness via the
-# edge, which only answers once web + controller are both up.
+# Single public port: Caddy on :80. Health = controller liveness via the edge,
+# which only answers once web + controller are both up.
 EXPOSE 80
 HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=6 \
     CMD curl -fsS http://localhost:80/api/health > /dev/null || exit 1

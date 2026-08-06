@@ -1,16 +1,10 @@
 'use client';
 
-/* Admin Stats page — the station's rollup + trend dashboard.
-
-   Two data sources, two cadences:
+/* Admin Stats page. Two data sources, two cadences:
    - GET /stats (5s) aggregates the in-memory LLM / TTS / DJ-log / request rings
-     (since boot, lost on restart by design — the raw per-call lists live on
-     /debug, and the per-request trace lives on the Dash).
+     (since boot, lost on restart by design).
    - GET /listeners (30s) returns the durable listener time-series persisted to
-     state/listeners.jsonl (24h–7d), drawn as the Audience trend chart.
-
-   The Dash is the live ops console (3s now-playing, live connections, per-request
-   review); this page is the aggregate/trend complement. */
+     state/listeners.jsonl (24h–7d), drawn as the Audience trend chart. */
 
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
@@ -27,8 +21,6 @@ import {
   groupConnectionsByDevice,
   type HourBucket,
 } from '../../lib/audienceStats';
-
-// --- types --------------------------------------------------------------
 
 interface LatencyStats {
   avg?: number;
@@ -178,10 +170,9 @@ interface AudienceResponse {
   error?: string;
 }
 
-// GET /listeners/connections — live per-listener detail from Icecast's admin
-// feed (already deduped one-row-per-listener by the server). `error` is set on
-// a 502 (Icecast admin unreachable) so the UI distinguishes "nobody connected"
-// (empty list) from "couldn't read the live detail".
+// Already deduped one-row-per-listener by the server. `error` is set on a 502
+// (Icecast admin unreachable) so the UI can tell "nobody connected" from
+// "couldn't read the live detail".
 interface ConnectionsResponse {
   count?: number;
   connections?: ListenerConnection[];
@@ -214,8 +205,6 @@ interface SystemResponse {
   error?: string;
 }
 
-// --- formatters ---------------------------------------------------------
-
 const fmtInt = (n: number | null | undefined): string =>
   n == null ? '—' : Number(n).toLocaleString('en-GB');
 
@@ -246,8 +235,6 @@ const fmtBytes = (n: number | null | undefined): string => {
   if (n >= 1024) return `${Math.round(n / 1024)} KB`;
   return `${n} B`;
 };
-
-// --- small building blocks ---------------------------------------------
 
 interface StatCellProps {
   label: ReactNode;
@@ -285,10 +272,8 @@ function MetricStrip({ children }: MetricStripProps) {
   const ref = useRef<HTMLDivElement>(null);
   useDynamicStyle(ref, { gridTemplateColumns: `repeat(${count}, 1fr)` });
   // `.strip-mobile` reflows to 2 columns under 640px, but StatCell divides with
-  // a RIGHT rule while that helper only clears LEFT ones — so the cell ending
-  // each mobile row left a divider dangling against the card edge. Drop it on
-  // the even (right-hand) cells and restore it from sm: up, skipping the last
-  // cell, which never carries a rule to begin with. Desktop is unchanged.
+  // a RIGHT rule while that helper only clears LEFT ones, so the cell ending
+  // each mobile row left a divider dangling against the card edge.
   return (
     <div
       ref={ref}
@@ -330,11 +315,9 @@ function Table<R>({ cols, rows, empty }: TableProps<R>) {
   if (!rows?.length) {
     return <span className="field-hint italic">{empty}</span>;
   }
-  // The wrapper only becomes a scroll container below sm:. A wide breakdown
-  // (five nowrap columns, long model ids) then scrolls sideways inside the card
-  // instead of clipping. From sm: up overflow-x is `visible` again, which keeps
-  // the card free of a scrollport — that matters because <thead> is sticky and
-  // would otherwise resolve against this div instead of the ScrollBox viewport.
+  // The wrapper is only a scroll container below sm:. From sm: up overflow-x
+  // must stay `visible`, because the sticky <thead> would otherwise resolve
+  // against this div instead of the ScrollBox viewport.
   return (
     <div className="w-full overflow-x-auto sm:overflow-x-visible">
       <table className="w-full border-collapse">
@@ -380,9 +363,7 @@ function Table<R>({ cols, rows, empty }: TableProps<R>) {
   );
 }
 
-// Horizontal bar list — a label, a proportional bar, a trailing figure. Used
-// for the DJ-activity and request-by-path breakdowns. `max` anchors the widest
-// bar to 100%.
+// `max` anchors the widest bar to 100%.
 interface BarRow {
   label: string;
   count: number;
@@ -393,9 +374,8 @@ function BarList({ rows, max }: { rows: BarRow[]; max: number }) {
   return (
     <div className="grid gap-1.5">
       {rows.map(r => (
-        // The label column gives up 22px on a phone so the bar and its
-        // trailing figure (which can read "3 · 5m · up to 41m") still fit on
-        // one line inside a 390px card.
+        // The label column gives up 22px on a phone so the bar and its trailing
+        // figure still fit on one line inside a 390px card.
         <div key={r.label} className="flex items-center gap-2.5 text-[12px]">
           <span className="w-[88px] shrink-0 truncate text-muted sm:w-[110px]" title={r.label}>
             {r.label}
@@ -408,23 +388,16 @@ function BarList({ rows, max }: { rows: BarRow[]; max: number }) {
   );
 }
 
-// Caps a breakdown list/table to a scrollable area so a long tail (e.g. 40
-// referrers or countries) can't stretch the card down the page. Short lists are
-// untouched — the scrollbar only appears once content exceeds the cap. Tables
-// wrapped here keep their header visible via the sticky <thead> in <Table>
-// (sticky resolves against the ScrollArea viewport).
+// Caps a breakdown to a scrollable area so a long tail can't stretch the card
+// down the page. Tables wrapped here keep their header visible via the sticky
+// <thead> in <Table>, which resolves against the ScrollArea viewport.
 function ScrollBox({ children }: { children: ReactNode }) {
   return <ScrollArea className="max-h-[260px]">{children}</ScrollArea>;
 }
 
-// --- listener trend chart ----------------------------------------------
-
-// Hand-rolled SVG area chart for the listener time-series — same no-dependency
-// house style as the StationHeader gauge and the Wave bars. The viewBox is a
-// fixed 100×100 unit box stretched to the container (preserveAspectRatio=none);
-// strokes use vector-effect=non-scaling-stroke so they stay an even width
-// regardless of the stretch. Labels live in the metric strip below, not in the
-// SVG, so nothing gets distorted by the stretch.
+// Hand-rolled SVG area chart. The viewBox is a fixed 100×100 unit box stretched
+// to the container (preserveAspectRatio=none), so strokes need
+// vector-effect=non-scaling-stroke and labels stay out of the SVG.
 function ListenerChart({ samples }: { samples: ListenerSample[] }) {
   if (!samples || samples.length < 2) {
     return (
@@ -460,10 +433,10 @@ function ListenerChart({ samples }: { samples: ListenerSample[] }) {
           y1={peakY}
           x2={W}
           y2={peakY}
-          stroke="var(--ink)"
+          stroke="var(--accent-2)"
           strokeWidth={1}
           strokeDasharray="2 3"
-          opacity={0.18}
+          opacity={0.55}
           vectorEffect="non-scaling-stroke"
         />
       )}
@@ -481,11 +454,8 @@ function ListenerChart({ samples }: { samples: ListenerSample[] }) {
   );
 }
 
-// --- hour-of-day histogram ---------------------------------------------
-
-// One vertical bar in the hour-of-day chart. Height is dynamic (per-hour), so
-// it goes through useDynamicStyle rather than an inline style prop (see the
-// hook — the strict lint rule forbids `style={…}`).
+// Height is per-hour dynamic, so it goes through useDynamicStyle — the lint
+// rule forbids `style={…}`.
 function HourColumn({ frac, title }: { frac: number; title: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   useDynamicStyle(ref, { height: `${Math.max(2, Math.round(frac * 100))}%` });
@@ -496,10 +466,8 @@ function HourColumn({ frac, title }: { frac: number; title: string }) {
   );
 }
 
-// 24-bar histogram of average listeners by local hour-of-day — "when is the
-// station busiest?". Bars are anchored to the busiest hour's average. Same
-// no-dependency house style as ListenerChart; the axis labels a few anchor
-// hours rather than all 24 to stay legible.
+// Average listeners by local hour-of-day, anchored to the busiest hour's
+// average. The axis labels a few anchor hours rather than all 24 to stay legible.
 function HourOfDayChart({ buckets }: { buckets: HourBucket[] }) {
   const hasData = buckets.some(b => b.samples > 0);
   if (!hasData) {
@@ -542,8 +510,6 @@ const RANGE_OPTIONS = [
   { id: '10080', label: '7d' },
 ];
 
-// --- panel --------------------------------------------------------------
-
 export default function StatsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [data, setData] = useState<StatsResponse | null>(null);
@@ -585,9 +551,9 @@ export default function StatsPanel() {
     return () => { cancelled = true; clearInterval(id); };
   }, [paused, needsAuth, hydrated, adminFetch]);
 
-  // /listeners — durable time-series for the Audience chart, 30s (heavier: it
-  // reads the JSONL history file, and the series moves slowly). Soft-fails: a
-  // miss leaves the last reading in place rather than erroring the page.
+  // /listeners — durable time-series for the Audience chart, 30s (it reads the
+  // JSONL history file and moves slowly). Soft-fails: a miss leaves the last
+  // reading in place rather than erroring the page.
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     let cancelled = false;
@@ -634,10 +600,9 @@ export default function StatsPanel() {
     return () => { cancelled = true; clearInterval(id); };
   }, [paused, needsAuth, hydrated, adminFetch, range]);
 
-  // /listeners/connections — live per-listener device + connected-for detail
-  // from Icecast's admin feed, 30s. Range-independent ("connected right now").
-  // A 502 (Icecast admin unreachable) is stored as an error rather than dropped,
-  // so the card can say "live detail unavailable" instead of silently blanking.
+  // /listeners/connections — 30s, range-independent ("connected right now").
+  // A 502 is stored as an error rather than dropped, so the card can say "live
+  // detail unavailable" instead of silently blanking.
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     let cancelled = false;
@@ -663,8 +628,7 @@ export default function StatsPanel() {
   }, [paused, needsAuth, hydrated, adminFetch]);
 
   // /system — per-container CPU/memory, 30s (it samples the Docker stats stream
-  // for ~1s per container, so it's heavier than /stats). Soft-fails like the
-  // others. Range-independent — always "right now".
+  // for ~1s per container). Soft-fails; range-independent.
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     let cancelled = false;
@@ -692,7 +656,6 @@ export default function StatsPanel() {
   const djLog = data?.djLog;
   const requests = data?.requests;
 
-  // Audience figures derived from the listener series + the live count.
   const samples = listeners?.samples ?? [];
   const counts = samples.map(s => s.count);
   const lNow = listeners?.current ?? null;
@@ -701,16 +664,14 @@ export default function StatsPanel() {
   const lAvg = counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : null;
   const rangeLabel = range === '10080' ? '7d' : '24h';
 
-  // Hour-of-day histogram, derived from the same listener series as the trend
-  // chart (respects the 24h/7d range toggle). Local time — labeled as such.
+  // Same listener series as the trend chart, so it respects the range toggle.
+  // Local time.
   const hourBuckets = bucketSamplesByHour(samples);
 
-  // Audience-source rollup (referrers / countries / distinct sessions).
   const audSessions = audience?.sessions ?? null;
   const audReferrers = audience?.referrers ?? [];
   const audCountries = audience?.countries ?? [];
 
-  // Live "connected now" device breakdown, from the Icecast admin feed.
   const connErr = connections?.error ?? null;
   const connList = connections?.connections ?? [];
   const connCount = connections?.count ?? connList.length;
@@ -719,13 +680,11 @@ export default function StatsPanel() {
     ? connList.reduce((a, c) => a + (c.connectedSeconds > 0 ? c.connectedSeconds : 0), 0) / connList.length
     : 0;
 
-  // System resources (container CPU/mem + host totals).
   const sysHost = systemRes?.host ?? null;
   const sysContainers = systemRes?.containers ?? [];
 
   return (
     <div className="grid gap-4">
-      {/* ── HEADER ──────────────────────────────────────────────────────── */}
       <section className="card">
         <div className="flex flex-wrap items-center gap-4 p-3.5">
           <Eyebrow className={err ? 'text-[var(--danger)]' : 'text-vermilion'}>
@@ -743,7 +702,6 @@ export default function StatsPanel() {
 
       {err && <ErrorState error={err} />}
 
-      {/* ── AUDIENCE ────────────────────────────────────────────────────── */}
       <Card
         title="Audience"
         sub={`listeners over the last ${rangeLabel}`}
@@ -781,17 +739,14 @@ export default function StatsPanel() {
         </div>
       </Card>
 
-      {/* ── AUDIENCE SOURCES ─────────────────────────────────────────────── */}
       <Card
         title="Audience sources"
         sub={`where listeners came from · last ${rangeLabel}`}
       >
         <div className="grid gap-0">
-          {/* Connected now — live device + listen time from Icecast's admin
-              feed. Rendered independently of the durable beacon rollup below, so
-              it still shows on a fresh boot with zero recorded beacon sessions.
-              No IPs here (unlike the Dash) — device class + counts + durations
-              only. */}
+          {/* Rendered independently of the durable beacon rollup below, so it
+              still shows on a fresh boot with zero recorded sessions. No IPs
+              here (unlike the Dash), only device class, counts and durations. */}
           <div className="border-b border-separator-strong p-3.5">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
               <span className="caption">connected now · by device</span>
@@ -825,8 +780,6 @@ export default function StatsPanel() {
             )}
           </div>
 
-          {/* Durable referral / geo rollup from the first-load beacon, over the
-              selected range. */}
           {audience == null ? (
             <div className="p-3.5">
               <Skeleton className="h-4 w-16" />
@@ -887,7 +840,6 @@ export default function StatsPanel() {
 
       {data && llm && tts && djLog && requests && (
         <>
-          {/* ── LLM USAGE ─────────────────────────────────────────────── */}
           <Card
             title="LLM usage"
             sub={`last ${llm.window} model calls`}
@@ -900,9 +852,8 @@ export default function StatsPanel() {
               ) : null
             }
           >
-            {/* Daily token budget — durable per-UTC-day tally (seeded from the
-                event log), shown regardless of the since-boot call count above,
-                and only when a cap is set. */}
+            {/* Durable per-UTC-day tally, so it shows regardless of the
+                since-boot call count above, and only when a cap is set. */}
             {llm.budget?.enabled && (
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-separator-strong p-3.5">
                 <span className="caption">
@@ -983,7 +934,6 @@ export default function StatsPanel() {
             )}
           </Card>
 
-          {/* ── TTS USAGE ─────────────────────────────────────────────── */}
           <Card title="Voice / TTS usage" sub={`last ${tts.window} spoken segments`}>
             {tts.count === 0 ? (
               <span className="field-hint italic">
@@ -1040,7 +990,6 @@ export default function StatsPanel() {
             )}
           </Card>
 
-          {/* ── REQUESTS ──────────────────────────────────────────────── */}
           <Card
             title="Requests"
             sub={`last ${requests.window} listener requests · full trace on the Dash`}
@@ -1112,7 +1061,6 @@ export default function StatsPanel() {
             )}
           </Card>
 
-          {/* ── DJ ACTIVITY ───────────────────────────────────────────── */}
           <Card title="DJ activity" sub={`${djLog.count} log events by kind`}>
             {!djLog.byKind.length ? (
               <span className="field-hint italic">
@@ -1130,7 +1078,6 @@ export default function StatsPanel() {
         </>
       )}
 
-      {/* ── SYSTEM RESOURCES ──────────────────────────────────────────── */}
       <Card
         title="System resources"
         sub="CPU + memory for the SUB/WAVE containers on this host"

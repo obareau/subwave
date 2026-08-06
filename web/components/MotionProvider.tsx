@@ -7,16 +7,15 @@ interface MotionProviderProps {
   children: ReactNode;
 }
 
-// Single root motion provider for the whole app.
+// Single root motion provider.
 //
-// LazyMotion + domAnimation keeps the bundle to ~12 kB gzip vs ~30 kB for the
-// full motion features. `strict` forbids the non-lazy <motion.div> import so
-// nobody accidentally pulls in the full bundle later — use <m.div> instead.
+// LazyMotion + domAnimation keeps the bundle to ~12 kB gzip vs ~30 kB for full
+// motion. `strict` forbids the non-lazy <motion.div> import so nobody pulls in
+// the full bundle later — use <m.div>.
 //
-// reducedMotion="user" honors the OS preference for every motion component
-// without per-component code. The default transition mirrors the cubic-bezier
-// already used by the V3 CSS keyframes (v3-slide-in-right, v3-modal-pop) so
-// motion-driven transitions feel like the same family.
+// reducedMotion="user" honors the OS preference everywhere without
+// per-component code. The default transition mirrors the cubic-bezier used by
+// the V3 CSS keyframes (v3-slide-in-right, v3-modal-pop).
 export default function MotionProvider({ children }: MotionProviderProps) {
   return (
     <LazyMotion features={domAnimation} strict>

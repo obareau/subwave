@@ -16,6 +16,7 @@
 // by construction.
 
 import { fetchWithTimeout } from '../../../util/fetch-timeout.js';
+import { listFishVoices } from './fish-audio.js';
 
 export type CloudVoice = { id: string; label: string; hint?: string };
 
@@ -167,6 +168,15 @@ export async function listVoices(opts: {
 }): Promise<VoiceListResult> {
   const { provider, signal } = opts;
   const apiKey = (opts.apiKey || '').trim();
+
+  if (provider === 'fish-audio') {
+    if (!apiKey) return { ok: false, voices: [], error: 'Fish Audio API key not set' };
+    try {
+      return { ok: true, voices: await listFishVoices(apiKey, { signal }) };
+    } catch (err) {
+      return { ok: false, voices: [], error: briefError(err) };
+    }
+  }
 
   if (provider === 'elevenlabs') {
     if (!apiKey) return { ok: false, voices: [], error: 'ElevenLabs API key not set' };

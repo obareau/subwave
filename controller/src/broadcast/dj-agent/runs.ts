@@ -45,7 +45,22 @@ interface RunStep {
 // How many candidate tracks to average for a destination-vibe centroid. Capped
 // so a big energy bucket doesn't turn the centroid into one getAudioVector read
 // per track in the library on every run start.
-const JOURNEY_DEST_SAMPLE = 60;
+// Small on purpose: the destination is the CENTROID of this sample, and a
+// 60-track sample of an energy bucket averages out to ~the bucket's mean every
+// time — journeys kept heading for the same two fixed points in audio space
+// (one per direction). Eight random tracks give a centroid that genuinely
+// varies run to run while still smoothing out any single outlier.
+//
+// Eight tracks WITH audio vectors, which is why the sampling below probes
+// rather than just slicing. audioCentroid silently drops ids the CLAP index
+// doesn't cover, and partial coverage is the normal state (analysis backfills
+// over days) — so on a 20 %-covered library a blind slice of 8 averages ~1.6
+// vectors, lands on a single arbitrary track's "centroid" more often than not,
+// and comes back empty (journey silently dropped) about one run in six.
+const JOURNEY_DEST_SAMPLE = 8;
+// Ceiling on those probes, so a bucket with no audio coverage at all costs a
+// bounded number of indexed lookups instead of a walk over the whole bucket.
+const JOURNEY_DEST_PROBE_LIMIT = JOURNEY_DEST_SAMPLE * 25;
 
 // Consume the next waypoint from a run (clamped to the last one), advancing the
 // step cursor. null when the run carries no journey.
@@ -67,8 +82,15 @@ function maybeAttachJourney(rs: RunState, current: any, totalSteps: number): voi
   if (!startId) return;
   try {
     const destEnergy = energyForDaypart().speed >= 1 ? 'high' : 'low';
-    const destIds = shuffle(library.songsByEnergy(destEnergy).map((s: any) => s.id))
-      .slice(0, JOURNEY_DEST_SAMPLE);
+    const bucket = shuffle(library.songsByEnergy(destEnergy).map((s: any) => s.id));
+    // Draw JOURNEY_DEST_SAMPLE ids the audio index actually covers, rather than
+    // slicing blind and letting audioCentroid discover the gaps by averaging
+    // around them. Same sample size, honest denominator.
+    const destIds: string[] = [];
+    for (let i = 0; i < bucket.length && i < JOURNEY_DEST_PROBE_LIMIT; i++) {
+      if (destIds.length >= JOURNEY_DEST_SAMPLE) break;
+      if (library.hasAudioVector(bucket[i])) destIds.push(bucket[i]);
+    }
     if (destIds.length === 0) return;
     const j = journey.buildJourney({ startId, endIds: destIds, steps: totalSteps });
     if (!j) return;

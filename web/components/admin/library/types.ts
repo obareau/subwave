@@ -1,13 +1,6 @@
-// Shapes and constants the library panel and its tabs share.
-//
-// Part of the library/ split - see ../LibraryPanel.tsx.
-
  
 import type { TaggerState, LibraryStatsLite, BudgetMode } from '../LibraryTaggingPanel';
 
-// ---------------------------------------------------------------------------
-// types
-// ---------------------------------------------------------------------------
 export interface Track {
   id: string;
   title?: string;
@@ -20,7 +13,7 @@ export interface Track {
   energy?: string | null;
   source?: string | null;
   taggedAt?: string;
-  // Acoustic-analysis surface — null/undefined until the analyze pass runs.
+  // Null/undefined until the analyze pass runs.
   bpm?: number | null;
   musicalKey?: string | null;
   loudnessLufs?: number | null;
@@ -28,7 +21,21 @@ export interface Track {
   instrumental?: boolean | null;
   // Cosine match vs the query — only on sounds-like search results.
   similarity?: number | null;
+  // Likes (#1253). Only /library/liked rows carry these inline; every other listing
+  // takes its heart state from the shared LikeIndex.
+  likeCount?: number;
+  likedByOperator?: boolean;
+  lastLikedAt?: string;
+  // Which never-play entry keeps this row off air, null when clear. Stamped server-side
+  // (music/blocklist.ts) so the browser never re-implements the match rules. Absent on
+  // an older controller — treat undefined and null the same.
+  blockedBy?: BlockRef | null;
 }
+
+// GET /likes/index, one entry per liked song (the store caps at 5000 records).
+export type LikeIndex = Record<string, { count: number; operator: boolean }>;
+
+export interface LikedResponse { rows: Track[]; total: number }
 
 export interface BrowseResponse {
   rows: Track[];
@@ -45,9 +52,17 @@ export interface BrowseResponse {
 
 export interface UntaggedResponse { rows: Track[]; nextCursor: string | null }
 
-// Never-play blocklist entry (GET /library/blocklist) — name/artist/album are
-// display snapshots taken at block time, so no Navidrome re-lookup to render.
+// Never-play blocklist (GET /library/blocklist). name/artist/album are display
+// snapshots taken at block time, so rendering needs no Navidrome re-lookup.
 export type BlockType = 'track' | 'album' | 'artist';
+
+// What blocks a row: an id entry or an attribute rule (#1300 FR 1). `kind` is
+// optional on the entry variant because an older controller omits it — treat
+// absent as 'entry'; `ref.kind === 'rule'` is the discriminant either way.
+export type BlockRef =
+  | { kind?: 'entry'; type: BlockType; id: string; name: string | null }
+  | { kind: 'rule'; field: RuleField; id: string; label: string; seasonal: boolean };
+
 export interface BlockEntry {
   type: BlockType;
   id: string;
@@ -57,8 +72,33 @@ export interface BlockEntry {
   addedAt: string;
 }
 
-// One aired track from the durable play history (GET /library/history).
-// Title/artist/album are air-time snapshots; showName is the show that was on.
+// Rule entries — attribute/tag predicates beside the id entries, with an
+// optional seasonal allow-window and show scope. Server shape from
+// music/blocklist-rules.ts; `active`/`matchCount` are the listing stats
+// GET /library/blocklist stamps per rule.
+export type RuleField = 'genre' | 'tag' | 'mood' | 'artist' | 'album' | 'title' | 'playlist';
+
+export interface SeasonWindow {
+  from: { month: number; day: number };
+  to: { month: number; day: number };
+}
+
+export interface BlockRule {
+  id: string;
+  label: string;
+  field: RuleField;
+  values: string[];
+  season: SeasonWindow | null;
+  showIds: string[];
+  addedAt: string;
+}
+
+export interface BlockRuleStat extends BlockRule {
+  active: boolean;
+  matchCount: number;
+}
+
+// GET /library/history. Title/artist/album are air-time snapshots.
 export interface PlayEntry {
   id: number;
   trackId: string | null;
@@ -72,13 +112,9 @@ export interface PlayEntry {
   showName: string | null;
 }
 
-// Coverage / TaggerState / LibraryStatsLite / Batch / RescanOpts live in
-// LibraryTaggingPanel.tsx alongside the panel that renders them.
-
 export interface SettingsResponse {
   tagger?: TaggerState;
   libraryStats?: LibraryStatsLite;
-  // Only the slice this panel needs from the full settings payload.
   values?: {
     audio?: {
       embeddings?: boolean;
@@ -86,29 +122,26 @@ export interface SettingsResponse {
       analyzeQuietOnly?: boolean;
       analyzeQuietMinutes?: number;
     };
-    // Provider attribution for the Tagging modal's cost preview (#1162): the
-    // mood/energy seed calls bill to the chat LLM, the embedding calls to the
-    // embedding provider (blank = follows the LLM provider).
+    // Cost-preview attribution (#1162): seed calls bill to the chat LLM, embedding
+    // calls to the embedding provider (blank = follows the LLM provider).
     llm?: { provider?: string; model?: string };
     embedding?: { provider?: string; model?: string };
   };
-  // Daily-token-budget tier — drives the "budget nearly/already used" warning in
-  // the Tagging modal. Absent on an old controller → treated as 'normal'.
+  // Absent on an old controller → treated as 'normal'.
   budget?: { mode: BudgetMode };
 }
 
 export type Tab = 'tracks' | 'browse' | 'search' | 'history' | 'blocked';
-// The Tracks tab folds the old Recent + Untagged tabs into one view with an
-// All / Needs-tags toggle; TableVariant keeps TrackTable's per-view behaviour
-// (empty-state copy, accent Tag button) keyed on what's actually shown.
-export type TrackMode = 'all' | 'needs';
-export type TableVariant = 'recent' | 'browse' | 'search' | 'untagged';
+// TableVariant keys TrackTable's per-view behaviour (empty-state copy, accent Tag
+// button) on what's actually shown, independent of the tab's All / Needs-tags toggle.
+export type TrackMode = 'all' | 'needs' | 'liked';
+export type TableVariant = 'recent' | 'browse' | 'search' | 'untagged' | 'liked';
+export type LikedSort = 'recent' | 'count' | 'artist';
 export type Sort = 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
 export type Energy = 'any' | 'low' | 'medium' | 'high';
 export type Vocal = 'any' | 'instrumental' | 'vocal';
-// 'library' = Navidrome metadata search (/dj/search); 'sound' = natural-language
-// CLAP sounds-like search (/library/search-sound), shown only when coverage
-// reports the capability.
+// 'library' = Navidrome metadata search (/dj/search); 'sound' = CLAP sounds-like
+// search (/library/search-sound), offered only when coverage reports the capability.
 export type SearchMode = 'library' | 'sound';
 
 export const PAGE_SIZE = 50;
@@ -116,10 +149,4 @@ export const SEARCH_PAGE = 30;
 
 export const TABS: Tab[] = ['tracks', 'browse', 'search', 'history', 'blocked'];
 export const SORTS: Sort[] = ['artist', 'title', 'year', 'taggedAt', 'bpm', 'loudness', 'pace'];
-
-// ---------------------------------------------------------------------------
-// small shared parts
-// ---------------------------------------------------------------------------
-// Track length as m:ss, or null when unknown/zero (Navidrome omits duration on
-// some rows — don't render "0:00" for those).
 

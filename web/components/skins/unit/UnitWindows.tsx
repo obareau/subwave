@@ -1,15 +1,8 @@
 'use client';
 
-// The Unit SW-9 full-panel windows — TIMELINE (/schedule), BOOTH (the feed's
-// dj + /session snapshot, read only) and REQUEST (POST /request via the
-// shared request-slip machine). One window at a time, opened by the chassis
-// keys; each renders over the frame at the design's 20px inset. Desktop is
-// the two-pane rail + detail layout from the handoff; below lg the panes
-// stack and the shell scrolls.
-//
-// Data honesty: the listener /schedule payload carries shows, moods, topics
-// and a persona index — not the admin-side steering fields — so the detail
-// pane renders exactly what the station publishes and nothing invented.
+// The listener /schedule payload carries shows, moods, topics and a persona
+// index, not the admin-side steering fields, so the detail pane renders only
+// what the station publishes.
 
 import {
   useEffect,
@@ -75,8 +68,8 @@ function WindowShell({
   );
 }
 
-/** Left-rail top block: dot-matrix title + endpoint caption. Carries the
- *  CLOSE key below lg, where the right pane's copy is scrolled out of reach. */
+/** Carries the CLOSE key below lg, where the right pane's copy is scrolled out
+ *  of reach. */
 function RailHeader({
   title,
   caption,
@@ -120,8 +113,6 @@ function FieldRow({ k, v, wide }: { k: string; v: string; wide?: boolean }) {
   );
 }
 
-// ───────────────────────────── TIMELINE ─────────────────────────────────────
-
 interface TlSlot {
   hour: number;
   endHour: number;
@@ -141,8 +132,7 @@ export function TimelineWindow({ onClose }: { onClose: () => void }) {
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [sel, setSel] = useState<number | null>(null);
-  // Snapshot the clock on open — the grid resolves to whole hours, and the
-  // window is a transient overlay.
+  // Snapshotted on open: the grid resolves to whole hours anyway.
   const [now] = useState(() => new Date());
 
   useEffect(() => {
@@ -164,8 +154,8 @@ export function TimelineWindow({ onClose }: { onClose: () => void }) {
   const stationLocale = normalizeStationLocale(data?.locale ?? locale);
   const { dow: today, hour: nowHour } = zonedDayHour(now, tz ?? null);
 
-  // Collapse today's 24 hourly cells into contiguous blocks (autonomous gaps
-  // included) — same derivation the classic ScheduleDrawer uses.
+  // Collapse today's 24 hourly cells into contiguous blocks, autonomous gaps
+  // included.
   const slots = useMemo<TlSlot[]>(() => {
     if (!data) return [];
     const grid: Array<string | null> = Array.isArray(data.schedule?.[today])
@@ -222,7 +212,6 @@ export function TimelineWindow({ onClose }: { onClose: () => void }) {
 
   return (
     <WindowShell label="Timeline — today's schedule">
-      {/* rail */}
       <div className="flex min-h-0 flex-col border-b border-white/12 lg:border-r lg:border-b-0">
         <RailHeader
           title="TONIGHT"
@@ -284,7 +273,6 @@ export function TimelineWindow({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      {/* detail pane */}
       <div className="flex min-h-0 flex-col">
         <PaneHeader onClose={onClose}>
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-1">
@@ -353,8 +341,6 @@ export function TimelineWindow({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ─────────────────────────────── BOOTH ──────────────────────────────────────
-
 export function BoothWindow({ onClose }: { onClose: () => void }) {
   const { dj, activeShow, context, session, streamOnline, timezone, locale } = usePlayerFeed();
   const stationLocale = normalizeStationLocale(locale);
@@ -362,9 +348,8 @@ export function BoothWindow({ onClose }: { onClose: () => void }) {
   const offline = streamOnline === false;
   const tagline = typeof dj?.tagline === 'string' ? dj.tagline : '';
   const voice = lastVoiceLine(session.messages);
-  // Newest first — a session tail reads down into the past. The kind column
-  // prefers the turn's own segment kind (link, request, liner-notes…) over
-  // the coarse display class; timestamps key the lookup.
+  // The kind column prefers the turn's own segment kind over the coarse
+  // display class; timestamps key the lookup.
   const kindByT = new Map(
     session.messages.map(m => [String(m.t), typeof m.kind === 'string' ? m.kind : '']),
   );
@@ -382,7 +367,6 @@ export function BoothWindow({ onClose }: { onClose: () => void }) {
 
   return (
     <WindowShell label="Booth — live session feed">
-      {/* rail */}
       <div className="flex min-h-0 flex-col border-b border-white/12 lg:border-r lg:border-b-0">
         <RailHeader
           title="BOOTH"
@@ -433,7 +417,6 @@ export function BoothWindow({ onClose }: { onClose: () => void }) {
         <div className="min-h-0 flex-1" />
       </div>
 
-      {/* feed pane */}
       <div className="flex min-h-0 flex-col">
         <PaneHeader onClose={onClose}>
           <div className={EYEBROW}>last off the mic</div>
@@ -475,8 +458,6 @@ export function BoothWindow({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ────────────────────────────── REQUEST ─────────────────────────────────────
-
 const FEELING_CHIPS = [
   'something slower',
   'turn it up',
@@ -506,7 +487,6 @@ export function RequestWindow({
 
   return (
     <WindowShell label="Request — ask the booth">
-      {/* rail */}
       <div className="flex min-h-0 flex-col border-b border-white/12 lg:border-r lg:border-b-0">
         <RailHeader
           title="REQUEST"
@@ -528,7 +508,6 @@ export function RequestWindow({
         </div>
       </div>
 
-      {/* entry pane */}
       <div className="flex min-h-0 flex-col">
         <PaneHeader onClose={onClose}>
           <div className={EYEBROW}>what do you want to hear</div>

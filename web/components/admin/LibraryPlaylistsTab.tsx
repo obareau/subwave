@@ -1,10 +1,7 @@
 'use client';
 
-// Playlists tab of /admin/library — the operator's Navidrome playlists,
-// created/curated from the track tabs' selection flow. Backed by the
-// controller's /playlists routes (thin Subsonic wrappers). Entries are removed
-// by POSITION (Subsonic's updatePlaylist semantics), so every mutation
-// refetches the entry list before the next removal can be issued.
+// Entries are removed by POSITION (Subsonic's updatePlaylist semantics), so
+// every mutation refetches the entry list before the next removal is issued.
 
 import type { ChangeEvent } from 'react';
 import { useCallback, useEffect, useState } from 'react';
@@ -41,8 +38,8 @@ function fmtDuration(sec: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-// Two-click destructive button: first click arms it, second fires. Re-disarms
-// after a beat so a stray click never deletes anything.
+// First click arms, second fires; re-disarms after 3s so a stray second click
+// can't delete anything.
 function ConfirmBtn({ label, confirmLabel, busy, onConfirm }: {
   label: React.ReactNode;
   confirmLabel: string;
@@ -83,10 +80,8 @@ export default function LibraryPlaylistsTab({
   const [entries, setEntries] = useState<PlaylistEntry[] | null>(null);
   const [entriesLoading, setEntriesLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  // create-empty-playlist row (header "New playlist" button toggles it)
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
-  // inline per-playlist editor — name + visibility
   const [editId, setEditId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editPublic, setEditPublic] = useState(true);

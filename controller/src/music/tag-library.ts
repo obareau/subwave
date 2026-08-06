@@ -148,7 +148,14 @@ async function main() {
   const textMode = flags.reseed
     ? embeddings.preferredTextMode()
     : embeddings.resolveIndexTextMode(db.getEmbeddingMeta()?.textMode, db.vectorCount());
-  db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim, textMode);
+  // The embed-text SHAPE the index carries (#1246), resolved on the same
+  // "describe what's actually stored" rule as textMode above: a forward run
+  // leaves older vectors untouched, so the index stays at the older format
+  // until a reseed rebuilds it.
+  const textFormat = embeddings.resolveIndexTextFormat(
+    db.getEmbeddingMeta()?.textFormat, db.vectorCount(), flags.reseed,
+  );
+  db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim, textMode, textFormat);
   if (textMode === 'plain' && embeddings.preferredTextMode() === 'prefixed') {
     logEvent(
       'info',
@@ -184,6 +191,18 @@ async function main() {
   // doesn't cluster by album. knnAudioById returns [] for un-analysed tracks,
   // so fusion degrades to text-only per track, not per run.
   const SAME_ALBUM_WEIGHT = 0.5;
+  // Same artist, DIFFERENT album — damped too. On a label-only text index (no
+  // Last.fm key, no lyrics, no CLAP) "nearest neighbours" is mostly the
+  // artist's own catalogue, and album-only damping left the dominant relation
+  // voting at full weight: one artist's early tags swept the rest of their
+  // catalogue, then — via the propagation rounds — their whole neighbourhood.
+  const SAME_ARTIST_WEIGHT = 0.6;
+  // A voter whose own moods were themselves PROPAGATED (not decided by the
+  // LLM/operator/audio) speaks at reduced weight: phase 4 re-runs the vote up
+  // to 3 rounds and round-n labels voting in round n+1 at full weight is a
+  // feedback loop with no damping term — the measurement side already refuses
+  // propagated rows for exactly this circularity (trustedTaggedIds).
+  const PROPAGATED_VOTE_WEIGHT = 0.7;
   const audioFusionWeight = clamp01(embedCfg.audioFusionWeight ?? 0.5);
   const voteForTrack = (id: string) => {
     const target = db.getTrack(id);
@@ -203,11 +222,17 @@ async function main() {
         moodVoteThreshold,
         k: knnK,
         weightOf: (nId) => {
-          if (!target?.album || !target?.artist) return 1;
           const n = db.getTrack(nId);
-          return n?.album === target.album && n?.artist === target.artist
-            ? SAME_ALBUM_WEIGHT
-            : 1;
+          let w = 1;
+          if (target?.artist && n?.artist === target.artist) {
+            w = target?.album && n?.album === target.album
+              ? SAME_ALBUM_WEIGHT
+              : SAME_ARTIST_WEIGHT;
+          }
+          // Multiplied, not min-ed: a same-artist propagated voter is both
+          // relations at once and should be doubly damped.
+          if (n?.source === 'propagated') w *= PROPAGATED_VOTE_WEIGHT;
+          return w;
         },
       },
     );
@@ -381,12 +406,15 @@ async function main() {
       // to seedCount tracks from outside the window. Bulk runs (no --limit)
       // pass undefined to keep the full library in play.
       untaggedPool: limited ? new Set(targetUntagged) : undefined,
-      // NOTE: no embeddingForId here. library-db has no direct vector-read API
-      // (only knnById, a full vector scan per call), so passing any function —
-      // even one that always returns null — makes the seed selector run one
-      // KNN scan per candidate before falling back anyway. On a large library
-      // that's hours of wasted scans. Omitting it routes the selector straight
-      // to its random-shuffle path, until a cheap bulk vector read exists.
+      // k-means diversity layer. db.getVector is a direct single-row read
+      // (SELECT embedding WHERE id = ?) — the per-candidate KNN-scan cost the
+      // old note warned about predates getVector()/allAudioVectors() and no
+      // longer exists; the selector also bounds its own pool and cluster
+      // count (KMEANS_POOL_CAP/KMEANS_MAX_K) with an incremental k-means++
+      // init, so this is seconds, not hours, on a large library. Candidates
+      // without a vector yet return null and drop out inside the selector;
+      // the shortfall tops up randomly (kmeans-topup).
+      embeddingForId: (id) => db.getVector(id),
     });
     console.log(
       `[tag] seeds: ${seedSelection.seeds.length} new ` +

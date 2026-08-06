@@ -19,6 +19,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { fetchWithTimeout } from '../../util/fetch-timeout.js';
+import { probeFishKey } from '../../llm/speech.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
@@ -115,6 +116,14 @@ async function probeKey(
     }
     case 'AI_GATEWAY_API_KEY': {
       return { ok: true, message: 'Key format looks valid — confirm via a live LLM call' };
+    }
+    case 'FISH_API_KEY': {
+      try {
+        await probeFishKey(value);
+        return { ok: true, message: '✓ Fish Audio key valid' };
+      } catch (err) {
+        return { ok: false, message: briefLlmError(err) };
+      }
     }
     case 'ELEVENLABS_API_KEY': {
       const r = await fetch('https://api.elevenlabs.io/v1/user', {

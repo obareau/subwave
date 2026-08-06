@@ -21,6 +21,7 @@ import {
   POCKET_TTS_VOICE_RE,
   SCRIPT_LENGTHS,
   SHOWS_LIMIT,
+  SHOW_TOPIC_MAX,
   SKILLS_PER_PERSONA_LIMIT,
   SKILL_SLUG_RE,
   SOUL_MAX,
@@ -36,6 +37,7 @@ import {
   coerceGuestPersonaIds,
   coercePlaylistIds,
   coerceShowEnergies,
+  coerceShowVocals,
   coerceShowEras,
   coerceShowGenres,
   coerceShowMoods,
@@ -43,9 +45,28 @@ import {
   mintId,
   normalizeDial,
 } from './vocab.js';
-import { coerceMaxTrackSeconds, rawMaxTrackSec } from './defaults.js';
+import { DEFAULTS, coerceMaxTrackSeconds, rawMaxTrackSec } from './defaults.js';
+// The webhook rules themselves, so this lenient path and update()'s strict one
+// cannot restate them differently — see normalizeWebhooks below.
+import { WEBHOOK_ID_RE, webhookSchema, type WebhookParsed } from '../schemas/webhook.js';
+import { resolveWebhookIds } from '../schemas/webhook-server.js';
 
 // ── normalizers (lenient — used by load(), clamp/default rather than throw) ──
+
+// Archive retention with the keep-forever upgrade guard. A stored integer ≥ 0
+// always wins (0 is a legitimate explicit "keep forever"). When nothing is
+// stored, the fallback depends on whether the blob already archives: an
+// install that enabled archiving under the old keep-forever default must stay
+// at 0 — applying the bounded default there would delete existing tapes on
+// upgrade — while everyone else (fresh installs, archive off) gets
+// DEFAULTS.archive.retentionDays so newly enabled archiving is bounded from
+// day one instead of silently filling the disk.
+export function normalizeArchiveRetentionDays(archive: any): number {
+  const v = archive?.retentionDays;
+  if (Number.isInteger(v) && v >= 0) return v;
+  if (archive?.enabled === true) return 0;
+  return DEFAULTS.archive.retentionDays;
+}
 
 // Persona skill assignment. `null` (raw not an array) is the "all skills"
 // sentinel — used by legacy personas and the code default so behaviour is
@@ -75,7 +96,13 @@ function normalizeSkills(raw: unknown) {
   return out;
 }
 
-function normalizeTts(raw: unknown) {
+// Lenient normaliser for a `{engine, voice, cloudProvider}` voice slot. Shared
+// by every persona's `tts` block AND the station-wide TTS fallback slot
+// (`settings.tts.fallback`) — the two carry the same shape by design, because a
+// fallback slot is handed to speakWith() as a synthetic persona (the same trick
+// synthesizeSample() uses for previews). Keeping one normaliser is what stops
+// the per-engine voice rules drifting between the two.
+export function normalizeTts(raw: unknown) {
   const r = (raw ?? {}) as Record<string, unknown>;
   const engine = TTS_ENGINES.includes(r.engine as string) ? (r.engine as string) : 'piper';
   const cloudProvider = TTS_CLOUD_PROVIDERS.includes(r.cloudProvider as string)
@@ -116,6 +143,20 @@ function normalizeTts(raw: unknown) {
   if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
   if (!voice && engine !== 'cloud' && engine !== 'chatterbox' && engine !== 'piper' && engine !== 'remote') voice = 'bf_isabella';
   return { engine, cloudProvider, voice, gainDb: clampTtsGain(r.gainDb), speed: clampTtsSpeed(r.speed) };
+}
+
+// Load-time shape for `settings.tts.fallback` — the station's operator-chosen
+// rescue voice. The voice slot itself goes through normalizeTts() (one set of
+// per-engine rules for personas and the fallback alike); only `enabled` is
+// extra. An absent block normalises to disabled + engine defaults, so a
+// settings.json written before this key existed keeps the pre-fallback chain
+// byte-for-byte. gainDb/speed are deliberately dropped: the resolved engine's
+// own trims and the on-air persona's still apply, and a third trim on the
+// rescue slot would be a level surprise nobody configured.
+export function normalizeTtsFallback(raw: unknown) {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const { engine, voice, cloudProvider } = normalizeTts(r);
+  return { enabled: typeof r.enabled === 'boolean' ? r.enabled : false, engine, voice, cloudProvider };
 }
 
 export function normalizePersona(raw: unknown) {
@@ -206,8 +247,8 @@ export function normalizeShows(raw: unknown, personaIds: string[]): NormalizedSh
     seen.add(id);
     // themeId is the optional per-show theme override. Lenient path: we only
     // sanity-check the shape. A stale id (theme file deleted under our feet)
-    // is harmless — routes/public.ts falls back to the station default at
-    // serve time via getTheme()'s own fallback. Empty/missing means "no
+    // is harmless — routes/public.ts (GET /themes) falls back to the station
+    // default at serve time. Empty/missing means "no
     // override" and is stored as an empty string for round-trip cleanliness.
     const themeId =
       typeof item.themeId === 'string' && item.themeId.trim()
@@ -222,6 +263,9 @@ export function normalizeShows(raw: unknown, personaIds: string[]): NormalizedSh
     const genres = coerceShowGenres(item);
     const eras = coerceShowEras(item);
     const energies = coerceShowEnergies(item);
+    // Vocal steering (#1300 FR 13): '' = no constraint, which is what every
+    // show predating the field carries, so loading one is a no-op.
+    const vocals = coerceShowVocals(item);
     // Opt-in: hard-filter the pick pool to EVERY set music filter (mood, genre,
     // era, energy) instead of the default soft leans. Only meaningful when at
     // least one filter is set; defaults OFF. The legacy genre-only `genreStrict`
@@ -259,7 +303,7 @@ export function normalizeShows(raw: unknown, personaIds: string[]): NormalizedSh
     out.push({
       id,
       name,
-      topic: typeof item.topic === 'string' ? item.topic.trim().slice(0, 1000) : '',
+      topic: typeof item.topic === 'string' ? item.topic.trim().slice(0, SHOW_TOPIC_MAX) : '',
       personaId: item.personaId,
       guestPersonaIds,
       banter,
@@ -270,6 +314,7 @@ export function normalizeShows(raw: unknown, personaIds: string[]): NormalizedSh
       genres,
       eras,
       energies,
+      vocals,
       filtersStrict,
       maxTrackSeconds,
       playlistIds,
@@ -312,32 +357,46 @@ export function normalizeScheduleOverride(raw: unknown, showIds: string[]): Sche
 }
 
 
+// Lenient load-path counterpart of validateWebhooksStrict. The RULES are the
+// shared schema's — url shape, the 500-char caps, the event vocabulary, the id
+// pattern — so the two paths can no longer drift apart. What lives here is only
+// the LENIENCY, and each repair below is deliberate: at boot a bad row is
+// patched or dropped so a hand-edited settings.json still starts the station,
+// where update()'s strict path throws and tells the operator which field to fix.
 export function normalizeWebhooks(raw: unknown): Webhook[] {
   if (!Array.isArray(raw)) return [];
-  const out: Webhook[] = [];
-  const seen = new Set<string>();
+  const rows: WebhookParsed[] = [];
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue;
-    const url = typeof item.url === 'string' ? item.url.trim() : '';
-    if (!/^https?:\/\//.test(url) || url.length > 500) continue;
+    // An unknown event name is FILTERED OUT rather than failing the row, so
+    // retiring a name from WEBHOOK_EVENTS costs a hook that one subscription
+    // instead of deleting the operator's webhook. The schema's own min(1) then
+    // drops a row left with nothing to fire on, as it always did.
     const events = Array.isArray(item.events)
-      ? item.events.filter((e: string) => WEBHOOK_EVENTS.includes(e))
+      ? item.events.filter((e: string) => (WEBHOOK_EVENTS as readonly string[]).includes(e))
       : [];
-    if (!events.length) continue;
-    let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('wh_');
-    if (seen.has(id)) id = mintId('wh_');
-    seen.add(id);
-    out.push({
-      id,
-      url,
+    const parsed = webhookSchema.safeParse({
+      ...item,
       events,
-      enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
+      // undefined lets the schema's own .default() apply. Repaired rather than
+      // rejected because none of the three is worth losing a working hook over:
+      // an unrecognised id is re-minted below, a non-boolean `enabled` falls
+      // back to on, and an over-long header is clamped to the same 500 the
+      // strict path enforces.
+      id: typeof item.id === 'string' && WEBHOOK_ID_RE.test(item.id) ? item.id : undefined,
+      enabled: typeof item.enabled === 'boolean' ? item.enabled : undefined,
       authHeader:
-        typeof item.authHeader === 'string' ? item.authHeader.slice(0, 500) : '',
+        typeof item.authHeader === 'string' ? item.authHeader.slice(0, 500) : undefined,
     });
-    if (out.length >= WEBHOOKS_LIMIT) break;
+    if (!parsed.success) continue;
+    rows.push(parsed.data);
+    if (rows.length >= WEBHOOKS_LIMIT) break;
   }
-  return out;
+  // Same minting and de-duplication the strict path runs, from the same module.
+  // Deliberately NOT mergeWebhookSecrets: there is no prior list at load, and
+  // resolving the redaction sentinel against nothing would blank a stored
+  // header rather than leave it alone.
+  return resolveWebhookIds(rows);
 }
 
 

@@ -1,6 +1,6 @@
 # SUB/WAVE UI — build conventions
 
-**Look**: "newsprint broadsheet meets hi-fi gear" — cream paper (`--bg: #f3efe6`), near-black ink, one hot-vermilion accent, **sharp corners everywhere** (radius is pinned to 0 — never use `rounded-*` classes), 1px ink borders instead of shadows, uppercase letter-spaced mono labels.
+**Look**: "newsprint broadsheet meets hi-fi gear" — cream paper (`--bg: #f3efe6`), near-black ink, one hot-vermilion accent, **sharp corners everywhere** (radius is pinned to 0 — never use `rounded-*` classes), 1px ink borders and tonal surface tiers instead of shadows (no drop shadows on boxes — the hard-offset "print plate" shadow is explicitly banned as AI-slop), uppercase letter-spaced mono labels.
 
 ## Setup
 

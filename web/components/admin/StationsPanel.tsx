@@ -1,17 +1,11 @@
 'use client';
 
-// Stations — /admin/stations, "transmitter rack" design (Stations.dc.html
-// from the Claude Design project, re-expressed in house Tailwind tokens).
-// An FM dial band shows every station as a carrier with the live one as the
-// needle; below it the rack lists stations as numbered presets. Create and
-// rename run in modals; make-live and delete sit behind danger confirms.
-// Installs are capped at MAX_STATIONS=8 server-side (GET /stations `limit`).
-//
-// Activating a station — or creating the SECOND station, which converts a
-// single-station install — restarts the controller, so both flows funnel
-// into one full-screen "re-tuning" state that hard-reloads once /state
-// reports the new station booted (boot-frozen station.id — see
-// controller/src/routes/public.ts). API: controller/src/routes/stations.ts.
+// Stations rack. Installs are capped at MAX_STATIONS=8 server-side (GET
+// /stations `limit`). Activating a station — or creating the SECOND station,
+// which converts a single-station install — restarts the controller, so both
+// flows funnel into one full-screen "re-tuning" state that hard-reloads once
+// /state reports the new station booted (boot-frozen station.id).
+// API: controller/src/routes/stations.ts.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -53,8 +47,8 @@ function slugPreview(name: string): string {
     .replace(/-+$/g, '');
 }
 
-// Each station gets a stable pseudo-frequency on the 88–108 FM band, hashed
-// from its id so it keeps its spot as the rack changes. Pure presentation.
+// A stable pseudo-frequency on the 88–108 FM band, hashed from the station id
+// so it keeps its spot as the rack changes. Pure presentation.
 function assignFrequencies(stations: StationRow[]): Map<string, number> {
   const taken = new Set<number>();
   const out = new Map<string, number>();
@@ -253,8 +247,8 @@ export default function StationsPanel() {
 
   if (!hydrated || needsAuth) return null;
 
-  // A switch is in flight — the re-tuning screen replaces everything until
-  // the new controller answers and the page reloads itself.
+  // The re-tuning screen replaces everything until the new controller answers
+  // and the page reloads itself.
   if (switching) {
     return (
       <div className="fixed inset-0 z-[100] grid place-items-center bg-[var(--bg)]">
@@ -287,7 +281,6 @@ export default function StationsPanel() {
 
   return (
     <div className="grid gap-4">
-      {/* Header + dial card */}
       <section className="card">
       <header className="p-5">
         <div className="font-mono text-[10px] font-bold tracking-[0.22em] text-vermilion uppercase">
@@ -327,7 +320,6 @@ export default function StationsPanel() {
         </p>
       </header>
 
-      {/* FM dial band */}
       {data ? (
         <div className="border-t border-ink px-5 pt-4 pb-3">
           <div className="relative h-[88px] border-y border-ink bg-field">
@@ -355,9 +347,7 @@ export default function StationsPanel() {
       ) : null}
       </section>
 
-      {/* Rack card: loading / error / rows */}
       <section className="card">
-      {/* Loading skeleton */}
       {loading ? (
         <div>
           {[0, 1, 2].map(k => (
@@ -379,7 +369,6 @@ export default function StationsPanel() {
         </div>
       ) : null}
 
-      {/* Load error */}
       {err && !data ? (
         <div className="grid justify-items-start gap-2.5 px-9 py-9">
           <div className="font-mono text-[10px] font-bold tracking-[0.22em] text-vermilion uppercase">
@@ -400,17 +389,14 @@ export default function StationsPanel() {
         </div>
       ) : null}
 
-      {/* The rack */}
       {data ? (
         <div>
           {stations.map((s, i) => (
             <div
               key={s.id ?? '__install'}
-              /* Phone: two columns (preset tile + identity) with the action
-                 cluster dropped onto its own full-width row underneath — a
-                 96px tile, two 24px gaps and three buttons leave the name
-                 column barely 100px wide at 390. Restored to the single
-                 three-column rack row from sm: up. */
+              /* Phone: preset tile + identity, with the action cluster on its
+                 own row — a 96px tile, two 24px gaps and three buttons leave
+                 the name column barely 100px wide at 390. */
               className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-4 border-t border-separator-strong first:border-t-0 sm:grid-cols-[96px_1fr_auto] sm:gap-6"
             >
               <div
@@ -521,7 +507,6 @@ export default function StationsPanel() {
         </div>
       ) : null}
 
-      {/* Single-station note */}
       {data && singleMode ? (
         <div className="border-t border-separator-strong px-4 py-4 text-[13px] leading-relaxed text-muted">
           This install hasn&apos;t been converted to multi-station yet — it runs exactly this one
@@ -531,7 +516,6 @@ export default function StationsPanel() {
       ) : null}
       </section>
 
-      {/* Create modal */}
       <Modal
         open={createOpen}
         onOpenChange={o => {
@@ -634,7 +618,6 @@ export default function StationsPanel() {
         </div>
       </Modal>
 
-      {/* Rename modal */}
       <Modal
         open={renaming !== null}
         onOpenChange={o => {
@@ -662,7 +645,6 @@ export default function StationsPanel() {
         />
       </Modal>
 
-      {/* Make-live / delete confirms */}
       <V3AlertDialog
         open={confirm !== null}
         onOpenChange={o => {

@@ -22,11 +22,11 @@ Make each one from the configured voice or a text-to-sound prompt, or import you
 
 Click Moods. Four tabs again.
 
-- Vocabulary is the list of moods every track gets tagged with, each with an optional sound description the analyzer can listen for.
+- Vocabulary is the list of moods every track gets tagged with, each with an optional sound description the analyzer can listen for. (Tagging itself still runs from the [Library page](/news/your-dj-knows-your-library).)
 - Moments sets which mood each part of the day, and each kind of weather, leans into.
 - Festivals is the calendar that colours the mood on the day.
 - Speech is the pronunciation fixes read before every spoken line.
 
 ## Why it helps
 
-The mood list used to live in the code. Changing it meant a rebuild. Now it is a text box, and every show, festival, and auto-pick draws from whatever words you put there. The jingles, stingers and beds moved for a plainer reason: they are audio you make and manage, not knobs you set once, so they belong together in one room instead of buried three sections deep in Settings.
+The mood list used to live in the code. Changing it meant a rebuild. Now it is a text box, and every show, festival, and auto-pick draws from whatever words you put there. The jingles, stingers and beds moved for a plainer reason: they are audio you make and manage, not knobs you set once, so they belong together in one room instead of buried three sections deep in Settings. The full map of the console lives in the manual's [Admin & Settings](/manual/admin) chapter.

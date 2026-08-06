@@ -7,8 +7,8 @@ import { Search } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
 /* shadcn-style Command wrappers over `cmdk`, restyled with the newsprint
-   tokens. CommandDialog is hand-built on @radix-ui/react-dialog rather than
-   the stock shadcn version — this repo has no stock DialogContent, and the
+   tokens. CommandDialog is hand-built on @radix-ui/react-dialog rather than the
+   stock shadcn version: this repo has no stock DialogContent, and the
    `container` prop keeps the palette inside the frame in contained mode. */
 
 export const Command = forwardRef<

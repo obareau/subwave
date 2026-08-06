@@ -1,78 +1,42 @@
-# subwave-analyzer — optional acoustic-analysis sidecar.
+# subwave-analyzer — acoustic-analysis sidecar (bpm/key/intro/loudness, plus
+# optional CLAP "sounds-like" embeddings and Demucs vocal-activity ranges).
+# Default-on service in every compose file; the controller POSTs to it via
+# ANALYZE_URL. A thin FastAPI front (docker/analyzer/server.py) supervises the
+# SAME stdio worker the controller uses (controller/scripts/analyze_worker.py).
 #
-# Background: acoustic analysis (bpm / key / intro / loudness, plus optional
-# CLAP "sounds-like" embeddings and Demucs vocal-activity ranges) runs librosa
-# + a CPU-torch stack that deliberately does NOT live in the controller image
-# (controller/src/music/analyzer.ts). It used to ride inside the heavy-TTS
-# sidecar (docker/Dockerfile.tts-heavy), which meant an operator who wanted
-# analysis had to pull the full ~6GB Chatterbox + PocketTTS image even though
-# analysis has nothing to do with speech synthesis.
-#
-# This image is the analyzer on its own. It's a default-on service in every
-# compose file; the controller picks it up via ANALYZE_URL and POSTs analysis
-# requests to it. The analyze worker also ships in the tts-heavy image, so the
-# controller's URL resolution (ANALYZE_URL first, then TTS_HEAVY_URL) means a
-# tts-heavy-only install still gets analysis — see analyzer.ts.
-#
-# Architecture: a single librosa venv driven by the SAME stdio worker script
-# the controller + tts-heavy use (controller/scripts/analyze_worker.py), fronted
-# by a tiny FastAPI server (docker/analyzer/server.py) that supervises it as a
-# long-lived subprocess. Wire contract (/health + /analyze) is identical to
-# tts-heavy's, so the controller treats the two interchangeably.
-#
-# Three published flavours (see .github/workflows/publish-images.yml):
-#   * subwave-analyzer        — LEAN (default), ~1.1GB, MULTI-ARCH (amd64+arm64).
-#       librosa + ffmpeg, no torch: bpm/key/intro/loudness. WITH_CLAP=0 WITH_DEMUCS=0.
-#   * subwave-analyzer-heavy  — CLAP + Demucs baked (~1.9GB), amd64-only.
-#       "sounds-like" embeddings + vocal ranges. WITH_CLAP=1 WITH_DEMUCS=1.
-#       CPU-only torch wheels.
-#   * subwave-analyzer-cuda   — heavy + NVIDIA CUDA torch (cu124), amd64-only.
-#       Same features as -heavy with CLAP/Demucs on the GPU. WITH_CUDA=1 flips
-#       the torch wheel index; the host needs only the NVIDIA driver +
-#       nvidia-container-toolkit (cu124 wheels vendor the CUDA runtime). Run it
-#       via the docker-compose.analyzer-gpu.yml overlay, which also adds the
-#       GPU device reservation. Several GB larger than -heavy (nvidia-*-cu12).
-# Operators switch to the heavy image with `ANALYZER_HEAVY=1` in .env (the
-# compose `analyzer` service pulls `subwave-analyzer${ANALYZER_HEAVY:+-heavy}`);
-# the cuda image is selected by the analyzer-gpu overlay instead (a device
-# reservation can't be toggled from .env). Models are NOT baked: the heavy worker
-# downloads CLAP/Demucs weights into the HF cache (HF_HOME) the first time the
-# analyze pass needs them; the compose files mount a named volume over that
-# cache so the download survives container recreates.
+# Three published flavours (.github/workflows/publish-images.yml):
+#   * subwave-analyzer        — LEAN (default), ~1.1GB, multi-arch, no torch.
+#   * subwave-analyzer-heavy  — CLAP + Demucs baked (~1.9GB), amd64-only,
+#       CPU torch. Selected by ANALYZER_HEAVY=1 in .env.
+#   * subwave-analyzer-cuda   — heavy + cu124 torch, amd64-only. Selected by
+#       the docker-compose.analyzer-gpu.yml overlay (a device reservation
+#       can't be toggled from .env).
+# Models are NOT baked — the heavy worker downloads weights into HF_HOME on
+# first use; compose mounts a named volume over that cache. That makes the
+# heavy tier's FIRST sounds-like/vocals pass a one-time outbound dependency on
+# huggingface.co, which is documented (and given an offline pre-seed recipe) in
+# docs/tts-heavy.md — a host without reach fails there, and the analyzer now
+# reports the reason on /health rather than degrading silently.
 
 FROM python:3.11-slim-bookworm
 
-# ffmpeg + libsndfile1 give librosa broad codec coverage for the Navidrome
-# stream formats (opus/m4a/mp3). curl is for the operator's own healthchecks;
-# uvicorn handles its own internally.
+# ffmpeg + libsndfile1: librosa codec coverage for the Navidrome stream
+# formats. curl: operator healthchecks.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates ffmpeg libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Analyzer venv (librosa — bpm/key/intro/loudness; optional CLAP + Demucs) -
-# librosa/numba ship as wheels (no g++ needed). The base trio is always present.
+# --- Analyzer venv ----------------------------------------------------------
+# CLAP + Demucs are the heavy tier (~1.5GB each, CPU torch) — OFF by default so
+# the lean image stays small and multi-arch. At runtime each still needs its
+# own flag (ANALYZE_AUDIO_EMBEDDING / ANALYZE_VOCAL_ACTIVITY or the admin
+# toggle); with the stack absent those are clean no-ops.
 #
-# CLAP audio embeddings ("sounds-like" similarity) and Demucs vocal-activity
-# ranges are the heavy tier — CPU torch + transformers/torchaudio (~1.5GB each).
-# They are **OFF by default** so the published `subwave-analyzer` image stays
-# lean (~1.1GB, no torch) and multi-arch. Opt IN with `--build-arg WITH_CLAP=1` /
-# `WITH_DEMUCS=1`; the CI publishes that heavy build as the separate
-# `subwave-analyzer-heavy` image (see .github/workflows/publish-images.yml), and
-# operators switch to it with `ANALYZER_HEAVY=1` in their `.env` (the compose
-# `analyzer` service resolves `subwave-analyzer${ANALYZER_HEAVY:+-heavy}`). At
-# runtime each still needs its own flag (ANALYZE_AUDIO_EMBEDDING /
-# ANALYZE_VOCAL_ACTIVITY, or the admin toggle); with the stack absent those are
-# clean no-ops (bpm/key/loudness only).
-#
-# Version pins: every install is pinned to an exact stable so a rebuild months
-# from now resolves the SAME wheels (reproducible, no surprise major bumps).
-# These pins are the single source of truth for the analyzer venv — keep them in
-# lockstep with the mirrored analyzer block in docker/Dockerfile.aio. torch/
-# torchaudio are held at 2.6.0 (the version chatterbox pins in
-# docker/Dockerfile.tts-heavy; keeps one torch VERSION repo-wide). WITH_CUDA
-# only switches which 2.6.0 build is installed: the cpu wheel index (default)
-# or cu124 (the subwave-analyzer-cuda flavour — cu124 builds of 2.6.0 vendor
-# the CUDA runtime as nvidia-*-cu12 pip deps, so the base image stays slim).
+# All pins exact for reproducible rebuilds — keep in lockstep with the mirrored
+# analyzer block in docker/Dockerfile.aio. torch/torchaudio held at 2.6.0
+# (chatterbox's pin — one torch version repo-wide); WITH_CUDA only switches
+# which 2.6.0 build is installed (cpu wheel index vs cu124, whose wheels vendor
+# the CUDA runtime as nvidia-*-cu12 deps).
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ARG WITH_CUDA=0
@@ -84,9 +48,8 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
     if [ "$WITH_CLAP" = "1" ]; then \
       # onnxruntime stays the CPU build even under WITH_CUDA: the ONNX path is
-      # the optional CLAP_MODEL_PATH custom-export route, and onnxruntime-gpu
-      # drags in a fragile CUDA/cuDNN version matrix. The default transformers
-      # path is what runs on the GPU.
+      # only the CLAP_MODEL_PATH custom-export route, and onnxruntime-gpu drags
+      # in a fragile CUDA/cuDNN matrix. The transformers path runs on the GPU.
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
@@ -94,10 +57,9 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
-      # diffq: decompressor for demucs' quantized checkpoints (mdx_q, …). Tiny,
-      # but without it a DEMUCS_MODEL=*_q override makes demucs fatal() at load.
-      # It ships sdist-only (Cython ext), so lend it gcc for the install and
-      # purge in the SAME layer — the lean image never pays for any of this.
+      # diffq decompresses demucs' quantized checkpoints — without it a
+      # DEMUCS_MODEL=*_q override makes demucs fatal() at load. It ships
+      # sdist-only (Cython ext): lend it gcc and purge in the SAME layer.
       apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
@@ -108,9 +70,7 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
 
-# --- Server venv (FastAPI only — no PyTorch needed) ------------------------
-# The HTTP front is thin: it spawns the stdio analyze worker and shuttles JSON
-# between it and the HTTP client. No model loading happens here.
+# --- Server venv (FastAPI only — spawns the stdio worker, no model loading) --
 RUN python3 -m venv /opt/server/venv && \
     /opt/server/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/server/venv/bin/pip install --no-cache-dir \
@@ -122,28 +82,18 @@ ENV PATH=/opt/server/venv/bin:$PATH \
 
 WORKDIR /app
 COPY docker/analyzer/server.py /app/server.py
-# Reuse the SAME worker script the controller + tts-heavy use — single source of
-# truth for analysis logic. The script speaks JSON over stdio; server.py wraps
-# that with an HTTP surface.
+# The SAME worker the controller runs in-process — single source of truth.
 COPY controller/scripts/analyze_worker.py /app/workers/analyze_worker.py
 
-# Shared state mount with the controller — the controller may pre-fetch a track
-# into /var/sub-wave/analyze-tmp and pass the local path, which the worker reads
-# off this volume. Created by the controller image (chmod 777 there); we mkdir
-# here too so the image is self-contained when run standalone.
+# Shared state mount — the controller pre-fetches tracks into
+# /var/sub-wave/analyze-tmp. mkdir'd here so the image runs standalone too.
 RUN mkdir -p /var/sub-wave && chmod 777 /var/sub-wave
 
-# --- Drop root: run uvicorn (and the analyze worker) as an unprivileged user --
-# The server never needs root at runtime — it only writes to (a) the shared
-# /var/sub-wave mount (the entrypoints chmod it 777) and (b) the caches below:
-# the HF weights cache (ANALYZER_HF_HOME, only touched when CLAP is enabled) and
-# librosa/numba's JIT cache. It reads no root-only paths (no icecast secrets, no
-# venv writes), so a fixed non-root uid/gid (10001) is safe and keeps any
-# container breakout unprivileged. HOME + the XDG/NUMBA cache dirs are pointed at
-# a user-owned tree so numba's cache=True JIT files land somewhere writable
-# instead of the root-owned site-packages (which would just warn + skip caching).
-# /opt/analyzer/hf-cache is chowned so the compose named volume mounted over it
-# inherits the ownership on first create.
+# --- Drop root --------------------------------------------------------------
+# The server only writes the shared mount, the HF cache, and librosa/numba's
+# JIT cache. HOME/XDG/NUMBA point at a user-owned tree so numba's cache=True
+# JIT files land somewhere writable; the hf-cache chown makes the compose named
+# volume inherit ownership on first create.
 ENV HOME=/home/subwave \
     XDG_CACHE_HOME=/home/subwave/.cache \
     NUMBA_CACHE_DIR=/home/subwave/.cache/numba

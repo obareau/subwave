@@ -1,9 +1,5 @@
 'use client';
 
-// The recent-Subsonic-call log, grouped by endpoint.
-//
-// Part of the debug/ split - see ../DebugPanel.tsx.
-
 import { useState } from 'react';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { Card, Btn } from '../ui';

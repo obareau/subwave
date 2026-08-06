@@ -1,6 +1,4 @@
 'use client';
-// Per-persona skill toggles — which autonomous segments may fire when this
-// persona is on air.
 import type { Persona, SkillCatalogEntry } from './types';
 import { Card, Toggle } from '../ui';
 

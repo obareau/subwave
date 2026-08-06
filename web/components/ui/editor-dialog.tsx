@@ -14,38 +14,29 @@ import {
   DropdownMenuTrigger,
 } from './dropdown-menu';
 
-/* V3 EditorDialog — the full-screen, edge-to-edge editor used for add/edit of
-   shows, personas and skills. One shell, three editors, one consistent shape:
+/* Full-screen, edge-to-edge editor for add/edit of shows, personas and skills.
+   Header carries title/sub/close only; ALL actions live in the footer transport
+   bar, so the header stays uniform across the three editors.
 
-     • header  — title + sub + close, identical across all three (no actions).
-     • body    — full-width, scrollable. Sections inside are separated by
-                 hairline dividers (see `.card.is-flat`), never boxed cards.
-     • footer  — the transport bar; ALL actions live here (save, delete,
-                 run, toggles…), so the header stays uniform.
-
-   Why full-screen rather than the centered `Modal`: a `fixed inset-0` panel has
-   no width to animate, so it can't reproduce the width-jump glitch that pushed
-   the shows/personas editors in-page (#694). It is built on Radix Dialog — so
-   focus trap, body scroll-lock and hierarchical Escape come for free — instead
-   of a hand-rolled overlay (the old glitchy skills modal).
+   Full-screen rather than the centered `Modal` because a `fixed inset-0` panel
+   has no width to animate, so it can't reproduce the width-jump glitch that
+   pushed the shows/personas editors in-page (#694). Built on Radix Dialog for
+   focus trap, body scroll-lock and hierarchical Escape.
 
    Motion mirrors `sheet.tsx`: AnimatePresence + Radix `forceMount` so the exit
-   plays before unmount; `<m.div>` (LazyMotion is `strict` — `motion.div` is
-   forbidden, see MotionProvider). The content fades + rises (transform/opacity
-   only → GPU-composited, no layout shift). Reduced motion is honoured globally
-   by `MotionConfig reducedMotion="user"`, so there is no per-component branch.
+   plays before unmount, and `<m.div>` because LazyMotion is `strict` (see
+   MotionProvider). Reduced motion is honoured globally by `MotionConfig`, so
+   there is no per-component branch.
 
-   It portals into `.admin-root` (falling back to <body>) so the admin-scoped
-   class names (`.input` / `.btn` / `.card` / `.eyebrow` …) resolve for the
-   form controls rendered inside. Controlled: pass `open` + `onOpenChange`. */
+   Portals into `.admin-root` (falling back to <body>) so the admin-scoped class
+   names resolve for the form controls inside. */
 export interface EditorDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title?: ReactNode;
   sub?: ReactNode;
   footer?: ReactNode;
-  /* Extra class on the content panel — lets a consumer scope its own descendant
-     CSS inside (e.g. the skills editor's `.sw-seg` typographic rules). */
+  /* Lets a consumer scope its own descendant CSS inside the content panel. */
   className?: string;
   children?: ReactNode;
 }
@@ -64,7 +55,6 @@ export function EditorDialog({
     setContainer(document.querySelector<HTMLElement>('.admin-root') || document.body);
   }, []);
 
-  // Full-width content with generous side padding — the form fills the modal.
   const column = 'w-full px-5 sm:px-8';
 
   return (
@@ -89,7 +79,6 @@ export function EditorDialog({
                 transition={{ duration: 0.22, ease: [0.2, 0.7, 0.2, 1] }}
                 className={cn('fixed inset-0 z-50 flex flex-col bg-bg text-ink outline-none', className)}
               >
-                {/* Sticky header — title + sub + close, identical for all editors */}
                 <div className="flex-none border-b border-ink">
                   <div className={cn(column, 'flex items-center justify-between gap-3 py-3.5')}>
                     <div className="flex min-w-0 flex-1 items-baseline gap-3">
@@ -107,15 +96,13 @@ export function EditorDialog({
                   </div>
                 </div>
 
-                {/* Scrollable body — full width */}
                 <div className="v3-scroll flex-1 overflow-auto">
                   <div className={cn(column, 'py-6')}>
                     {children}
                   </div>
                 </div>
 
-                {/* Sticky footer — the transport bar; all actions live here.
-                    Padding is tighter on a phone: the footer is fixed furniture
+                {/* Padding is tighter on a phone: the footer is fixed furniture
                     stealing height from the form above it. */}
                 {footer && (
                   <div className="flex-none border-t border-ink">
@@ -133,41 +120,27 @@ export function EditorDialog({
   );
 }
 
-/* ── EditorFooter ────────────────────────────────────────────────────────────
-   The transport bar shared by the shows / personas / skills editors.
+/* EditorFooter — the transport bar shared by the shows / personas / skills
+   editors. Data-driven because a plain flex-wrap row falls apart on a phone:
+   the skills bar alone is ~600px of transport and wrapped into four rows.
 
-   Each editor used to hand `EditorDialog` its own hand-rolled flex row of `lg`
-   buttons with `flex-wrap`. That reads fine on a desktop and falls apart on a
-   phone: the skills bar alone (on-air toggle, RUN NOW, EXPORT, DELETE, SHARE TO
-   COMMUNITY, CLOSE, SAVE) is ~600px of transport, so it wrapped into four rows
-   and ate half the viewport — leaving a sliver of the form the operator is
-   actually editing.
+   `primary` (close/save) always stays visible on one row; `actions` render
+   inline from `sm:` up and collapse into a `⋯` overflow menu below it; `status`
+   gets its own line so a long validation message never pushes buttons around.
 
-   So the footer is data-driven, and the phone gets a different shape rather
-   than the same shape reflowed:
-
-     • `primary` (close/save) always stays visible — one row, never wraps.
-     • `actions` (the editor-scoped verbs: remove, run, export, share…) render
-       inline from `sm:` up, and collapse into a single `⋯` overflow menu below
-       it. One button instead of five.
-     • `status` gets its own line above, so a long validation message never
-       pushes the buttons around.
-     • buttons run at the default size on a phone and `lg` from `sm:` up.
-
-   Both branches are rendered and CSS-hidden (not `useIsMobile`) so the footer
-   is stable through hydration — a first paint with the wrong branch would jump
-   the whole panel. */
+   Both branches are rendered and CSS-hidden rather than picked by
+   `useIsMobile`, so the footer is stable through hydration — a first paint with
+   the wrong branch would jump the whole panel. */
 export interface EditorAction {
   id: string;
-  /** Button label. Text only, please — it doubles as the overflow-menu row. */
+  /** Text only: it doubles as the overflow-menu row. */
   label: ReactNode;
   onClick: () => void;
   tone?: 'default' | 'solid' | 'accent' | 'danger';
   disabled?: boolean;
   title?: string;
-  /** Left off the bar entirely (keeps call sites free of `&&` gymnastics). */
+  /** Left off the bar entirely, so call sites need no `&&` gymnastics. */
   hidden?: boolean;
-  /** Leading icon, rendered in both the button and the menu row. */
   icon?: ReactNode;
 }
 
@@ -178,7 +151,7 @@ const TONE_VARIANT = {
   danger: 'destructive',
 } as const;
 
-/* Default size on a phone, `lg` from sm: up — mirrors buttonVariants' `lg`. */
+/* Default size on a phone, `lg` from sm: up; mirrors buttonVariants' `lg`. */
 const RESPONSIVE_SIZE = 'sm:px-[22px] sm:py-[11px] sm:text-[11px]';
 
 function ActionButton({ action, className }: { action: EditorAction; className?: string }) {
@@ -198,13 +171,13 @@ function ActionButton({ action, className }: { action: EditorAction; className?:
 }
 
 export interface EditorFooterProps {
-  /** Validation / hint line. Rendered on its own row above the buttons. */
+  /** Rendered on its own row above the buttons. */
   status?: ReactNode;
-  /** Always-visible control that isn't a button (the skills on-air toggle). */
+  /** Always-visible control that isn't a button. */
   extra?: ReactNode;
-  /** Editor-scoped verbs. Inline on desktop, `⋯` overflow menu on a phone. */
+  /** Inline on desktop, `⋯` overflow menu on a phone. */
   actions?: EditorAction[];
-  /** Close / save. Always visible, always last. */
+  /** Always visible, always last. */
   primary?: EditorAction[];
 }
 
@@ -222,7 +195,6 @@ export function EditorFooter({ status, extra, actions = [], primary = [] }: Edit
       <div className="flex items-center gap-2 sm:gap-3">
         {extra}
 
-        {/* phone — every secondary verb behind one trigger */}
         {visible.length > 0 && (
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
@@ -252,7 +224,6 @@ export function EditorFooter({ status, extra, actions = [], primary = [] }: Edit
           </DropdownMenu>
         )}
 
-        {/* desktop — the same verbs, spelled out */}
         {visible.length > 0 && (
           <div className="hidden flex-wrap items-center gap-2 sm:flex sm:gap-3">
             {visible.map(a => <ActionButton key={a.id} action={a} />)}

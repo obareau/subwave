@@ -1,15 +1,8 @@
 'use client';
 
-// A persona avatar - the initials-behind-<img> pattern shared with the show
-// pickers (a broken or absent avatar falls back to readable initials). Two
-// sizes: 'lg' anchors the host, 'sm' builds the overlapping guest cluster.
-//
-// Part of the shows/ split - see ../ShowsPanel.tsx.
-
 import { cn } from '../../../lib/cn';
 import type { Persona } from './types';
 import { abbrev } from './lib';
-
 
 // A persona avatar — the initials-behind-<img> pattern shared with the show
 // pickers (a broken/absent avatar falls back to readable initials). Two sizes:

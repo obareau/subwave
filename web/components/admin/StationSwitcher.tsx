@@ -1,13 +1,9 @@
 'use client';
 
-// Sidebar station switcher — the multi-station counterpart of shadcn's
-// "Teams" switcher: the active station sits at the top of the sidebar and
-// the dropdown lists every station on this install plus a shortcut to
-// /admin/stations. Switching from here is the same flow as the panel's
-// MAKE LIVE: confirm → POST /stations/:id/activate → full-screen switching
-// overlay until the restarted controller answers with the new boot-frozen
-// station id (useStationSwitchPoll). Renders nothing until the station list
-// loads — the wordmark above stays the sidebar's constant brand anchor.
+// Sidebar station switcher. Switching runs the same flow as the panel's MAKE
+// LIVE: confirm → POST /stations/:id/activate → full-screen overlay until the
+// restarted controller answers with the new boot-frozen station id
+// (useStationSwitchPoll). Renders nothing until the station list loads.
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';

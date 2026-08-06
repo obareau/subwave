@@ -13,6 +13,7 @@ import * as db from './library-db.js';
 import * as blocklist from './blocklist.js';
 import { resolveEmbeddingDim } from './embeddings.js';
 import { openingKeyFrom, endingKeyFrom } from './mix.js';
+import { DEEP_CUT_DAYS, EMPTY_AIRED_INDEX, type AiredIndex } from './airing.js';
 
 let loaded = false;
 
@@ -35,6 +36,7 @@ export async function load() {
 export async function reload() {
   if (db.isOpen()) db.close();
   loaded = false;
+  invalidateAiredIndex();
   await load();
 }
 
@@ -44,6 +46,7 @@ export async function reload() {
 // reload(), this deletes the file first (db.reset()) for a true fresh start.
 export async function reset() {
   loaded = false;
+  invalidateAiredIndex();
   await db.reset();
   await load();
 }
@@ -70,6 +73,7 @@ export function checkpoint(): void {
 export function shutdown(): void {
   if (db.isOpen()) db.close();
   loaded = false;
+  invalidateAiredIndex();
 }
 
 // Record one aired track into the durable play-history table. Called fire-and-
@@ -102,6 +106,10 @@ export function get(songId: string): any {
     genre: t.genre,
     moods: t.moods,
     audioMoods: t.audioMoods,
+    // Last.fm enrichment tags — show-filter.trackAllTags' any-namespace union
+    // (blocklist `tag` rules) resolves them through this projection for
+    // Subsonic-sourced rows; before this line the field was silently dropped.
+    lastfmTags: t.lastfmTags,
     energy: t.energy,
     source: t.source,
     confidence: t.confidence,
@@ -192,10 +200,6 @@ export function set(songId: string, data: any) {
 
 export function has(songId: string): boolean {
   return loaded ? db.hasTags(songId) : false;
-}
-
-export function allTaggedIds(): string[] {
-  return loaded ? db.allTaggedIds() : [];
 }
 
 // COUNT(*) of tagged tracks — for callers that only need the tally (e.g. the
@@ -356,14 +360,14 @@ export function songsByEnergy(energy: string | null | undefined): any[] {
 // scoped to tagged tracks — the same set that carries embeddings) and KNN from
 // the first candidate that has one. Tracks with no embedding and no title match
 // return []; callers fall back to other sources.
-export function tracksLikeThis(seed: string, k: number): any[] {
+export function tracksLikeThis(seed: string, k: number, opts: db.KnnOpts = {}): any[] {
   if (!loaded || !seed) return [];
-  let hits = db.knnById(seed, k);
+  let hits = db.knnById(seed, k, opts);
   if (hits.length === 0) {
     // Treat `seed` as a title — find the best embedded match and KNN from it.
     for (const row of db.filter({ q: seed, limit: 8 }).rows) {
       if (row.id === seed) continue;            // already tried as an id above
-      hits = db.knnById(row.id, k);
+      hits = db.knnById(row.id, k, opts);
       if (hits.length) break;
     }
   }
@@ -382,15 +386,15 @@ export function tracksLikeThis(seed: string, k: number): any[] {
 // (the agent often passes a title rather than an id). Returns [] when the seed
 // has no audio vector — un-analysed library, or analysis backend without CLAP —
 // so callers fall through to the other sources exactly like the text path.
-export function tracksLikeThisAudio(seed: string, k: number): any[] {
+export function tracksLikeThisAudio(seed: string, k: number, opts: db.KnnOpts = {}): any[] {
   if (!loaded || !seed) return [];
-  let hits = db.knnAudioById(seed, k);
+  let hits = db.knnAudioById(seed, k, opts);
   if (hits.length === 0) {
     // Treat `seed` as a title — find the best matching track that HAS an audio
     // vector and KNN from it.
     for (const row of db.filter({ q: seed, limit: 8 }).rows) {
       if (row.id === seed) continue;            // already tried as an id above
-      hits = db.knnAudioById(row.id, k);
+      hits = db.knnAudioById(row.id, k, opts);
       if (hits.length) break;
     }
   }
@@ -414,7 +418,7 @@ export function embeddingIndexTextMode(): 'plain' | 'prefixed' {
 // embeds a free-text query and calls this to find tracks semantically close
 // to the query — including ones whose lyrics don't literally contain those
 // words.
-export function tracksByVector(vec: number[] | Float32Array, k: number): any[] {
+export function tracksByVector(vec: number[] | Float32Array, k: number, opts: db.KnnOpts = {}): any[] {
   if (!loaded) return [];
   // Guard against an embedding model/provider drift: if the live query vector's
   // length no longer matches the dim the index was built at, knnByVector would
@@ -431,7 +435,7 @@ export function tracksByVector(vec: number[] | Float32Array, k: number): any[] {
     );
     return [];
   }
-  const hits = db.knnByVector(vec, k);
+  const hits = db.knnByVector(vec, k, opts);
   const out: any[] = [];
   for (const hit of hits) {
     const t = db.getTrack(hit.id);
@@ -444,9 +448,9 @@ export function tracksByVector(vec: number[] | Float32Array, k: number): any[] {
 // counterpart to tracksByVector. Used by the picker when a journey waypoint is
 // the audio anchor instead of the current track. Returns [] on an empty audio
 // index, so the picker falls through to its other sources.
-export function tracksByAudioVector(vec: number[] | Float32Array, k: number): any[] {
+export function tracksByAudioVector(vec: number[] | Float32Array, k: number, opts: db.KnnOpts = {}): any[] {
   if (!loaded) return [];
-  const hits = db.knnByAudioVector(vec, k);
+  const hits = db.knnByAudioVector(vec, k, opts);
   const out: any[] = [];
   for (const hit of hits) {
     const t = db.getTrack(hit.id);
@@ -455,13 +459,83 @@ export function tracksByAudioVector(vec: number[] | Float32Array, k: number): an
   return blocklist.rejectBlocked(out);
 }
 
+// Whether the CLAP index covers this track. Cheap indexed existence check (no
+// blob decode) for callers that need to SAMPLE ids the audio index actually
+// holds — the journey destination in broadcast/dj-agent/runs.ts, where a blind
+// sample of a partially-analysed bucket yields a centroid of one or two tracks.
+export function hasAudioVector(id: string): boolean {
+  if (!loaded || !id) return false;
+  try { return db.hasAudioVector(id); } catch { return false; }
+}
+
+// Last-aired index over the plays table, memoised briefly — every pick path
+// consults it (pool re-rank, agent collect ordering, the deepCuts tool), and a
+// GROUP BY over the whole play history per tool call would be wasteful. 5 min
+// staleness is harmless: the short horizon is guarded by the recency sets;
+// this signal only separates "days ago" from "never".
+const AIRED_INDEX_TTL_MS = 5 * 60 * 1000;
+let airedIndexCache: { at: number; val: AiredIndex } | null = null;
+let airedIndexWarnedAt = 0;
+const AIRED_WARN_THROTTLE_MS = 10 * 60 * 1000;
+
+// Drop the memoised airing index. Called wherever the backing DB is swapped or
+// wiped — reload() after a backup restore, reset() after the admin Library
+// Reset, which deletes the whole plays table. Without this the picker keeps
+// re-ranking against airings from a database that no longer exists for up to
+// AIRED_INDEX_TTL_MS: freshnessBiasedOrder de-prioritises tracks with no play
+// history at all, and slim()/pickViaPool withhold `unaired` from tracks the
+// station has provably never aired. Exactly why db.invalidateStats() is wired
+// into library-db/lifecycle.ts.
+function invalidateAiredIndex(): void {
+  airedIndexCache = null;
+}
+
+export function lastAiredInfo(): AiredIndex {
+  if (!loaded) return EMPTY_AIRED_INDEX;
+  if (airedIndexCache && Date.now() - airedIndexCache.at < AIRED_INDEX_TTL_MS) {
+    return airedIndexCache.val;
+  }
+  try {
+    const val = db.lastAiredIndex();
+    airedIndexCache = { at: Date.now(), val };
+    return val;
+  } catch (err) {
+    // Degrading to an empty index is right — airing memory is a soft ranking
+    // signal and must never block a pick — but doing it SILENTLY meant a
+    // persistently unreadable plays table looked exactly like a station with no
+    // history. Throttled so a wedged handle can't flood the log on every pick.
+    const now = Date.now();
+    if (now - airedIndexWarnedAt > AIRED_WARN_THROTTLE_MS) {
+      airedIndexWarnedAt = now;
+      console.warn(`[library] airing index unavailable: ${(err as Error).message} — picks fall back to plain shuffle and drop the "unaired" signal`);
+    }
+    return EMPTY_AIRED_INDEX;
+  }
+}
+
+// Random sample of the library's unexplored shelf: tracks never aired, or
+// unaired for `days`. Backs the agent's deepCuts discovery tool.
+export function deepCuts(days: number = DEEP_CUT_DAYS, k = 60): any[] {
+  if (!loaded) return [];
+  const cutoffIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    return blocklist.rejectBlocked(db.deepCutTracks(cutoffIso, k).map(slimTrack));
+  } catch {
+    return [];
+  }
+}
+
 export function stats() {
   if (!loaded) {
-    return { total: 0, distinctArtists: 0, byMood: {}, byEnergy: {}, byGenre: {}, updatedAt: null, embeddingMeta: null };
+    return { total: 0, mirrorTotal: 0, distinctArtists: 0, byMood: {}, byEnergy: {}, byGenre: {}, updatedAt: null, embeddingMeta: null };
   }
   const s = db.stats();
   return {
     total: s.total,
+    // Library-mirror size (every row, tagged or not) — NOT `total`, which
+    // counts only tracks the tagger has reached. Anything sizing itself to the
+    // library rather than to tagging coverage reads this one.
+    mirrorTotal: s.mirrorTotal,
     distinctArtists: s.distinctArtists,
     byMood: s.byMood,
     byEnergy: s.byEnergy,
@@ -475,6 +549,33 @@ export function stats() {
     // model out from under an existing index.
     embeddingMeta: db.getEmbeddingMeta(),
   };
+}
+
+// Share of text vectors that embed nothing but the artist/title/album label —
+// no Last.fm tags, no lyric excerpt, no measured acoustics — as 0..1, or null
+// when the index is empty/unloaded. On such an index cosine "similarity" ranks
+// by artist/album TEXT while presenting itself as mood similarity (#1246).
+// The coverage UI has surfaced this for a while (similarityThin ≥50%); the
+// picker tools read it here so the RUNTIME can react too.
+export function labelOnlyShare(): number | null {
+  if (!loaded) return null;
+  try {
+    const embedded = db.stats().withEmbedding ?? 0;
+    if (!embedded) return null;
+    return db.labelOnlyVectorCount() / embedded;
+  } catch {
+    return null;
+  }
+}
+
+// How many tracks have had a vocal pass at all (vocal_ranges_json NOT NULL,
+// where a stored "[]" — analysed instrumental — counts as done). Deliberately
+// NOT folded into stats(): it's an extra COUNT that only the vocal show filter
+// needs, and only when a show actually pins one, so the callers that ask for it
+// pay for it. Zero here means the whole dimension has no coverage.
+export function vocalAnalyzedCount(): number {
+  if (!loaded) return 0;
+  try { return db.vocalAnalyzedCount(); } catch { return 0; }
 }
 
 // Re-export the filter contract — admin Library browse panel calls this.

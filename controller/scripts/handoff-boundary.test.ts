@@ -34,7 +34,7 @@
 
 import assert from 'node:assert/strict';
 import { contextDate, handoffIsStale, rollIsBackward } from '../src/broadcast/session.js';
-import { PICK_SHOW_LOOKAHEAD_SEC, pickLeadSec } from '../src/broadcast/queue/pure.js';
+import { PICK_SHOW_LOOKAHEAD_SEC, linkAirDate, pickLeadSec } from '../src/broadcast/queue/pure.js';
 
 const MAX_AGE = 20 * 60_000;   // mirrors HANDOFF_MAX_AGE_MS in dj-agent.ts
 
@@ -194,6 +194,18 @@ function main() {
 
   test('at a track start remaining ≈ duration → byte-for-byte the old lead', () => {
     assert.equal(pickLeadSec(420), 420);
+  });
+
+  test('#1282 — linkAirDate inverts the showAt padding back to air time', () => {
+    // Reported case: logged 08:48:01, the on-air track has 2 min left, so the
+    // link airs at 08:50 — but showAt (air + the attribution padding) says
+    // 08:52 and the link announced "eight fifty-two"-adjacent times on air.
+    // The spoken clock must come from linkAirDate(showAt) = now + leadSec
+    // exactly, whatever the padding constant is set to.
+    const now = Date.parse('2026-08-03T08:48:01.000Z');
+    const lead = pickLeadSec(119) as number;
+    const showAt = new Date(now + (lead + PICK_SHOW_LOOKAHEAD_SEC) * 1000);
+    assert.equal(linkAirDate(showAt).getTime(), now + lead * 1000);
   });
 
   test('held predecessor (deadline path) → remaining + the held track', () => {

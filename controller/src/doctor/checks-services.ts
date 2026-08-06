@@ -11,7 +11,7 @@ import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
 import * as tts from '../audio/tts.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
-import { streamStatus } from '../broadcast/liquidsoap-control.js';
+import { streamStatusFresh } from '../broadcast/liquidsoap-control.js';
 import {
   primaryLeg,
   fallbackLeg,
@@ -278,9 +278,12 @@ export async function checkBroadcast(): Promise<Finding[]> {
     out.push({ label: 'Icecast stream', status: 'skip', detail: err?.message || 'status unavailable' });
   }
 
-  // Liquidsoap telnet — proves the mixer process is alive and reachable.
+  // Liquidsoap telnet — proves the mixer process is alive and reachable. Reads
+  // FRESH, never the /settings badge's cached figure: "proves" is the whole
+  // contract here, and a cached reading would let Doctor report a dead mixer as
+  // reachable. Doctor is operator-triggered, so the extra connection is rare.
   try {
-    const on = await streamStatus();
+    const on = await streamStatusFresh();
     out.push({
       label: 'mixer (Liquidsoap)',
       status: on ? 'ok' : 'warn',

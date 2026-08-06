@@ -1,16 +1,12 @@
-// Shared display helpers for live-session turns served by GET /session.
+// Shared display helpers for live-session turns from GET /session.
 //
-// A session turn is { t, role, kind, text, meta }. The live session is the
-// single source of truth for the booth log everywhere it's shown to people:
-// the player Booth feed, the player broadcast ticker, and /admin/dash. The
-// controller's in-memory `djLog` is operator diagnostics only — it stays
-// behind /admin/debug.
+// The live session is the single source of truth for the booth log wherever
+// it's shown to people (player Booth feed, broadcast ticker, /admin/dash). The
+// controller's in-memory `djLog` is operator diagnostics only and stays behind
+// /admin/debug.
 //
-// role → display class:
-//   voice  — spoken on-air verbatim (links, station IDs, time, weather)
-//   dj     — the DJ agent's pick / request reasoning (the "thinking")
-//   track  — a track that aired
-//   system — system events (session start, pick prompts, restarts)
+// role → display class: voice (spoken on-air verbatim), dj (the agent's pick /
+// request reasoning), track (a track that aired), system (session events).
 
 import type { SessionTurn } from './types';
 
@@ -25,40 +21,35 @@ export function turnClass(turn: SessionTurn | null | undefined): TurnDisplayClas
   }
 }
 
-export const isVoice = (turn: SessionTurn | null | undefined): boolean =>
-  turnClass(turn) === 'voice';
-
 // "DJ" view = everything the DJ personally said or decided.
 export const isDjTurn = (turn: SessionTurn | null | undefined): boolean => {
   const c = turnClass(turn);
   return c === 'voice' || c === 'dj';
 };
 
-// Session turns carry no id — derive a stable React key from timestamp + index.
+// Session turns carry no id, so key off timestamp + index.
 export function turnKey(turn: SessionTurn | null | undefined, i: number): string {
   return `${turn?.t || 'x'}-${i}`;
 }
 
-// Plain display text. `track` turns already carry a "▶ …" prefix in their
-// text; strip it so callers can supply their own marker.
+// `track` turns already carry a "▶ …" prefix; strip it so callers can supply
+// their own marker.
 export function turnText(turn: SessionTurn | null | undefined): string {
   const text = turn?.text || '';
   if (turnClass(turn) === 'track') return text.replace(/^▶\s*/, '');
   return text;
 }
 
-// Operator-log summary for long `event` turns. The `pick` event turn is the
-// literal prompt posted to the DJ agent — ~700 chars of link/clock/transition
-// coaching (dj-agent.ts runTrackEvent) that the model needs verbatim but that
-// drowns the booth log when rendered raw. Returns a one-liner for long event
-// turns; null means "render the turn as-is".
+// The `pick` event turn is the literal prompt posted to the DJ agent — ~700
+// chars of coaching the model needs verbatim but that drowns the booth log.
+// Returns a one-liner for long event turns; null means render the turn as-is.
 export function eventTurnSummary(turn: SessionTurn | null | undefined): string | null {
   if (turn?.role !== 'event') return null;
   const text = turn.text || '';
   if (text.length <= 160) return null;
   if (turn.kind === 'pick') {
-    // Head is `Now playing "X" by Y [id: …] (after "A" by B)` — keep it, drop
-    // the raw Subsonic id, and reduce the instruction tail to flags.
+    // Head is `Now playing "X" by Y [id: …] (after "A" by B)`: keep it, drop
+    // the raw Subsonic id, reduce the instruction tail to flags.
     const head = (text.split('. Pick the track to play next.')[0] ?? text)
       .replace(/\s*\[id:[^\]]*\]/g, '');
     const parts = [
@@ -72,17 +63,13 @@ export function eventTurnSummary(turn: SessionTurn | null | undefined): string |
   return `${firstSentence.trim()} …`;
 }
 
-// The single voice/dj turn to surface as the DJ "thinking" line under the
-// now-playing block. Walk newest→oldest and skip `dj`/pick turns whose
-// `meta.trackId` is for a track other than what's on air: a pick turn is
-// written at the *previous* track's start, so its trackId is the track to play
-// NEXT, not the one playing now — showing it under now-playing reads as "this
-// song's reasoning" when it isn't (#546). Voice/segment turns (aired links,
-// station IDs, weather) carry no trackId and are whatever was last spoken on
-// air, so they always qualify — meaning the back-announce link that aired as
-// this track started wins, falling back to this track's own pick reason on a
-// silent transition. A null/unknown currentTrackId yields the latest voice turn
-// (no pick can be confirmed as "this song").
+// The single voice/dj turn to surface as the DJ "thinking" line under
+// now-playing. Walk newest→oldest and skip `dj`/pick turns whose `meta.trackId`
+// isn't what's on air: a pick turn is written at the *previous* track's start,
+// so its trackId is the NEXT track, and showing it reads as this song's
+// reasoning when it isn't (#546). Voice/segment turns carry no trackId and are
+// whatever was last spoken, so they always qualify. A null/unknown
+// currentTrackId yields the latest voice turn, since no pick can be confirmed.
 export function selectThinkingTurn(
   feed: SessionTurn[] | null | undefined,
   currentTrackId: string | null = null,

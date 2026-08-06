@@ -7,16 +7,13 @@ import BoothBuddy, { type BuddyMood } from '@/components/BoothBuddy';
 import { useLiteMode } from '@/hooks/useLiteMode';
 import type { SessionTurn } from '@/lib/types';
 
-// Shows only the DJ's "thinking" — the latest thing said on-air ("voice") or
-// the pick/request reasoning ("dj") for the track ON AIR. Aired tracks and
-// system turns stay out. Renders under the track info as a small typed line;
-// tapping it opens the Booth drawer with the full transcript. The Booth Sprite
-// leads the line, its mood reacting to DJ activity (see useBuddyMood).
+// Shows only the latest thing said on-air ("voice") or the pick/request
+// reasoning ("dj") for the track ON AIR; aired tracks and system turns stay
+// out.
 
-// Booth-buddy mood loop, driven by the newest DJ turn: it perks up when the DJ
-// speaks ('onair') or picks ('curious'), settles back to 'content', then dozes
-// off after a long quiet stretch. A poke (tap on the buddy) interrupts with a
-// 'spooked' → 'curious' → 'content' startle sequence, mirroring the prototype.
+// Mood loop driven by the newest DJ turn: 'onair' when the DJ speaks,
+// 'curious' on a pick, back to 'content', then 'sleepy' after a quiet stretch.
+// A poke interrupts with a 'spooked' → 'curious' → 'content' startle.
 const REACTION_MS: Record<'voice' | 'dj', number> = { voice: 8000, dj: 6000 };
 const SLEEPY_MS = 90000;
 
@@ -66,12 +63,10 @@ function thinkingText(turn: SessionTurn): string {
   return cls === 'voice' ? `"${text}"` : text;
 }
 
-// Stagger cap: total enter time stays under ~600 ms regardless of line length.
-// The type-on is word-by-word, not per character — visually near-identical
-// under the blur ramp at a fraction of the animated element count (a long
-// "extended" script used to mount hundreds of motion spans). Each word
-// animates ~120 ms; a 6-word line at the 80 ms default lands ~0.6 s, and
-// longer lines squeeze the stagger so the last word still arrives by then.
+// Total enter time stays under ~600 ms regardless of line length. The type-on
+// is word-by-word rather than per character: near-identical under the blur ramp
+// at a fraction of the animated element count (a long script used to mount
+// hundreds of motion spans).
 function staggerFor(count: number): number {
   if (count <= 0) return 0;
   return Math.min(0.08, 0.5 / count);
@@ -79,8 +74,7 @@ function staggerFor(count: number): number {
 
 const cursorChar = '▍';
 
-// Classic leading glyph, shown in place of the buddy when the operator has the
-// mascot turned off (settings.ui.boothBuddy === false).
+// Shown in place of the buddy when settings.ui.boothBuddy is false.
 const MARKER: Record<string, string> = { voice: '♪', dj: '◇' };
 
 export interface DjThinkingLineProps {
@@ -98,25 +92,21 @@ export interface DjThinkingLineProps {
   onOpenBooth?: () => void;
 }
 
-// `feed` is the live session's `messages` array — turns of
-// { t, role, kind, text, meta }, oldest first.
 export default function DjThinkingLine({ feed, enabled, currentTrackId = null, buddyOn = false, onOpenBooth }: DjThinkingLineProps) {
-  // The DJ turn relevant to what's ON AIR now — see selectThinkingTurn (#546).
+  // The turn relevant to what's ON AIR now — see selectThinkingTurn (#546).
   const latest = useMemo<SessionTurn | null>(
     () => selectThinkingTurn(feed, currentTrackId),
     [feed, currentTrackId],
   );
 
   const [mood, poke] = useBuddyMood(latest);
-  // Hit-test taps against the buddy so poking it startles the sprite in place,
-  // while a tap on the text still opens the Booth (a drawer would otherwise
-  // cover the buddy, so you'd never see the reaction).
+  // Taps are hit-tested against the buddy: a tap on the text opens the Booth,
+  // whose drawer would cover the buddy and hide the poke reaction.
   const buddyRef = useRef<HTMLSpanElement>(null);
 
-  // Skip the type-on stagger under OS reduced-motion and in lite mode.
   // MotionConfig reducedMotion="user" only drops transform animations (this
-  // one is opacity+blur), and html.lite's CSS `animation: none` can't reach
-  // these JS-driven tweens — so both need an explicit gate here.
+  // one is opacity+blur), and html.lite's `animation: none` can't reach a
+  // JS-driven tween, so both need an explicit gate here.
   const reduced = useReducedMotion();
   const { lite } = useLiteMode();
   const instant = !!reduced || lite;
@@ -149,13 +139,9 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
         }
       }}
       title="Open booth feed"
-      // Full width on phones — the stage column is already narrow there; the
-      // 82% cap is a desktop line-length nicety.
+      // Full width on phones; the 82% cap is a desktop line-length limit.
       className="v3-focus mt-[22px] mb-[10px] flex w-full max-w-full cursor-pointer items-start gap-2 font-mono text-[14px] leading-[1.6] text-muted sm:max-w-[82%] sm:text-[15px]"
     >
-      {/* The Booth Sprite leads the line; tap it to poke it (hit-test in
-          onClick above). When the operator turns the mascot off, fall back to
-          the classic ♪/◇ marker. */}
       {buddyOn ? (
         <span ref={buddyRef} aria-hidden="true" className="mt-[1px] shrink-0">
           <BoothBuddy mood={mood} size={20} />
@@ -165,11 +151,9 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
           {MARKER[cls] || '·'}
         </span>
       )}
-      {/* Clamp the inline teaser so the long "extended" scripts can't grow the
-          column and shove the artwork/title up under the header, or spill the
-          line down over the waveform (issue #576). The clamp is tighter on
-          short windows; the full text stays one tap away in the Booth (and in
-          aria-label). */}
+      {/* Clamped so a long script can't grow the column and shove the title
+          under the header, or spill down over the waveform (issue #576).
+          Tighter on short windows; the full text stays in the Booth. */}
       <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere] [@media(min-height:760px)]:line-clamp-6">
         <AnimatePresence mode="wait">
           <m.span
@@ -194,8 +178,8 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
                       visible: { opacity: 1, filter: 'blur(0px)', transition: { duration: 0.12 } },
                     }}
                     aria-hidden="true"
-                    // Preserve whitespace but allow soft wrapping at spaces — `pre`
-                    // would suppress every wrap opportunity and overflow the column.
+                    // `pre` would suppress every wrap opportunity and overflow
+                    // the column.
                     style={{ whiteSpace: 'pre-wrap' }}
                   >
                     {word}

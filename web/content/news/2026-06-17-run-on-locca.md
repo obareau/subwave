@@ -6,7 +6,7 @@ author: The SUB/WAVE desk
 excerpt: locca is now a first-class LLM provider. Point SUB/WAVE at a local llama.cpp server for the DJ, and a locca embedding server for the library tagger. No API keys, no cloud.
 ---
 
-SUB/WAVE already ran on Ollama or any cloud model. Now it runs on locca too. locca is a small TUI around llama.cpp for local GGUF models, and SUB/WAVE treats it as a first-class provider for both the DJ and the library tagger. No hand-typed server URLs.
+SUB/WAVE already ran on [Ollama or any cloud model](/news/bring-your-own-llm). Now it runs on locca too. locca is a small TUI around llama.cpp for local GGUF models, and SUB/WAVE treats it as a first-class provider for both the DJ and the library tagger. No hand-typed server URLs.
 
 ## What's new
 
@@ -50,4 +50,4 @@ Click Test embeddings, then Start tagging.
 
 ## Why it helps
 
-The whole station runs on your own hardware. The DJ thinks on a local model and the tagger embeds your library locally, so nothing leaves the box. Switch providers later from admin with no redeploy.
+The whole station runs on your own hardware. The DJ thinks on a local model and the tagger embeds your library locally, so nothing leaves the box. Switch providers later from admin with no redeploy. Provider details and token budgets live in the manual's [Models & Tokens](/manual/llm) page.

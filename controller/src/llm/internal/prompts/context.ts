@@ -58,7 +58,11 @@ export const ANGLES = {
     'Mark the hour as a small milestone in the day: one down, or one to go, or the halfway point.',
     'Mention the time as if answering someone who just asked — offhand, unbothered.',
     'Let the hour prompt a tiny aside about how fast or slow the day is moving, time folded in.',
-    'Tie the hour to the light outside — what the sky is probably doing right now — and slip the time in after.',
+    // Grounded in fields the hourly context actually carries (season, the
+    // "after dark" tag) — the old wording ("what the sky is probably doing")
+    // asked the model to guess the weather, which #471 removed from these
+    // calls precisely so it couldn't be invented.
+    'Tie the hour to the season\'s light — how early the dark comes, how long the evening stretches — and slip the time in after.',
   ],
 };
 

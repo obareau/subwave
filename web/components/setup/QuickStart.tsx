@@ -19,7 +19,7 @@ export default function QuickStart() {
           <code className="bs-code-inline">start</code>. By the time the
           installer finishes, Docker is up and the controller reports on-air.
           That leaves <code className="bs-code-inline">setup</code>, which
-          handles configuration rather than lifecycle.
+          configures the station rather than starting or stopping it.
         </p>
         <div className="bs-faststart">
           <p className="bs-eyebrow">TWO COMMANDS</p>
@@ -116,10 +116,17 @@ cd subwave`}</CodeBlock>
         <p className="bs-eyebrow">ONCE IT'S ON THE AIR</p>
         <h2>Run the station from the CLI.</h2>
         <p>
-          The setup wizard is one screen of the operator console. Run{' '}
-          <code className="bs-code-inline">npm start</code> from the repo any time to open it.
-          From the menu you can check the stack, run diagnostics, tail logs, restart a service,
-          or open the web player and admin.
+          The same binary runs the station day to day, from any directory. No{' '}
+          <code className="bs-code-inline">cd</code> into the install dir, no clone.
+        </p>
+        <CodeBlock>{`subwave status
+subwave logs controller
+subwave doctor
+subwave update`}</CodeBlock>
+        <p className="text-muted">
+          Working from a clone instead? <code className="bs-code-inline">npm start</code> opens
+          the operator console, a menu covering the same ground: stack status, diagnostics,
+          logs, restart, and the web player.
         </p>
         <CodeBlock>{`npm start`}</CodeBlock>
       </section>

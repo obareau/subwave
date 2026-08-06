@@ -7,14 +7,14 @@ export default function CustomSkills() {
     <ManualPage
       eyebrow="MANUAL · 06"
       title="Custom skills."
-      intro="The things the DJ does between tracks (a weather check, a headline, a dig on the song playing) are skills. Seven ship built in, and you can edit any of them or add your own — from the admin Skills page or by dropping a folder into state/skills — with no code changes to the station."
+      intro="The things the DJ does between tracks (a weather check, a headline, a dig on the song playing) are skills. Seven ship built in, and you can edit any of them or add your own, from the admin Skills page or by dropping a folder into state/skills, with no code changes to the station."
       current="/manual/skills"
     >
       <section className="bs-section">
         <p className="bs-eyebrow">WHAT A SKILL IS</p>
         <h2>One thing: a between-track line.</h2>
         <p>
-          A SUB/WAVE skill is a single between-track <em>spoken segment</em> — the DJ
+          A SUB/WAVE skill is a single between-track <em>spoken segment</em>: the DJ
           glances at something, then either says one short line over the music or stays
           quiet. The format borrows from{' '}
           <a href="https://github.com/anthropics/skills" target="_blank" rel="noreferrer">
@@ -40,16 +40,20 @@ export default function CustomSkills() {
     SKILL.md      # frontmatter (→ settings) + body (→ the DJ's brief)
     tool.mjs      # OPTIONAL: a data fetcher the DJ can call`}</CodeBlock>
         <p>
-          A ready-to-copy example ships in the repo at{' '}
-          <code className="bs-code-inline">docs/examples/skills/moon-phase</code>. Copy it
-          into <code className="bs-code-inline">state/skills/</code> and hit{' '}
-          <strong>Rescan</strong> on the admin Skills page.
+          Two ready-to-copy examples ship in the repo under{' '}
+          <code className="bs-code-inline">docs/examples/skills/</code>:{' '}
+          <code className="bs-code-inline">moon-phase</code> is the small end (no settings, no
+          network, it works the lunar phase out from the date), and{' '}
+          <code className="bs-code-inline">sunset</code> has operator settings, calls a
+          public API and remembers what it already said. Copy a folder into{' '}
+          <code className="bs-code-inline">state/skills/</code> and hit <strong>Rescan</strong>{' '}
+          on the admin Skills page.
         </p>
         <p>
           Prefer not to touch disk? The admin <strong>Skills</strong> page has a{' '}
           <strong>New skill</strong> button that writes the{' '}
           <code className="bs-code-inline">SKILL.md</code> for you, and lets you edit or
-          delete custom skills in place. It&rsquo;s prompt-only — frontmatter plus the brief;
+          delete custom skills in place. It&rsquo;s prompt-only (frontmatter plus the brief);
           a <code className="bs-code-inline">tool.mjs</code> data fetcher is still added on
           disk + Rescan.
         </p>
@@ -89,7 +93,7 @@ the phase is unremarkable.`}</CodeBlock>
         </p>
         <p className="text-muted">
           <code className="bs-code-inline">context:</code> is an allow-list of the &ldquo;right
-          now&rdquo; fields the DJ may weave in — <code className="bs-code-inline">date</code>,{' '}
+          now&rdquo; fields the DJ may weave in: <code className="bs-code-inline">date</code>,{' '}
           <code className="bs-code-inline">clock</code>, <code className="bs-code-inline">time</code>,{' '}
           <code className="bs-code-inline">weather</code>, <code className="bs-code-inline">festival</code>,{' '}
           <code className="bs-code-inline">show</code>, <code className="bs-code-inline">listeners</code>.
@@ -104,12 +108,13 @@ the phase is unremarkable.`}</CodeBlock>
         <p className="bs-eyebrow">EDITING THE BUILT-INS</p>
         <h2>The shipped skills are files too.</h2>
         <p>
-          The seven built-ins — weather, news, now-playing digs, curiosity, album anniversaries,
-          library deep-cuts, and web search — ship as read-only templates (under{' '}
-          <code className="bs-code-inline">controller/src/skills/builtins/&lt;kind&gt;/</code>) and
-          are seeded into <code className="bs-code-inline">state/skills/&lt;kind&gt;/</code> —
-          both <code className="bs-code-inline">SKILL.md</code> <em>and</em>{' '}
-          <code className="bs-code-inline">tool.mjs</code> — the first time the station boots.
+          The seven built-ins (weather, news, now-playing digs, curiosity, album anniversaries,
+          library deep-cuts, and web search) ship as read-only templates under{' '}
+          <code className="bs-code-inline">controller/src/skills/builtins/&lt;kind&gt;/</code>, and
+          the first time the station boots both their{' '}
+          <code className="bs-code-inline">SKILL.md</code> <em>and</em> their{' '}
+          <code className="bs-code-inline">tool.mjs</code> are seeded into{' '}
+          <code className="bs-code-inline">state/skills/&lt;kind&gt;/</code>.
           From then on they&rsquo;re ordinary editable skills: change the brief, cooldown,
           context, or label on the admin <strong>Skills</strong> page, and edit the{' '}
           <code className="bs-code-inline">tool.mjs</code> on disk + Rescan, exactly as you
@@ -121,7 +126,7 @@ the phase is unremarkable.`}</CodeBlock>
           default, it can be disabled but not deleted (delete its folder and the seeder
           restores it on the next boot), and its edit sheet has a{' '}
           <strong>↺ Reset to default</strong> that overwrites both files from the shipped
-          template — the way back from a broken edit, and the way to pull in a newer
+          template: the way back from a broken edit, and the way to pull in a newer
           image&rsquo;s <code className="bs-code-inline">tool.mjs</code>.
         </p>
         <p>
@@ -156,11 +161,11 @@ not a newsreader's. Skip anything dull or stale; silence is fine.`}</CodeBlock>
           Export a default function; return any JSON, and use{' '}
           <code className="bs-code-inline">{`{ available: false }`}</code> to tell the DJ
           there&rsquo;s nothing worth airing. The 3rd arg, <code className="bs-code-inline">services</code>,
-          is the station facade — <code className="bs-code-inline">searchWeb</code>,{' '}
+          is the station facade (<code className="bs-code-inline">searchWeb</code>,{' '}
           <code className="bs-code-inline">library</code>, <code className="bs-code-inline">nowPlaying</code>,{' '}
           <code className="bs-code-inline">recentPlays</code>, <code className="bs-code-inline">onThisDay</code>,{' '}
           <code className="bs-code-inline">fetchHeadlines</code>, durable{' '}
-          <code className="bs-code-inline">recall</code> — so a custom skill can reach as far as a built-in.
+          <code className="bs-code-inline">recall</code>), so a custom skill can reach as far as a built-in.
         </p>
         <CodeBlock>{`export default async function (ctx, state, services, config, input) {
   // ctx      — the moment: { time, weather, festival, dominantMood, clock }
@@ -178,12 +183,28 @@ export const ready = (services) => services.searchReady();
 
 // OPTIONAL: agent-steerable string params — the agent may pass a value or
 // null for each; without this the tool is zero-arg (best for small models).
-export const inputs = { query: 'what to search for; null for the default dig' };`}</CodeBlock>
+export const inputs = { query: 'what to search for; null for the default dig' };
+
+// OPTIONAL: operator knobs — each one becomes a field in this skill's edit
+// sheet. Values are saved to this skill's own SKILL.md and arrive as \`config\`.
+export const configFields = {
+  feed:         { type: 'url',    label: 'News feed · RSS 2.0' },
+  feedMaxItems: { type: 'number', label: 'Max items', min: 1, max: 50, integer: true },
+};`}</CodeBlock>
         <p>
           The call is timeout-guarded and any error degrades cleanly to &ldquo;no
           data&rdquo;; a slow or broken skill can never hang the station. With no{' '}
           <code className="bs-code-inline">tool.mjs</code>, the skill writes from its brief
           alone — no live data to look at.
+        </p>
+        <p>
+          <code className="bs-code-inline">configFields</code> is how a skill gets its own
+          settings without anyone touching the controller: <code className="bs-code-inline">text</code>,{' '}
+          <code className="bs-code-inline">url</code> or <code className="bs-code-inline">number</code>, up to
+          eight of them. Because they&rsquo;re declared in the code rather than keyed to the
+          skill&rsquo;s name, a <em>copy</em> of a skill keeps its settings: that&rsquo;s what
+          makes a second news source, on a second feed, a matter of export → rename →
+          import.
         </p>
         <div className="bs-callout">
           <div className="bs-eyebrow">IT RUNS YOUR CODE</div>

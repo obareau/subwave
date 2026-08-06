@@ -135,7 +135,7 @@ the default profile (everything except `weather`).
 ### Personas — `personas/<slug>/PERSONA.md`
 
 A DJ character. The body is the **soul** — the character prose the DJ writes in,
-up to 1000 characters. Station-specific bindings (voice, avatar, which skills it
+up to 2000 characters. Station-specific bindings (voice, avatar, which skills it
 runs) are set by the operator after install, so they aren't part of the catalog
 entry.
 
@@ -159,16 +159,16 @@ notes: who played on it, where it was cut, why this pressing. Never rushed.
 A **show template**: a standing brief plus music-steering filters and mode flags.
 A show carries only what travels between stations — everything tied to your
 particular library and schedule is bound on install (see the next section). The
-body is the **topic** brief, up to 1000 characters.
+body is the **topic** brief, up to 2000 characters.
 
 ```markdown
 ---
 name: <slug>
 displayName: Late Feels          # show name, 1–60 chars (required)
-moods: reflective, night         # each from the mood vocab below, max 6 (optional)
-genres: shoegaze, dream pop      # free text, ≤64 chars each, max 6 (optional)
+moods: reflective, night         # each from the mood vocab below, max 15 (optional)
+genres: shoegaze, dream pop      # free text, ≤64 chars each, max 15 (optional)
 eras: 1988-1999                  # comma list of YYYY or YYYY-YYYY windows, years 1900–2100 (optional)
-energies: low                    # low | medium | high, max 6 (optional)
+energies: low                    # low | medium | high, max 15 (optional)
 filtersStrict: false             # true = hard filter instead of a soft lean
 programme: false                 # true = produced-episode mode (intro / feature / outro)
 banter: false                    # true = scripted multi-voice breaks (needs guests, added on install)

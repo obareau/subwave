@@ -37,8 +37,15 @@ state/skills/
     tool.mjs      # OPTIONAL: a data fetcher, wrapped as a tool the DJ can call
 ```
 
-A copy-ready example lives in [`docs/examples/skills/moon-phase`](./examples/skills/moon-phase).
-Copy that folder into `state/skills/` and hit **Rescan** in the admin Skills page.
+Two copy-ready examples live in [`docs/examples/skills`](./examples/skills) — copy
+a folder into `state/skills/` and hit **Rescan** in the admin Skills page:
+
+- [`moon-phase`](./examples/skills/moon-phase) — the small end. No settings, no
+  network, no memory: it works out the lunar phase from the date and returns it.
+- [`sunset`](./examples/skills/sunset) — the other end. Operator settings
+  (`configFields`), a call out to a public API, and `state` so it marks the
+  sunset once a day rather than every time it fires. Fill in its coordinates in
+  the edit sheet before it will say anything.
 
 ## SKILL.md
 
@@ -139,7 +146,39 @@ export const ready = (services) => services.searchReady();
 // Without this export the tool is zero-arg, which small models handle best —
 // only declare inputs the agent genuinely benefits from steering.
 export const inputs = { query: 'what to search for; null for the default dig' };
+
+// OPTIONAL: operator knobs — the settings this skill gets its own fields for in
+// /admin/skills. Values are stored in this skill's OWN SKILL.md frontmatter and
+// arrive back as `config`, so there's nothing else to wire up. Declaring them
+// HERE (rather than in the controller) is what makes a copy of the skill keep
+// its settings: a duplicate copies tool.mjs verbatim, name and all.
+export const configFields = {
+  feed:         { type: 'url',    label: 'News feed · RSS 2.0', placeholder: 'https://…/rss.xml' },
+  feedMaxItems: { type: 'number', label: 'Max items', min: 1, max: 50, integer: true },
+};
 ```
+
+**`configFields` reference.** A flat `{ key: { … } }` map, up to 8 entries per
+skill. Each entry takes:
+
+| field | meaning |
+|---|---|
+| `type` | `text` (default), `url` (http/https only), or `number` |
+| `label` | the form label; derived from the key when omitted |
+| `placeholder` / `hint` | optional form affordances |
+| `min` / `max` / `integer` | `number` only — bounds, and whether fractions are refused |
+
+Keys must be `letters, digits, _` starting with a letter, and can't shadow a key
+the editor already owns (`name`, `label`, `cooldown`, `context`, `window`,
+`requiresKey`, `tags`, `toolDescription`, `brief`). A malformed declaration is
+narrowed away rather than breaking the skill — the skill still loads and airs, it
+just shows no settings. A bad *value* is the opposite: the save fails loudly with
+a 400 rather than dropping the knob you just set.
+
+You don't have to declare a knob to use one — a tool can read any frontmatter key
+off `config`. Declaring it is what gets you a form field instead of a hand edit.
+Either way the editor preserves keys it doesn't own, so a hand-authored line
+survives a save from the admin form.
 
 ### `services` — the station facade
 
@@ -201,7 +240,9 @@ How a built-in still differs from a skill you add:
 
 ### News: swapping the feed
 
-The `news` skill takes two extra frontmatter keys:
+The `news` skill's `tool.mjs` declares two knobs (`configFields`, above), so
+**/admin/skills → News → Edit** carries a feed field and a max-items field. They
+are stored as two extra frontmatter keys, editable on disk just as well:
 
 ```yaml
 ---
@@ -221,6 +262,10 @@ station's voice. Skip a headline that is dull or stale; silence is fine.
 `NEWS_FEED_URL` / `NEWS_MAX_ITEMS` in `.env` only *seed* this file on the very first
 boot. Once `state/skills/news/SKILL.md` exists, **the file wins** — change the feed
 there (or in `/admin/skills`), not in `.env`.
+
+**Running a second news source** is just a copy: export the skill, rename it in
+both the `.md` and the `.zip`, re-import, and point its feed somewhere else. The
+knobs ride in `tool.mjs`, so the copy gets its own feed field under its own name.
 
 ## Lifecycle
 

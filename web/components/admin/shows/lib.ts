@@ -1,9 +1,6 @@
-// Pure show helpers: hydrating a stored/partial show into a fully-defaulted
-// one, validating it, and projecting it to the payload and table-row shapes.
-// hydrateShow is the single place the legacy singular -> plural coercion (#929)
-// lives, so the initial load and a community install can't drift apart.
-//
-// Part of the shows/ split - see ../ShowsPanel.tsx (mirrors schedule/lib.ts).
+// Pure show helpers: hydration, validation, and the payload / table-row
+// projections. hydrateShow is the single place the legacy singular → plural
+// coercion (#929) lives, so the initial load and a community install can't drift.
 
 import type { ShowFacet, ShowRow } from './ShowsTable';
 import { SHOW_COLORS } from '../schedule/lib';
@@ -16,9 +13,8 @@ export function clientMintId() {
   return 's_' + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
-// Hydrate a raw/partial show (from GET /settings or a community install
-// response) into a fully-defaulted Show. Kept in one place so the initial load
-// and the community install share the exact same legacy-field coercion (#929).
+// One place, so the initial load and a community install share the exact same
+// legacy-field coercion (#929).
 export function hydrateShow(s: Partial<Show>): Show {
   return {
     id: s.id ?? clientMintId(),
@@ -37,6 +33,10 @@ export function hydrateShow(s: Partial<Show>): Show {
       return fromYear != null || toYear != null ? [{ fromYear, toYear }] : [];
     })(),
     energies: Array.isArray(s.energies) ? s.energies : (s as { energy?: string }).energy ? [(s as { energy?: string }).energy!] : [],
+    // Anything unrecognised reads as no constraint, matching the controller's
+    // coerceShowVocals — a steering field that silently stops applying is a far
+    // smaller failure than a show that stops playing music.
+    vocals: s.vocals === 'instrumental' || s.vocals === 'vocal' ? s.vocals : '',
     filtersStrict: s.filtersStrict ?? false,
     maxTrackSeconds: s.maxTrackSeconds ?? null,
     playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
@@ -68,12 +68,11 @@ export function showValid(s: Show): boolean {
 // At least one music filter set — the Strict filter toggle only means
 // something when there's a filter for it to harden.
 export function hasAnyMusicFilter(s: Show): boolean {
-  return !!(s.moods.length || s.genres.length || s.energies.length || s.eras.length);
+  return !!(s.moods.length || s.genres.length || s.energies.length || s.eras.length || s.vocals);
 }
 
-// The wire shape for one show — trimmed + the "only-means-something-with"
-// conditionals the server also enforces. Shared by the editor's Save show
-// (POST /shows) and the community install path so they stay identical.
+// Trimmed, with the "only-means-something-with" conditionals the server also
+// enforces. Shared by Save show (POST /shows) and the community install path.
 export function showPayload(s: Show) {
   return {
     id: s.id,
@@ -90,6 +89,7 @@ export function showPayload(s: Show) {
     genres: s.genres.map(g => g.trim()).filter(Boolean),
     eras: s.eras,
     energies: s.energies,
+    vocals: s.vocals || '',
     // Strict only means something with at least one music filter set.
     filtersStrict: hasAnyMusicFilter(s) && s.filtersStrict,
     maxTrackSeconds: s.maxTrackSeconds,
@@ -104,10 +104,8 @@ export function showPayload(s: Show) {
 }
 
 
-// "What it plays" facets — moods, genres, eras, energies as chips, plus the
-// hard-lock / playlist / length flags. The visual counterpart to the text
-// showFilterSummary() the strip cards still use. Shared by the slate card and
-// the table row so the two views can't drift.
+// The visual counterpart to the text showFilterSummary(). Shared by the slate card
+// and the table row so the two views can't drift.
 export function showFacets(s: Show): ShowFacet[] {
   const facets: ShowFacet[] = [];
   if (s.moods.length) s.moods.forEach(m => facets.push({ key: `mood-${m}`, label: m }));
@@ -115,6 +113,7 @@ export function showFacets(s: Show): ShowFacet[] {
   s.genres.forEach(g => facets.push({ key: `genre-${g}`, label: g }));
   s.eras.forEach((e, idx) => facets.push({ key: `era-${idx}`, label: eraLabelOf(e) }));
   s.energies.forEach(en => facets.push({ key: `energy-${en}`, label: en }));
+  if (s.vocals) facets.push({ key: 'vocals', label: s.vocals === 'instrumental' ? 'instrumental' : 'vocals' });
   if (s.filtersStrict && hasAnyMusicFilter(s)) facets.push({ key: 'strict', label: 'strict', accent: true });
   const nPl = s.playlistIds?.length ?? 0;
   if (nPl) facets.push({ key: 'playlists', label: `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' · strict' : ''}` });
@@ -132,9 +131,8 @@ export function joinNames(names: string[]): string {
   return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
 }
 
-// A persona as a table face — resolved avatar URL plus the initials to fall
-// back to. `index` is carried on the row because the panel keys colour and
-// editing off the show's position in the array.
+// `index` is carried on the row because the panel keys colour and editing off the
+// show's position in the array.
 function faceOf(p: Persona, apiBase: string) {
   return {
     key: p.id,
@@ -143,8 +141,7 @@ function faceOf(p: Persona, apiBase: string) {
   };
 }
 
-// Flatten one show into the table's view-model. Everything the row needs is
-// derived here, so ShowsTable never has to know the `Show` shape.
+// Everything the row needs is derived here, so ShowsTable never sees `Show`.
 export function showRow(s: Show, index: number, personas: Persona[], apiBase: string, hrs: number): ShowRow {
   const host = personas.find(p => p.id === s.personaId) ?? null;
   const guests = (s.guestPersonaIds || [])

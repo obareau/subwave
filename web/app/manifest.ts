@@ -5,9 +5,8 @@ import type { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    // Stable identity for the installed app. Pinned so changing start_url
-    // later doesn't make the browser treat it as a different PWA and ship a
-    // duplicate icon to home screens.
+    // Pinned so changing start_url later doesn't make the browser treat this as
+    // a different PWA and ship a duplicate home-screen icon.
     id: '/',
     name: 'SUB/WAVE',
     short_name: 'SUB/WAVE',
@@ -16,8 +15,7 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: '/',
     scope: '/',
     display: 'standalone',
-    // Desktop installs get the title-bar-less window when supported, falling
-    // back through minimal-ui to standalone. Browsers ignore values they
+    // Falls back through minimal-ui to standalone; browsers ignore values they
     // don't understand.
     display_override: ['window-controls-overlay', 'standalone', 'minimal-ui'],
     orientation: 'any',
@@ -30,8 +28,7 @@ export default function manifest(): MetadataRoute.Manifest {
       { src: '/icons/192-maskable', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
       { src: '/icons/512-maskable', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
-    // Rich install dialog on Android / Chromium. `form_factor: wide` is
-    // shown on desktop install flows; narrow is the mobile preview.
+    // `form_factor: wide` shows on desktop install flows, narrow on mobile.
     screenshots: [
       {
         src: '/screenshots/wide',

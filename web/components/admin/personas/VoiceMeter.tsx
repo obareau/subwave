@@ -1,8 +1,6 @@
 'use client';
 // LED output-trim meter (±12 dB). Pointer-draggable AND keyboard-operable
 // (role="slider"), so it keeps the accessibility the native range input had.
-// Lit cells track --accent; off-cells/centre marker track --ink so it reads in
-// both themes.
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,

@@ -1,9 +1,6 @@
 'use client';
-// Full-screen editor for the focused persona: identity, behaviour, voice and
-// skills cards plus the save bar. Binds the index-taking mutators down to the
-// focused persona so the cards stay index-agnostic. Rendered inside the shared
-// EditorDialog (edge-to-edge, centered column) — the roster is the browse view,
-// this is the edit surface.
+// Full-screen editor for the focused persona. Binds the index-taking mutators down
+// to the focused persona so the cards stay index-agnostic.
 import type { RefObject } from 'react';
 import type { Persona, PersonaTts, SettingsResponse, SkillCatalogEntry } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
@@ -62,10 +59,8 @@ export function PersonaEditor({
   const updateTts = (patch: Partial<PersonaTts>) => setPersonaTts(index, patch);
   const setSkills = (skills: string[]) => setPersonaSkills(index, skills);
 
-  // Share this persona to the community: open the prefilled add-persona Issue
-  // Form on GitHub in a new tab. A workflow turns the issue into a one-file PR;
-  // once merged it ships to everyone as an installable community persona. Only
-  // the portable fields travel — voice and avatar stay station-side.
+  // Opens the prefilled add-persona Issue Form on GitHub. Only the portable fields
+  // travel — voice and avatar stay station-side.
   const shareToCommunity = () => {
     const slug = persona.name.trim().toLowerCase()
       .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 49);
@@ -91,9 +86,9 @@ export function PersonaEditor({
       onOpenChange={(o) => { if (!o) onClose(); }}
       title={<Eyebrow className="text-vermilion">{isNew ? 'New persona' : 'Edit persona'}</Eyebrow>}
       sub={(
-        // The dialog header holds `sub` in a flex-none cell, so `truncate` needs
-        // a width to bite — cap it on phones (a 40-char persona name would
-        // otherwise push the close button off the edge), unbounded on desktop.
+        // The dialog header holds `sub` in a flex-none cell, so `truncate` needs a
+        // width to bite: capped on phones (a 40-char name would push the close
+        // button off the edge), unbounded on desktop.
         <span className="caption block max-w-[42vw] truncate sm:max-w-none">
           {persona.name.trim() || `Persona ${index + 1}`} · {index + 1} of {personaCount}
         </span>

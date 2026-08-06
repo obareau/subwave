@@ -253,6 +253,11 @@ interface WorkerMessage {
   vocal_activity_capable?: boolean;
   tail_vocal_capable?: boolean;
   text_embedding_capable?: boolean;
+  // Capabilities the worker advertised at ready but LOST once the model was
+  // actually asked to load — {audio_embedding?: why, vocal_activity?: why}.
+  // Rides on EVERY message (analyze_worker.emit), because the failure mode it
+  // exists for answers ok=true with the field merely absent.
+  capability_loss?: Record<string, string>;
   bpm?: number | null;
   key?: string | null;
   intro_ms?: number | null;
@@ -295,6 +300,37 @@ let _localAudioCapable: boolean | null = null;
 let _localVocalCapable: boolean | null = null;
 let _localTailVocalCapable: boolean | null = null;
 let _localTextCapable: boolean | null = null;
+// Local twins of _sidecarAudioError / _sidecarVocalError — see there.
+let _localAudioError: string | null = null;
+let _localVocalError: string | null = null;
+
+// Apply a worker-reported capability loss to the local flags. The reported
+// failure BEATS the ready line, which is a find_spec probe run before any model
+// was asked to load: on the heavy image "torch is importable" is true and stays
+// true no matter how the weight download goes. Downward only — a worker never
+// gains a capability by failing at one.
+function noteLocalCapabilityLoss(msg: WorkerMessage): void {
+  const lost = msg.capability_loss;
+  if (!lost || typeof lost !== 'object') return;
+  if (typeof lost.audio_embedding === 'string') {
+    if (_localAudioError !== lost.audio_embedding) {
+      console.error(`[analyze] audio embeddings unavailable: ${lost.audio_embedding}`);
+    }
+    _localAudioError = lost.audio_embedding;
+    _localAudioCapable = false;
+    // The text tower rides CLAP's load, so it goes down with it.
+    _localTextCapable = false;
+  }
+  if (typeof lost.vocal_activity === 'string') {
+    if (_localVocalError !== lost.vocal_activity) {
+      console.error(`[analyze] vocal activity unavailable: ${lost.vocal_activity}`);
+    }
+    _localVocalError = lost.vocal_activity;
+    _localVocalCapable = false;
+    // Tail ranges are the same Demucs separation over the outro window.
+    _localTailVocalCapable = false;
+  }
+}
 
 function startWorker(): Promise<void> {
   if (booting) return booting;
@@ -317,12 +353,23 @@ function startWorker(): Promise<void> {
         try { msg = JSON.parse(line); } catch { continue; }
         if (msg.ready) {
           ready = true;
-          // The ready line knows about hard load failures the find_spec probe
-          // can't see, so it always overwrites.
-          if (typeof msg.audio_embedding_capable === 'boolean') _localAudioCapable = msg.audio_embedding_capable;
-          if (typeof msg.vocal_activity_capable === 'boolean') _localVocalCapable = msg.vocal_activity_capable;
-          if (typeof msg.tail_vocal_capable === 'boolean') _localTailVocalCapable = msg.tail_vocal_capable;
-          if (typeof msg.text_embedding_capable === 'boolean') _localTextCapable = msg.text_embedding_capable;
+          // The ready line knows about a pre-warm load failure the find_spec
+          // probe can't see, so it overwrites — EXCEPT where we've already
+          // watched the model fail to load. A worker that died and respawned
+          // announces itself with a clean find_spec probe (its own
+          // _embed_failed went with the process), and letting that raise the
+          // flag back to true is the local twin of the sidecar's recycle bug:
+          // the backfill re-widens to the same doomed track set every pass.
+          if (typeof msg.audio_embedding_capable === 'boolean' && _localAudioError === null) _localAudioCapable = msg.audio_embedding_capable;
+          if (typeof msg.vocal_activity_capable === 'boolean' && _localVocalError === null) _localVocalCapable = msg.vocal_activity_capable;
+          if (typeof msg.tail_vocal_capable === 'boolean' && _localVocalError === null) _localTailVocalCapable = msg.tail_vocal_capable;
+          if (typeof msg.text_embedding_capable === 'boolean' && _localAudioError === null) _localTextCapable = msg.text_embedding_capable;
+        }
+        // On EVERY message, the ready line included (a pre-warm failure is
+        // reported there): a capability the worker has lost since it announced
+        // itself. Applied after the ready assignments so the loss always wins.
+        noteLocalCapabilityLoss(msg);
+        if (msg.ready) {
           clearTimeout(readyTimer);
           resolve();
           continue;
@@ -473,6 +520,18 @@ let _sidecarVocalCapable: boolean | null = null;
 let _sidecarTailVocalCapable: boolean | null = null;
 // Same, for the CLAP TEXT tower (embed-text) — null until probed/absent field.
 let _sidecarTextCapable: boolean | null = null;
+// WHY a capability is false, when the reason is a failed model LOAD rather than
+// a lean build. Null for every other case, a lean image included — a lean image
+// is a build choice, not a fault, and the two need opposite advice.
+//
+// Sourced from /health ONLY, unlike the local backend which reads it off the
+// worker's own responses: the sidecar already remembers the failure across its
+// idle worker respawn (server.py capability_errors), so /health is the single
+// place that fact lives and a second write path here could only disagree with
+// it. Cost is one probe cycle of latency — a failure that lands mid-pass is
+// acted on by the NEXT pass, which is also when it could first matter.
+let _sidecarAudioError: string | null = null;
+let _sidecarVocalError: string | null = null;
 // The candidate base URL that last reported the 'analyze' engine — the one
 // sidecarRequest POSTs to. Set by sidecarReachable; '' until a probe succeeds.
 let _sidecarBase = '';
@@ -490,6 +549,8 @@ async function probeSidecar(url: string): Promise<boolean> {
       analyze_vocal_capable?: boolean | null;
       analyze_tail_vocal_capable?: boolean | null;
       analyze_text_capable?: boolean | null;
+      analyze_audio_error?: string | null;
+      analyze_vocal_error?: string | null;
     };
     const reachable = !!body.ok && Array.isArray(body.engines) && body.engines.includes('analyze');
     if (reachable) {
@@ -498,6 +559,8 @@ async function probeSidecar(url: string): Promise<boolean> {
       _sidecarVocalCapable = typeof body.analyze_vocal_capable === 'boolean' ? body.analyze_vocal_capable : null;
       _sidecarTailVocalCapable = typeof body.analyze_tail_vocal_capable === 'boolean' ? body.analyze_tail_vocal_capable : null;
       _sidecarTextCapable = typeof body.analyze_text_capable === 'boolean' ? body.analyze_text_capable : null;
+      _sidecarAudioError = typeof body.analyze_audio_error === 'string' ? body.analyze_audio_error : null;
+      _sidecarVocalError = typeof body.analyze_vocal_error === 'string' ? body.analyze_vocal_error : null;
     }
     return reachable;
   } catch {
@@ -599,6 +662,24 @@ export function vocalActivityAvailable(): boolean | null {
   return null;
 }
 
+// WHY the CLAP capability is false, when the cause is a model that failed to
+// LOAD rather than an image built without it. null in every other case — a lean
+// build is a choice, not a fault. This is the difference between "switch to the
+// heavy image" and "this host can't reach huggingface.co", which a bare
+// `capable: false` cannot express and which #1300 bug 3 shows people acting on.
+export function audioEmbeddingError(): string | null {
+  if (_backend === 'sidecar') return _sidecarAudioError;
+  if (_backend === 'local') return _localAudioError;
+  return null;
+}
+
+// Demucs twin of audioEmbeddingError.
+export function vocalActivityError(): string | null {
+  if (_backend === 'sidecar') return _sidecarVocalError;
+  if (_backend === 'local') return _localVocalError;
+  return null;
+}
+
 // Whether the active backend computes TAIL vocal ranges (outro.vocalRanges).
 // Doubles as a worker-version signal: backends predating the feature never
 // report it, so consumers must treat only `=== true` as capable — the vocal
@@ -661,6 +742,16 @@ function localEmbedTexts(texts: string[], timeoutMs: number): Promise<number[][]
   });
 }
 
+// A deadline that expired mid-request, as opposed to a refused connection or a
+// capability 404/500 (which fail fast and mean "not available", not "still
+// working"). fetchWithTimeout aborts with a DOMException named 'AbortError';
+// the local stdio path rejects with a "timed out" Error.
+function isTimeoutError(err: unknown): boolean {
+  const name = (err as { name?: unknown } | null)?.name;
+  const message = (err as { message?: unknown } | null)?.message;
+  return name === 'AbortError' || (typeof message === 'string' && message.includes('timed out'));
+}
+
 // Embed a batch of texts through the CLAP TEXT tower — 512-d L2-normalised
 // vectors in the SAME space as the stored track audio vectors, so cosine
 // against them is meaningful (CLAP is contrastive audio–text). Used for
@@ -669,17 +760,28 @@ function localEmbedTexts(texts: string[], timeoutMs: number): Promise<number[][]
 // sidecar without /embed-text, worker without torch) — callers degrade to
 // their non-text behaviour, never throw. `timeoutMs` lets interactive callers
 // (a picker tool mid-pick) use a shorter deadline than a bulk pass.
+//
+// One retry on TIMEOUT only: since the idle model release also runs on CPU
+// (#1204), an interactive call can land on a cold worker whose CLAP reload
+// (seconds on a typical box, longer on the small hosts the release exists
+// for) eats the whole deadline. The backend keeps loading after we stop
+// waiting — the request is already queued behind its single-flight lock — so
+// a second wait usually lands on a warm model instead of failing the search.
+// Non-timeout failures (refused, 404, 500) stay single-shot: they're fast,
+// definitive "not available" signals. Bulk callers whose deadline is already
+// generous pass `coldRetry: false` — a 10-minute timeout means real trouble,
+// not a cold model.
 export async function embedTexts(
   texts: string[],
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; coldRetry?: boolean } = {},
 ): Promise<number[][] | null> {
   if (texts.length === 0) return [];
   const timeoutMs = opts.timeoutMs ?? config.analyzer.requestTimeoutMs;
   const backend = await resolveBackend();
   if (!backend) return null;
-  if (backend === 'sidecar') {
-    if (_sidecarTextCapable === false) return null;
-    try {
+  if (backend === 'sidecar' && _sidecarTextCapable === false) return null;
+  const attempt = async (): Promise<number[][] | null> => {
+    if (backend === 'sidecar') {
       const res = await fetchWithTimeout(`${_sidecarBase}/embed-text`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -692,15 +794,19 @@ export async function embedTexts(
       if (!res.ok) return null;
       const body = (await res.json()) as { ok?: boolean; embeddings?: unknown };
       return body?.ok ? parseVectors(body.embeddings, texts.length) : null;
+    }
+    if (!ready) await startWorker();
+    return await localEmbedTexts(texts, timeoutMs);
+  };
+  try {
+    return await attempt();
+  } catch (err) {
+    if (opts.coldRetry === false || !isTimeoutError(err)) return null;
+    try {
+      return await attempt();
     } catch {
       return null;
     }
-  }
-  try {
-    if (!ready) await startWorker();
-    return await localEmbedTexts(texts, timeoutMs);
-  } catch {
-    return null;
   }
 }
 

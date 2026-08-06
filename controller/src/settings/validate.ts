@@ -29,8 +29,10 @@ import {
   SCRIPT_LENGTHS,
   SHOWS_LIMIT,
   SHOW_ENERGY,
+  SHOW_VOCALS,
   SHOW_FILTER_VALUES_MAX,
   SHOW_MOODS,
+  SHOW_TOPIC_MAX,
   SKILLS_PER_PERSONA_LIMIT,
   SKILL_SLUG_RE,
   SOUL_MAX,
@@ -38,8 +40,6 @@ import {
   TTS_CLOUD_PROVIDERS,
   TTS_ENGINES,
   WEATHER_CONDITIONS,
-  WEBHOOKS_LIMIT,
-  WEBHOOK_EVENTS,
   Webhook,
   clampTtsGain,
   clampTtsSpeed,
@@ -47,6 +47,7 @@ import {
   coerceGuestPersonaIds,
   coercePlaylistIds,
   coerceShowEnergies,
+  coerceShowVocals,
   coerceShowGenres,
   coerceShowMoods,
   emptyWeek,
@@ -56,20 +57,28 @@ import {
 } from './vocab.js';
 import { BOUNDS, rawMaxTrackSec } from './defaults.js';
 import { minTrackSeconds } from './store.js';
+import { webhooksSchema } from '../schemas/webhook.js';
+import { mergeWebhookSecrets } from '../schemas/webhook-server.js';
+import { firstMessage } from '../util/zod-error.js';
 
-function validateTtsBlock(raw, where) {
+// Strict validator for a `{engine, voice, cloudProvider}` voice slot. Shared by
+// every persona's `tts` block AND the station-wide TTS fallback slot
+// (`settings.tts.fallback`) — same shape, same per-engine voice rules, one
+// implementation. `where` is the settings path prefix used in error messages,
+// so a bad fallback voice reads `tts.fallback.voice must ...`.
+export function validateTtsBlock(raw, where) {
   const t = raw || {};
   if (!TTS_ENGINES.includes(t.engine)) {
-    throw new Error(`${where}.tts.engine must be one of: ${TTS_ENGINES.join(', ')}`);
+    throw new Error(`${where}.engine must be one of: ${TTS_ENGINES.join(', ')}`);
   }
   if (!TTS_CLOUD_PROVIDERS.includes(t.cloudProvider)) {
-    throw new Error(`${where}.tts.cloudProvider must be one of: ${TTS_CLOUD_PROVIDERS.join(', ')}`);
+    throw new Error(`${where}.cloudProvider must be one of: ${TTS_CLOUD_PROVIDERS.join(', ')}`);
   }
   let voice = String(t.voice ?? '').trim();
   if (t.engine === 'kokoro') {
     if (!KOKORO_VOICE_RE.test(voice)) {
       throw new Error(
-        `${where}.tts.voice must match <lang><gender>_<name> for kokoro, e.g. bf_isabella`,
+        `${where}.voice must match <lang><gender>_<name> for kokoro, e.g. bf_isabella`,
       );
     }
   } else if (t.engine === 'chatterbox') {
@@ -78,7 +87,7 @@ function validateTtsBlock(raw, where) {
     // uploaded into config.chatterbox.voiceDir.
     if (voice && !CHATTERBOX_VOICE_RE.test(voice)) {
       throw new Error(
-        `${where}.tts.voice for chatterbox must be a .wav filename (no path), or empty for the default voice`,
+        `${where}.voice for chatterbox must be a .wav filename (no path), or empty for the default voice`,
       );
     }
   } else if (t.engine === 'pocket-tts') {
@@ -91,22 +100,22 @@ function validateTtsBlock(raw, where) {
     if (!voice) voice = 'alba';
     if (!POCKET_TTS_VOICE_RE.test(voice) && !CHATTERBOX_VOICE_RE.test(voice)) {
       throw new Error(
-        `${where}.tts.voice for pocket-tts must be a built-in voice id (e.g. alba) or a .wav filename`,
+        `${where}.voice for pocket-tts must be a built-in voice id (e.g. alba) or a .wav filename`,
       );
     }
   } else if (t.engine === 'cloud') {
     // openai-compatible voices are server-specific; an empty voice lets the
     // server use its own default. openai/elevenlabs both require a voice id.
     if (t.cloudProvider === 'openai-compatible') {
-      if (voice.length > 100) throw new Error(`${where}.tts.voice must be 0-100 chars`);
+      if (voice.length > 100) throw new Error(`${where}.voice must be 0-100 chars`);
     } else if (voice.length < 1 || voice.length > 100) {
-      throw new Error(`${where}.tts.voice must be 1-100 chars`);
+      throw new Error(`${where}.voice must be 1-100 chars`);
     }
   } else if (t.engine === 'remote') {
     // Remote engine voices are server-specific — the sidecar interprets them
     // (built-in id, reference-wav filename, or VoiceDesign prompt). Empty is
     // valid: the sidecar picks its own default.
-    if (voice.length > 100) throw new Error(`${where}.tts.voice must be 0-100 chars`);
+    if (voice.length > 100) throw new Error(`${where}.voice must be 0-100 chars`);
   } else {
     // piper: empty = use the baked-in default voice. Otherwise the value must
     // be an .onnx filename (no path separators) referencing a model the operator
@@ -118,7 +127,7 @@ function validateTtsBlock(raw, where) {
     // and must not block saving the shipped roster (issue #454).
     if (voice && !PIPER_VOICE_RE.test(voice) && !KOKORO_VOICE_RE.test(voice)) {
       throw new Error(
-        `${where}.tts.voice for piper must be an .onnx filename (no path), or empty for the default voice`,
+        `${where}.voice for piper must be an .onnx filename (no path), or empty for the default voice`,
       );
     }
   }
@@ -202,7 +211,7 @@ export function validatePersonasStrict(raw) {
       }
       djMode = item.djMode;
     }
-    const tts = validateTtsBlock(item.tts, `personas[${i}]`);
+    const tts = validateTtsBlock(item.tts, `personas[${i}].tts`);
     // skills — optional. Absent → null ("all skills", legacy/default). Present
     // → an explicit slug array (the UI always sends one once edited).
     let skills: string[] | null = null;
@@ -275,7 +284,7 @@ export function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>,
     const name = String(item.name ?? '').trim();
     if (name.length < 1 || name.length > 60) throw new Error(`shows[${i}].name must be 1-60 chars`);
     const topic = String(item.topic ?? '').trim();
-    if (topic.length > 1000) throw new Error(`shows[${i}].topic must be 0-1000 chars`);
+    if (topic.length > SHOW_TOPIC_MAX) throw new Error(`shows[${i}].topic must be 0-${SHOW_TOPIC_MAX} chars`);
     if (!personaIds.includes(item.personaId)) {
       throw new Error(`shows[${i}].personaId must reference an existing persona`);
     }
@@ -303,7 +312,7 @@ export function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>,
     // A stale id (a retired built-in like the old "sunset"/"neon" palettes,
     // renamed in 58c3782b, or a custom theme file deleted under our feet) is
     // DROPPED to "" rather than throwing — same tolerance as the lenient load
-    // path and the serve-time getTheme() fallback. Throwing here bricked EVERY
+    // path and the serve-time fallback in GET /themes. Throwing here bricked EVERY
     // shows/schedule save and full restore for any install still carrying one
     // retired id on one show, because update() re-validates the whole array
     // (issue #917 is the theme.active twin of this). Self-heals: the dead id
@@ -346,6 +355,15 @@ export function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>,
       }
     }
     const energies = coerceShowEnergies({ energies: rawEnergies });
+    // One value, not a list — instrumental and vocal are mutually exclusive and
+    // wanting both is wanting neither. Absent/'' is no constraint, so an
+    // existing show round-trips unchanged.
+    if (item.vocals != null && item.vocals !== '') {
+      if (typeof item.vocals !== 'string' || !SHOW_VOCALS.includes(item.vocals)) {
+        throw new Error(`shows[${i}].vocals must be '' or one of: ${SHOW_VOCALS.join(', ')}`);
+      }
+    }
+    const vocals = coerceShowVocals(item);
     // Opt-in hard filter across every set music constraint — mood, genre, era,
     // energy (vs the default soft leans). Boolean, defaults OFF. The legacy
     // genre-only `genreStrict` is deliberately NOT carried over (see the load
@@ -468,7 +486,7 @@ export function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>,
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, guestPersonaIds, banter, programme, segmentSkill, moods, themeId, genres, eras, energies, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
+    return { id, name, topic, personaId: item.personaId, guestPersonaIds, banter, programme, segmentSkill, moods, themeId, genres, eras, energies, vocals, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
   });
 }
 
@@ -521,55 +539,28 @@ export function validateScheduleOverrideStrict(raw, shows): ScheduleOverride | n
   return { showId, startedAt, expiresAt };
 }
 
-// Strict validator — used by update(). `existing` is the current list, so
-// the operator can keep a previously-set authHeader by sending the redacted
+// Strict validator — used by update(). Shape and format now come from the
+// shared schema (controller/src/schemas/webhook.ts), which the web form runs
+// too; the stateful rules (redaction sentinel, id minting, cross-item dedupe)
+// come from its server-only sibling. `existing` is the current list, so the
+// operator can keep a previously-set authHeader by sending the redacted
 // sentinel back unchanged.
+//
+// The failure path matters as much as the success path: update() is reached by
+// callers that never touch POST /webhooks (backup restore, PUT /settings), and
+// both do `res.status(400).json({ error: err.message })`. A raw ZodError's
+// .message is a pretty-printed JSON array of issue objects, so safeParse +
+// firstMessage is what keeps a bad restore reading as one readable line instead
+// of a JSON blob in the operator's toast. Every remaining validate*Strict
+// conversion should copy this shape.
 export function validateWebhooksStrict(raw: unknown, existing: Webhook[] = []) {
-  if (!Array.isArray(raw)) throw new Error('webhooks must be an array');
-  if (raw.length > WEBHOOKS_LIMIT) {
-    throw new Error(`webhooks must be at most ${WEBHOOKS_LIMIT} entries`);
-  }
-  const byId = new Map(existing.map((h) => [h.id, h] as const));
-  const seen = new Set<string>();
-  return raw.map((item, i) => {
-    if (!item || typeof item !== 'object') throw new Error(`webhooks[${i}] must be an object`);
-    const url = String(item.url ?? '').trim();
-    if (!/^https?:\/\//.test(url)) {
-      throw new Error(`webhooks[${i}].url must start with http:// or https://`);
-    }
-    if (url.length > 500) throw new Error(`webhooks[${i}].url too long`);
-    if (!Array.isArray(item.events) || item.events.length === 0) {
-      throw new Error(`webhooks[${i}].events must be a non-empty array`);
-    }
-    const events: string[] = [];
-    for (const e of item.events) {
-      if (!WEBHOOK_EVENTS.includes(e)) {
-        throw new Error(
-          `webhooks[${i}].events entries must be one of: ${WEBHOOK_EVENTS.join(', ')}`,
-        );
-      }
-      if (!events.includes(e)) events.push(e);
-    }
-    let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('wh_');
-    if (seen.has(id)) id = mintId('wh_');
-    seen.add(id);
-    // authHeader: sentinel 'set' from getRedacted() means "keep the existing
-    // value" — the UI never re-sends the actual header. Anything else replaces.
-    const prior = byId.get(id);
-    let authHeader = '';
-    if (item.authHeader === 'set' && prior?.authHeader) {
-      authHeader = prior.authHeader;
-    } else if (typeof item.authHeader === 'string') {
-      authHeader = item.authHeader.slice(0, 500);
-    }
-    return {
-      id,
-      url,
-      events,
-      enabled: item.enabled !== false,
-      authHeader,
-    };
-  });
+  const r = webhooksSchema.safeParse(raw);
+  // 'webhooks' is passed as the ROOT rather than string-prefixed here: this
+  // schema is the bare array, so its issue paths start at the index, and
+  // firstMessage needs to splice the name in FRONT of that index to produce
+  // 'webhooks.0.url' rather than 'webhooks: 0.url'.
+  if (!r.success) throw new Error(firstMessage(r.error, 'webhooks'));
+  return mergeWebhookSecrets(r.data, existing);
 }
 
 // --- Strict update() validators for the mood system (the validateFestivalsStrict

@@ -25,6 +25,31 @@ const PROGRAMME_CONTEXT_FIELDS = ['date', 'clock', 'time', 'festival', 'listener
 // scheduling mistake can't make the producer write a 24-item rundown.
 const MAX_FEATURES = 8;
 
+// The grounding rule every programme beat carries (issue #1301).
+//
+// These beats talk about music while being shown none of it:
+// PROGRAMME_CONTEXT_FIELDS deliberately carries no track fields, and the beats
+// that need specifics — the feature above all — are told to be concrete. With
+// a music topic and no music in the prompt, the only route to "concrete" is a
+// record the model knows from training. Live incident: a straight-talk feature
+// aired "Nirvana's Smells Like Teen Spirit from Nevermind blasts in, with
+// Butch Vig's punchy production…" sixteen seconds into an Anika track.
+//
+// The failure was the FRAMING, not the fact — Butch Vig did produce Nevermind,
+// and it is guitar-forward. What broke was present-tense on-air language
+// ("blasts in") for a record that was never on the playout, which a listener
+// parses as a cue for what they are hearing. So the rule bans the cue framing
+// rather than the title: a feature on the birth of grunge that cannot name
+// Nevermind is not a feature. Certainty is asked for as a SEPARATE half, and
+// that half is what covers a genuinely invented credit or date — the two
+// failure modes are independent and a rule for one does not cover the other.
+//
+// One constant, appended by all four beats, so the rule can't drift between
+// them — the same "policy lives in exactly one place" split as
+// broadcast/voice-policy.ts. Pinned by scripts/programme-grounding.test.ts.
+export const PROGRAMME_GROUNDING_RULE =
+  'You are talking ABOUT music, not introducing it: never describe a track as playing now, starting, coming up, or just heard. Nothing you name is on the station\'s playout — a listener is hearing something else while you speak, so any "here it comes" framing is simply wrong. Naming a record, artist or credit is fine when you are certain of it; when you are not, describe the sound, the scene or the era instead of reaching for a title.';
+
 // ---------------------------------------------------------------------------
 // PRODUCER PLAN — one djObject call per episode
 // ---------------------------------------------------------------------------
@@ -90,6 +115,31 @@ function menuDesc(text: string): string {
   return `${sentence.slice(0, MENU_DESC_MAX).replace(/\s+\S*$/, '')}…`;
 }
 
+// How the producer is told to fill each feature's `kind`. Exported pure so the
+// grounding test can pin the null-choice guidance without a model call.
+//
+// `kind: null` is a legitimate plan choice (straight talk from the host), not
+// an error state — but it is also the ONLY path with no data behind it, which
+// is where #1301's fabricated cue came from. So the menu branch says what null
+// is FOR: topics the host can carry from the brief alone. This lowers how often
+// the ungrounded beat fires; PROGRAMME_GROUNDING_RULE is the actual guard when
+// it does, since the beat is also reachable by a capability throwing at air
+// time (broadcast/programme.ts runFeature), which no plan wording can prevent.
+//
+// The pinned and no-capability branches take no such advice: neither offers the
+// producer a choice to steer.
+export function featureKindsClause(skillKinds: { kind: string; desc: string }[] = [], pinnedKind: string | null = null): string {
+  if (pinnedKind) {
+    return `Every feature segment is built with the "${pinnedKind}" capability — write each feature topic as a brief for it.`;
+  }
+  if (!skillKinds.length) {
+    return 'No data capabilities are available — set every feature "kind" to null (straight talk from the host).';
+  }
+  return `Feature segments may be built with one of these capabilities (set "kind", or null for straight talk):\n${
+    skillKinds.map((k) => `- ${k.kind}: ${menuDesc(k.desc)}`).join('\n')
+  }\nA feature whose topic needs specific facts — dates, credits, releases, news, anything the host would otherwise have to recall — must name a capability. Leave "kind" null only for a topic the host can honestly carry from the brief and the moment alone.`;
+}
+
 // `skillKinds` is the capability menu the plan may build features from
 // (already filtered to enabled + host-owned + ready by the caller). When the
 // show pins `segmentSkill`, the caller passes just that one and the plan is
@@ -105,11 +155,7 @@ export async function generateProgrammePlan({
     ...(guests || []).map((g: any) => `Guest co-host: ${g.name}`),
   ].join('\n');
 
-  const kindsClause = pinnedKind
-    ? `Every feature segment is built with the "${pinnedKind}" capability — write each feature topic as a brief for it.`
-    : skillKinds.length
-      ? `Feature segments may be built with one of these capabilities (set "kind", or null for straight talk):\n${skillKinds.map((k: any) => `- ${k.kind}: ${menuDesc(k.desc)}`).join('\n')}`
-      : 'No data capabilities are available — set every feature "kind" to null (straight talk from the host).';
+  const kindsClause = featureKindsClause(skillKinds, pinnedKind);
 
   const system = `You are the producer of a radio programme on a personal internet radio station. Given the show's standing brief and the moment, write today's episode plan: the angle this airing takes, what the opening establishes, one feature segment per hour, and how the sign-off wraps. Notes are for the host — concrete, specific, grounded in the brief. Never invent listener messages, callers, or events. Vary the angle from episode to episode.`;
 
@@ -141,14 +187,20 @@ function planClause(plan: any, note: string | null) {
   return `\nToday's episode angle: ${plan.angle}${note ? `\nProducer's note for this beat: ${note}` : ''}`;
 }
 
+// The three solo beats' task lines are exported pure builders so the grounding
+// test can assert the rule actually reaches each rendered prompt, rather than
+// merely that the constant exists — a constant nothing appends is the exact
+// regression this guards against.
+export function introTask({ show, plan = null, speaker = null }: any): string {
+  const brief = show?.topic ? ` The show's brief: ${show.topic}.` : '';
+  return `Task: open your show "${show.name}" on air — this is the top of the programme.${brief}${planClause(plan, plan?.introNote)}\n` +
+    `Welcome listeners in, set up what this hour is about, and tease what's coming without over-promising. ${lengthPhrase('link', speaker)}. Warm and in character — a host starting their show, not a announcer reading a rundown. You may nod to the time of day loosely, never exact minutes. ${PROGRAMME_GROUNDING_RULE}`;
+}
+
 export async function generateProgrammeIntro({ show, plan = null, persona = null, context = null, recap = null, recentOpeners = null }: any) {
   const speaker = persona || settings.getEffectivePersona();
   const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
-  const brief = show?.topic ? ` The show's brief: ${show.topic}.` : '';
-  ctxLines.push(
-    `Task: open your show "${show.name}" on air — this is the top of the programme.${brief}${planClause(plan, plan?.introNote)}\n` +
-    `Welcome listeners in, set up what this hour is about, and tease what's coming without over-promising. ${lengthPhrase('link', speaker)}. Warm and in character — a host starting their show, not a announcer reading a rundown. You may nod to the time of day loosely, never exact minutes.`,
-  );
+  ctxLines.push(introTask({ show, plan, speaker }));
   return djText({
     system: djSystem(speaker),
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'programme-intro', recap, recentOpeners }),
@@ -157,14 +209,16 @@ export async function generateProgrammeIntro({ show, plan = null, persona = null
   });
 }
 
+export function outroTask({ show, plan = null, speaker = null, nextShowName = null }: any): string {
+  const teaseClause = nextShowName ? ` "${nextShowName}" is up next — give it a quick nod.` : '';
+  return `Task: your show "${show.name}" is wrapping up in the next few minutes — sign the episode off.${planClause(plan, plan?.outroNote)}\n` +
+    `Wrap the hour like a host who was actually here for it — a callback to what the episode was about lands better than a generic goodbye.${teaseClause} ${lengthPhrase('link', speaker)}. Music keeps playing after you — you're closing the show, not the station. ${PROGRAMME_GROUNDING_RULE}`;
+}
+
 export async function generateProgrammeOutro({ show, plan = null, persona = null, context = null, recap = null, recentOpeners = null, nextShowName = null }: any) {
   const speaker = persona || settings.getEffectivePersona();
   const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
-  const teaseClause = nextShowName ? ` "${nextShowName}" is up next — give it a quick nod.` : '';
-  ctxLines.push(
-    `Task: your show "${show.name}" is wrapping up in the next few minutes — sign the episode off.${planClause(plan, plan?.outroNote)}\n` +
-    `Wrap the hour like a host who was actually here for it — a callback to what the episode was about lands better than a generic goodbye.${teaseClause} ${lengthPhrase('link', speaker)}. Music keeps playing after you — you're closing the show, not the station.`,
-  );
+  ctxLines.push(outroTask({ show, plan, speaker, nextShowName }));
   return djText({
     system: djSystem(speaker),
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'programme-outro', recap, recentOpeners }),
@@ -177,14 +231,21 @@ export async function generateProgrammeOutro({ show, plan = null, persona = null
 // behind it (plan said kind: null, the pinned/planned kind is stale or
 // unready, or the forced director path failed). No tools: the host just talks
 // the topic in character, so the beat still airs.
+//
+// This is the beat #1301 fired on: the only one told to be "concrete and
+// specific" with no data block behind it. Its own no-invented-data clause stays
+// — it covers dates/quotes/statistics — and the grounding rule lands after it,
+// covering the on-air framing that clause never spoke to.
+export function featureTask({ show, topic, plan = null, speaker = null }: any): string {
+  return `Task: the feature segment of your show "${show.name}". Today's feature: ${topic}.${plan?.angle ? ` The episode's angle: ${plan.angle}.` : ''}\n` +
+    `Talk it through in character — concrete and specific, something a listener leaves knowing or feeling. ${lengthPhrase('segment', speaker)}. Only what you actually know: no invented dates, quotes, statistics, listener messages, or events. ${PROGRAMME_GROUNDING_RULE}`;
+}
+
 export async function generateProgrammeFeature({ show, topic, plan = null, persona = null, context = null, recap = null, recentOpeners = null }: any) {
   const speaker = persona || settings.getEffectivePersona();
   const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
   if (recap) ctxLines.push(`Already said on air recently (do not repeat these topics or phrasing):\n${recap}`);
-  ctxLines.push(
-    `Task: the feature segment of your show "${show.name}". Today's feature: ${topic}.${plan?.angle ? ` The episode's angle: ${plan.angle}.` : ''}\n` +
-    `Talk it through in character — concrete and specific, something a listener leaves knowing or feeling. ${lengthPhrase('segment', speaker)}. Only what you actually know: no invented dates, quotes, statistics, listener messages, or events.`,
-  );
+  ctxLines.push(featureTask({ show, topic, plan, speaker }));
   return djText({
     system: djSystem(speaker),
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'programme-feature', recap, recentOpeners }),
@@ -202,6 +263,24 @@ export async function generateProgrammeFeature({ show, topic, plan = null, perso
 
 const MIN_EXCHANGE_LINES = 2;
 const MAX_EXCHANGE_LINES = 5;
+
+// The exchange's system prompt. Exported pure for the same reason as the solo
+// task builders — the grounding rule has to be provably ON this path too. A
+// guest open/close is the beat most likely to reach for a record ("wait till
+// you hear what we've got"), and it had only the listener-messages clause.
+export function exchangeSystem({ show, castBlock, beatTask, langClause = '' }: any): string {
+  return `You write short on-air exchanges between the hosts of "${show.name}" on a personal internet radio station.
+
+The cast (persona id — name (role): voice notes):
+${castBlock}
+
+Rules:
+- ${MIN_EXCHANGE_LINES} to ${MAX_EXCHANGE_LINES} lines total, at least two speakers; the host carries the room.
+- Each speaker stays in THEIR OWN character per the voice notes.
+- ${beatTask}
+- Plain spoken words only: no stage directions, no asterisks, no emoji. No invented listener messages, callers, or events.
+- ${PROGRAMME_GROUNDING_RULE}${langClause}`;
+}
 
 export async function generateProgrammeExchange({
   beat, show, plan = null, host, guests,
@@ -231,16 +310,7 @@ export async function generateProgrammeExchange({
     ? `The show is wrapping up in the next few minutes: sign the episode off together — a callback to what the hour was about, quick thanks between hosts, done.${nextShowName ? ` "${nextShowName}" is up next; the host may give it a quick nod.` : ''} Music keeps playing after — you're closing the show, not the station.`
     : `This is the TOP of the show: the host welcomes listeners in and sets up what this episode is about; the guest(s) chip in as themselves. Tease what's coming without over-promising.`;
 
-  const system = `You write short on-air exchanges between the hosts of "${show.name}" on a personal internet radio station.
-
-The cast (persona id — name (role): voice notes):
-${castBlock}
-
-Rules:
-- ${MIN_EXCHANGE_LINES} to ${MAX_EXCHANGE_LINES} lines total, at least two speakers; the host carries the room.
-- Each speaker stays in THEIR OWN character per the voice notes.
-- ${beatTask}
-- Plain spoken words only: no stage directions, no asterisks, no emoji. No invented listener messages, callers, or events.${langClause}`;
+  const system = exchangeSystem({ show, castBlock, beatTask, langClause });
 
   const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
   if (show?.topic) ctxLines.push(`The show's brief: ${show.topic}`);

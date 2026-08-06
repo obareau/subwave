@@ -11,7 +11,7 @@ There's a new voice engine called Remote. It points SUB/WAVE at a text-to-speech
 
 ## What's new
 
-Until now, self-hosting a TTS engine meant either baking it into the controller image or dressing it up as the tts-heavy sidecar. Remote is the clean way. It speaks a tiny HTTP contract, and you bring whatever model you like: Qwen3-TTS, F5-TTS, CosyVoice, your own.
+Until now, self-hosting a TTS engine meant either baking it into the controller image or dressing it up as the [tts-heavy sidecar](/news/heavy-tts-setup-guide). Remote is the clean way. It speaks a tiny HTTP contract, and you bring whatever model you like: Qwen3-TTS, F5-TTS, CosyVoice, your own.
 
 ## How to use it
 
@@ -32,4 +32,4 @@ A persona's Remote voice is free text, forwarded straight to your server: a voic
 
 ## Why it helps
 
-You can run a big, natural-sounding model on hardware that suits it and keep the controller lean. No image rebuild, no pretending to be another provider. Point it at the box, save, and your DJ speaks through your own server.
+You can run a big, natural-sounding model on hardware that suits it and keep the controller lean. No image rebuild, no pretending to be another provider. Point it at the box, save, and your DJ speaks through your own server. The wire contract sits alongside the other engines in the manual's [Voices & TTS](/manual/voices) page.

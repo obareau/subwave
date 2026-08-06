@@ -6,29 +6,21 @@ import Tooltip, { type TipState } from './Tooltip';
 import { StatsView, Dossier } from './panels';
 import { buildMockLibrary, buildMockDetail, nearest, type ObsTrack } from './data';
 
-// The Library Observatory, embedded on the public landing page (inside the DJ
-// section). Runs entirely on the seeded mock library + mock dossier — no admin
-// auth, no controller, no real catalogue — so a first-time visitor sees the
-// constellation, and one track's full dossier, without a backing install.
+// The Library Observatory embedded on the public landing page. Runs entirely
+// on the seeded mock library + mock dossier — no admin auth, no controller, no
+// real catalogue — so a first-time visitor sees it without a backing install.
 //
-// Presented as a plain bordered editorial figure (no browser-window chrome).
-// Two columns mirror the real /observatory app minus the filter rail: the
-// constellation on the left, the right rail showing the inspected track's
-// Dossier (a node is pre-selected so the rich data is visible on arrival) and
-// falling back to the library StatsView when the visitor closes it.
-//
-// colour-by is pinned to ENERGY, the signature ink→vermilion heat ramp. The
-// map is interactive: hover for a read-out, click a star to inspect it (and
-// light its nearest neighbours), scroll to zoom, drag to pan. Mounted via
+// Two columns mirror /observatory minus the filter rail: constellation left,
+// right rail showing the pre-selected track's Dossier, falling back to
+// StatsView when closed. colour-by is pinned to ENERGY. Mounted via
 // next/dynamic({ ssr: false }) by the embed wrapper, so the map's client-only
 // APIs never run during SSR.
 
 export default function ObservatoryShowcase() {
-  // Seeded + deterministic, so it's built once and identical every render.
+  // Seeded, so it's built once and identical every render.
   const lib = useMemo(() => buildMockLibrary(800), []);
 
-  // Open a representative track by default: analysed, keyed, a couple of moods,
-  // with some energy — so the dossier lands on something rich, not a stub.
+  // Open a representative track so the dossier lands on something rich.
   const defaultTrack = useMemo(
     () =>
       lib.tracks.find((t) => t.analysed && !!t.musicalKey && t.moods.length >= 2 && t.energy !== 'low') ??
@@ -40,21 +32,18 @@ export default function ObservatoryShowcase() {
   const [selected, setSelected] = useState<ObsTrack | null>(defaultTrack);
   const [tip, setTip] = useState<TipState | null>(null);
 
-  // Nothing is filtered out in the showcase — every node is "in view".
   const matchSet = useMemo(() => new Set(lib.tracks.map((t) => t.idx)), [lib]);
 
-  // Mix-next wiring + dossier list: the 8 spatially-nearest tracks.
   const mixNodes = useMemo(
     () => (selected ? nearest(selected, lib.tracks, 8) : []),
     [selected, lib],
   );
 
-  // Synthesised rich detail (embeddings + song shape + enrichment) for the open
-  // node, rebuilt when the selection changes. Deterministic off its seed.
+  // Synthesised detail for the open node, deterministic off its seed.
   const detail = useMemo(() => (selected ? buildMockDetail(selected) : null), [selected]);
 
-  // Stable identities so the galaxy's attribute-refresh effects don't re-run
-  // on the re-render a hover (tip state) triggers — matching ObservatoryApp.
+  // Stable identities, or the galaxy's attribute-refresh effects re-run on the
+  // re-render a hover triggers.
   const onHover = useCallback((t: ObsTrack | null, e?: React.MouseEvent) => {
     if (!t || !e) {
       setTip(null);

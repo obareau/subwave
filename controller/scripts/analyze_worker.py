@@ -36,9 +36,12 @@ natural-language "sounds like ..." search and zero-shot mood scoring against
 the stored audio vectors possible.
 """
 
+import contextlib
+import ctypes
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -46,6 +49,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+import warnings
 
 # 40s is enough for stable BPM (beat_track) / key (chroma); intro detection
 # only needs the first ~20-30s. Env-overridable; the window is shared by
@@ -142,6 +146,15 @@ MINOR_CAMELOT = ["5A", "12A", "7A", "2A", "9A", "4A", "11A", "6A", "1A", "8A", "
 
 
 def emit(obj):
+    # Ride any LOST capability out on every message (see capability_loss). It
+    # goes here, in the one serializer, rather than at the handful of response
+    # sites, because the whole point is that no path can forget to report it —
+    # a graceful degrade answers ok=true with the field simply absent, which is
+    # exactly the shape that made the failure invisible in the first place.
+    # Absent when nothing has failed, so the common wire is byte-identical.
+    lost = capability_loss()
+    if lost:
+        obj = {**obj, "capability_loss": lost}
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
     sys.stdout.flush()
 
@@ -149,6 +162,206 @@ def emit(obj):
 def log(msg):
     sys.stderr.write(f"[analyze-worker] {msg}\n")
     sys.stderr.flush()
+
+
+# --- Decoder log noise (issue #1300, bug 16a) -------------------------------
+# Normal-operation output from the decode stack reads like corruption and is
+# the single largest source of "is my library broken?" reports:
+#
+#   [src/libmpg123/parse.c:wetwork():1349] error: Giving up resync after 1024 bytes
+#   Note: Illegal Audio-MPEG-Header 0x00000000 at offset 12345
+#   Warning: Xing stream size off by more than 1%
+#   UserWarning: PySoundFile failed. Trying audioread instead.
+#
+# None of it affects the result — libmpg123 (inside libsndfile) narrates its
+# resync over ID3 padding on perfectly good MP3s, and librosa narrates its own
+# fallback. Two different channels, so two different mechanisms:
+#
+#   * The librosa/soundfile ones are Python `warnings` → filtered at source.
+#   * The libmpg123 ones are written to fd 2 by C code, which never passes
+#     through sys.stderr. Those need the fd captured across the decode and
+#     replayed minus the known-benign lines (see quiet_decoder_noise) — the
+#     filtering is deliberately a REPLAY, not a discard, so an unrecognised
+#     line still reaches the log rather than being silently eaten.
+#
+# ANALYZE_VERBOSE_DECODER=1 turns both off and restores the raw firehose.
+VERBOSE_DECODER = os.environ.get("ANALYZE_VERBOSE_DECODER", "").strip().lower() in (
+    "1", "true", "yes",
+)
+
+# libmpg123 prefixes its lines with the C source position that emitted them:
+#
+#   [src/libmpg123/parse.c:wetwork():1349] error: Giving up resync after 1024 bytes
+#
+# That header says WHO is talking, never WHAT about — so it is stripped, not
+# matched. Keying on the header alone would drop every libmpg123 line including
+# the ones nobody has seen yet, which is precisely the discard this filter is
+# built to avoid: the point of replaying is that an unrecognised line survives.
+_LIBMPG123_HEADER_RE = re.compile(
+    r"^\[src/libmpg123/[^\]]*\]\s*(?:error|warning|note|debug)\s*:\s*", re.IGNORECASE
+)
+
+# Benign decoder chatter, matched against the MESSAGE (header already stripped)
+# and anchored tightly enough that a real decode error still gets through:
+# "giving up resync" mid-file is narration, "cannot open" / "invalid data" is
+# not. Matched case-insensitively against one whole line. The `note:`/`warning:`
+# prefixes are optional because libsndfile emits some of these bare.
+_LEVEL = r"(?:note|warning|error)\s*:\s*"
+_DECODER_NOISE_PATTERNS = [
+    rf"^(?:{_LEVEL})?giving up resync",        # resync over ID3 padding
+    rf"^(?:{_LEVEL})?no comment text",         # empty ID3 comment frame
+    rf"^(?:{_LEVEL})?illegal audio-mpeg-header",  # junk bytes before frame one
+    rf"^(?:{_LEVEL})?xing stream size off",    # VBR header vs actual size
+    rf"^(?:{_LEVEL})?skipped \d+ bytes",       # ID3 / padding skip
+    rf"^(?:{_LEVEL})?junk at the beginning",   # ditto, older libmpg123 wording
+    r"pysoundfile failed\. trying audioread",
+    r"deprecated as of librosa version",
+    r"librosa will remove support for .*audioread",
+    # A Python warning header from the decode stack. Deliberately requires the
+    # MESSAGE to name the fallback too, not just the module: `librosa/....py:N:
+    # SomeWarning` on its own also carries things worth reading (an n_fft wider
+    # than the signal is how a truncated file announces itself), and swallowing
+    # those is the over-match that costs an operator their only evidence.
+    # warnings.filterwarnings below normally stops these at source; this catches
+    # the ones raised before the filters are installed, or by a child that
+    # doesn't inherit them.
+    r"^\S*(?:librosa|soundfile|audioread)\S*\.py:\d+:\s+\w*warning:.*"
+    r"(?:audioread|pysoundfile|soundfile)",
+]
+_DECODER_NOISE_RE = re.compile("|".join(_DECODER_NOISE_PATTERNS), re.IGNORECASE)
+
+
+def is_decoder_noise(line):
+    """Whether one stderr line is known-benign decode narration.
+
+    Pure and unit-pinned (scripts/analyzer_noise_test.py) because the cost of
+    getting it wrong is asymmetric: a missed pattern is cosmetic, a pattern that
+    over-matches swallows the decode error an operator needs to see. So the
+    match is always against the MESSAGE — a libmpg123 line whose text we don't
+    recognise is kept, header and all.
+    """
+    text = (line or "").strip()
+    if not text:
+        return True
+    text = _LIBMPG123_HEADER_RE.sub("", text, count=1)
+    return _DECODER_NOISE_RE.search(text) is not None
+
+
+@contextlib.contextmanager
+def quiet_decoder_noise():
+    """Capture fd 2 for the duration of a decode, then replay it minus the noise.
+
+    Scoped as tightly as possible — around the decode call itself, never around
+    a whole request — so the worker's own progress logging is not held back
+    behind a multi-minute Demucs pass. A log line from the idle-release thread
+    landing inside the window is replayed on the way out (order shifts by the
+    length of one decode; nothing is lost).
+
+    Degrades to a plain pass-through if fd 2 can't be duplicated — some hosts
+    run the worker with stderr closed, and a decode is not worth failing over.
+    """
+    if VERBOSE_DECODER:
+        yield
+        return
+    try:
+        saved = os.dup(2)
+    except OSError:
+        yield
+        return
+    try:
+        sink = tempfile.TemporaryFile()
+    except OSError:
+        # No writable temp — nothing to capture into. Give fd 2 straight back
+        # rather than leaking the dup, and let the noise through.
+        os.close(saved)
+        yield
+        return
+    try:
+        sys.stderr.flush()
+        os.dup2(sink.fileno(), 2)
+        yield
+    finally:
+        try:
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001 — restoring fd 2 matters more
+            pass
+        os.dup2(saved, 2)
+        os.close(saved)
+        try:
+            sink.seek(0)
+            captured = sink.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 — never fail a decode over its log
+            captured = ""
+        sink.close()
+        kept = [ln for ln in captured.splitlines() if not is_decoder_noise(ln)]
+        if kept:
+            sys.stderr.write("\n".join(kept) + "\n")
+            sys.stderr.flush()
+
+
+def load_audio(librosa, *args, **kwargs):
+    """librosa.load with the decode stack's benign chatter filtered out."""
+    with quiet_decoder_noise():
+        return librosa.load(*args, **kwargs)
+
+
+if not VERBOSE_DECODER:
+    # The Python-warning half. librosa raises both of these on files that
+    # analyse perfectly well — the soundfile→audioread fallback notice and the
+    # deprecation that rides with it — once per load, i.e. up to six times per
+    # track. ensure_fast_decode already removes the CAUSE where ffmpeg exists;
+    # this quiets the narration where it doesn't.
+    warnings.filterwarnings("ignore", message=r".*PySoundFile failed.*")
+    warnings.filterwarnings("ignore", message=r".*audioread.*", category=FutureWarning)
+    warnings.filterwarnings("ignore", category=FutureWarning, module="librosa")
+
+
+# Model weights the heavy tier fetches on first use. Named here so a failed
+# load can say WHICH download died rather than echoing a bare urllib traceback.
+_WEIGHT_HOST_HINTS = ("huggingface.co", "hf.co", "hf-mirror", "cdn-lfs")
+
+
+def summarize_load_error(ex):
+    """One short, actionable line for a CLAP/Demucs load failure.
+
+    This is the text an operator eventually reads in the admin panel, so the
+    common cause gets named outright: the heavy images do NOT bake the weights
+    (docker/Dockerfile.analyzer), they download them into HF_HOME on first use,
+    and a box with no outbound reach fails there forever. Anything else is
+    passed through truncated — a wrong-but-specific reason beats a generic one.
+    """
+    text = f"{ex}".strip() or type(ex).__name__
+    lowered = text.lower()
+    offline = any(h in lowered for h in _WEIGHT_HOST_HINTS) or any(
+        s in lowered
+        for s in ("connection refused", "temporary failure in name resolution",
+                  "max retries exceeded", "offlinemodeisenabled", "couldn't connect")
+    )
+    if offline:
+        return (
+            "model weights could not be downloaded (the heavy analyzer fetches them "
+            f"from huggingface.co on first use and this host has no reach): {text[:200]}"
+        )
+    return text[:240]
+
+
+def capability_loss():
+    """Capabilities this worker advertised at ready but has since LOST.
+
+    The ready line's probe is `find_spec`, i.e. "are the libraries installed" —
+    it runs before any model has been asked to load, so a heavy image whose
+    weight download fails reports capable=true forever. Riding the real reason
+    back on every response is what lets the caller correct that, and the caller
+    (docker/analyzer/server.py) is what makes it survive a worker respawn:
+    _embed_failed lives in THIS process, and the sidecar's idle recycle starts a
+    new one. Empty dict = nothing lost, the overwhelmingly common case.
+    """
+    lost = {}
+    if _embed_failed:
+        lost["audio_embedding"] = _embed_error or "CLAP load failed"
+    if _vocal_failed:
+        lost["vocal_activity"] = _vocal_error or "Demucs load failed"
+    return lost
 
 
 # --- Torch device for the heavy models (CLAP / Demucs) ----------------------
@@ -187,30 +400,65 @@ def resolve_device():
     return _DEVICE
 
 
-# --- Idle GPU release (#1099 follow-up) -------------------------------------
-# On the cuda device the resident CLAP + Demucs models hold multiple GB of
-# VRAM even when no analysis is running, starving co-resident GPU work (a
-# local TTS/LLM on the same card OOMed hours after a pass finished). A daemon
-# thread drops the model singletons after ANALYZE_IDLE_UNLOAD_S seconds with
-# no requests (default 300; 0 disables). CUDA-only: on cpu the models stay
-# resident as always — system RAM is cheap and reload latency isn't worth it.
-# The next request lazy-reloads from the on-disk HF cache. NOTE: torch's CUDA
-# context (a few hundred MB) survives until the process exits — stopping the
-# analyzer container is the full release.
-IDLE_UNLOAD_S = float(os.environ.get("ANALYZE_IDLE_UNLOAD_S", "").strip() or "300")
+# --- Idle model release (#1099 follow-up; CPU arming per #1204) -------------
+# The resident CLAP + Demucs models hold multiple GB even when no analysis is
+# running. A daemon thread drops the model singletons after the idle window
+# passes with no HEAVY use (0 disables); the next request lazy-reloads from the
+# on-disk HF / torch-hub cache.
+#
+# On cuda that starves co-resident GPU work (a local TTS/LLM on the same card
+# OOMed hours after a pass finished). On cpu it looked free — "system RAM is
+# cheap" — but #1204 showed otherwise: one admin backfill (or a stem-cache
+# pass, or a single sound search) force-loads both models into the long-lived
+# worker regardless of this process's env defaults, nothing ever releases them,
+# and on a small host the kernel eventually parks ~1.5GB of cold weights in
+# swap indefinitely. So the thread arms on both devices now.
+#
+# The window is device-aware: cuda keeps 300s (VRAM contention is urgent and a
+# GPU reload is fast), cpu defaults longer because a cold CPU reload is seconds
+# of latency that lands on interactive callers (analyzer.embedTexts gives sound
+# search a 20s deadline), and swap pressure is not urgent the way a starved GPU
+# is. ANALYZE_IDLE_UNLOAD_S overrides both. NOTE: torch's imported modules (and
+# on cuda its context) survive until the process exits — a few hundred MB stays
+# resident either way; stopping the analyzer container is the full release.
+IDLE_UNLOAD_CUDA_S = 300.0
+IDLE_UNLOAD_CPU_S = 1800.0
+_IDLE_UNLOAD_ENV = os.environ.get("ANALYZE_IDLE_UNLOAD_S", "").strip()
 
-_last_used = time.time()
+# Heavy-model clock, deliberately NOT a general request clock. A lean
+# bpm/key/loudness request touches no model, so letting it refresh this would
+# pin CLAP + Demucs in memory forever on any station with steady analysis
+# traffic — the release would only ever fire on an idle box (#1204). Only an
+# actual embedder / detector use moves it. `_model_lock` (held across request
+# handling AND unload) is what keeps a release from racing a request in flight.
+_heavy_last_used = time.time()
 _model_lock = threading.Lock()  # held during request handling AND unload
 _idle_thread_started = False
 
 
-def _touch():
-    global _last_used
-    _last_used = time.time()
+def _touch_heavy():
+    """Mark CLAP/Demucs as just used — resets the idle-release countdown."""
+    global _heavy_last_used
+    _heavy_last_used = time.time()
 
 
-def _release_models():
-    """Drop the loaded model singletons and return their VRAM. Leaves the
+def _idle_unload_seconds():
+    """Resolve the idle window. Called only from the arming path, never at
+    import: the default depends on the device, and resolve_device() imports
+    torch — which the lean librosa-only venv doesn't have."""
+    if _IDLE_UNLOAD_ENV:
+        try:
+            return float(_IDLE_UNLOAD_ENV)
+        except ValueError:
+            log(
+                f"ANALYZE_IDLE_UNLOAD_S={_IDLE_UNLOAD_ENV!r} is not a number; "
+                "using the per-device default"
+            )
+    return IDLE_UNLOAD_CUDA_S if resolve_device() == "cuda" else IDLE_UNLOAD_CPU_S
+
+
+def _release_models(idle_s=None):
+    """Drop the loaded model singletons and hand their memory back. Leaves the
     *_failed flags alone, so the next request reloads instead of no-opping."""
     global _embedder, _vocal_detector
     import gc
@@ -225,40 +473,59 @@ def _release_models():
     if not freed:
         return
     gc.collect()
+    where = "system memory"
     try:
         import torch
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            where = "GPU memory"
     except Exception:  # noqa: BLE001 — freeing is best-effort
         pass
+    # Hand the freed tensor heap back to the OS. gc.collect() returns it to
+    # glibc's arenas, which keeps it as cold anonymous pages the kernel then
+    # swaps out — exactly the 1.5GB #1204 measured. malloc_trim releases the
+    # trimmable top of those arenas instead. No-op (and harmless) off glibc.
+    try:
+        ctypes.CDLL(None).malloc_trim(0)
+    except Exception:  # noqa: BLE001 — best-effort, absent on musl/macOS
+        pass
+    idle_note = f"idle {int(idle_s)}s — " if idle_s else ""
+    # The sidecar's /health residency tracking matches this line on the
+    # worker's stderr ("released" + "reloads on next use" — see
+    # docker/analyzer/server.py _pump_stderr); keep the wording in sync.
     log(
-        f"idle {int(IDLE_UNLOAD_S)}s — released {' + '.join(freed)} from GPU memory "
+        f"{idle_note}released {' + '.join(freed)} from {where} "
         "(reloads on next use)"
     )
 
 
-def _idle_release_loop():
+def _idle_release_loop(idle_s):
     while True:
         time.sleep(30)
-        if time.time() - _last_used < IDLE_UNLOAD_S:
+        if time.time() - _heavy_last_used < idle_s:
             continue
         with _model_lock:
             # Re-check under the lock: a request may have landed while we
             # waited to acquire it (a slow track holds the lock for minutes).
-            if time.time() - _last_used >= IDLE_UNLOAD_S:
-                _release_models()
+            if time.time() - _heavy_last_used >= idle_s:
+                _release_models(idle_s)
 
 
 def _maybe_start_idle_release():
-    """Arm the idle-release thread — once, and only where it matters (cuda
-    device, unload enabled). Called after a heavy model actually loads."""
+    """Arm the idle-release thread — once, on either device (unload enabled).
+    Called after a heavy model actually loads."""
     global _idle_thread_started
-    if _idle_thread_started or IDLE_UNLOAD_S <= 0 or resolve_device() != "cuda":
+    if _idle_thread_started:
+        return
+    idle_s = _idle_unload_seconds()
+    if idle_s <= 0:
         return
     _idle_thread_started = True
-    threading.Thread(target=_idle_release_loop, daemon=True, name="idle-release").start()
-    log(f"idle GPU release armed — models unload after {int(IDLE_UNLOAD_S)}s without requests")
+    threading.Thread(
+        target=_idle_release_loop, args=(idle_s,), daemon=True, name="idle-release"
+    ).start()
+    log(f"idle model release armed — models unload after {int(idle_s)}s without heavy use")
 
 
 def _pearson(a, b):
@@ -590,8 +857,8 @@ def embed_windows(embedder, path, librosa, duration_s):
     vecs = []
     for offset in clap_window_offsets(duration_s, ANALYZE_SECONDS):
         try:
-            y48, _sr48 = librosa.load(
-                path, sr=CLAP_SR, mono=True, offset=offset, duration=ANALYZE_SECONDS
+            y48, _sr48 = load_audio(
+                librosa, path, sr=CLAP_SR, mono=True, offset=offset, duration=ANALYZE_SECONDS
             )
         except Exception as e:  # noqa: BLE001 — a bad window never kills the embed
             log(f"CLAP window decode at {offset:.0f}s failed: {e}")
@@ -627,7 +894,7 @@ def analyze_outro(path, librosa, duration_s):
     # Channel-preserving decode for the loudness meter (the tail LUFS must be
     # comparable to the body's stereo loudness_lufs — issue #998); RMS shape
     # and the beat grid work off the mono downmix as before.
-    y_src, sr = librosa.load(path, sr=ANALYZE_SR, mono=False, offset=offset)
+    y_src, sr = load_audio(librosa, path, sr=ANALYZE_SR, mono=False, offset=offset)
     y = librosa.to_mono(y_src) if y_src is not None else None
     # Validation backstop for an unknown completeness: a truncated file either
     # errors here or decodes well short of the requested tail — skip it.
@@ -698,10 +965,15 @@ def analyze_outro(path, librosa, duration_s):
 # model can't make every track fail).
 _embedder = None
 _embed_failed = False
+# Why the load failed, in one short line. Reported back on every response (see
+# capability_loss) so the caller can tell "this image has no CLAP" from "CLAP is
+# here but couldn't load", which are the same `capable: false` today and need
+# very different advice.
+_embed_error = None
 
 
 def get_embedder(force=False):
-    global _embedder, _embed_failed
+    global _embedder, _embed_failed, _embed_error
     # `force` is the per-request opt-in (the controller's admin toggle sends
     # "embed": true) — it lazy-loads CLAP even when ANALYZE_AUDIO_EMBEDDING
     # isn't in this process's env. A previous load failure still wins: one bad
@@ -717,7 +989,11 @@ def get_embedder(force=False):
         except Exception as ex:  # noqa: BLE001 — degrade, never crash the worker
             log(f"CLAP load failed ({ex}); audio embeddings disabled for this run")
             _embed_failed = True
+            _embed_error = summarize_load_error(ex)
             return None
+    # On the fresh load AND on every cache hit: continued use keeps the model
+    # warm, so a long backfill never releases mid-pass (#1204).
+    _touch_heavy()
     return _embedder
 
 
@@ -878,10 +1154,12 @@ def estimate_pace(y, sr, librosa, window_s=5.0):
 
 _vocal_detector = None
 _vocal_failed = False
+# Twin of _embed_error — see there.
+_vocal_error = None
 
 
 def get_vocal_detector(force=False):
-    global _vocal_detector, _vocal_failed
+    global _vocal_detector, _vocal_failed, _vocal_error
     if _vocal_failed or not (VOCAL_ENABLED or force):
         return None
     if _vocal_detector is None:
@@ -897,7 +1175,10 @@ def get_vocal_detector(force=False):
         except BaseException as ex:  # noqa: BLE001 — degrade, never crash the worker
             log(f"Demucs load failed ({ex or type(ex).__name__}); vocal activity disabled for this run")
             _vocal_failed = True
+            _vocal_error = summarize_load_error(ex)
             return None
+    # Fresh load AND cache hit — see get_embedder (#1204).
+    _touch_heavy()
     return _vocal_detector
 
 
@@ -1198,7 +1479,10 @@ def ensure_fast_decode(path):
     try:
         import soundfile as sf
 
-        with sf.SoundFile(path):
+        # Quieted like every other decode: libmpg123 narrates its resync over
+        # ID3 padding right here, on the probe of a file it goes on to open
+        # perfectly well.
+        with quiet_decoder_noise(), sf.SoundFile(path):
             return path, None
     except Exception:  # noqa: BLE001 — any open failure routes to the pre-decode
         pass
@@ -1302,7 +1586,7 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None,
         # Decode once WITH channels (a mono file still comes back 1-D): the
         # loudness meter needs real stereo for a correct BS.1770 channel sum
         # (issue #998); every other feature works off the mono downmix.
-        y_src, sr = librosa.load(path, sr=ANALYZE_SR, mono=False, duration=ANALYZE_SECONDS)
+        y_src, sr = load_audio(librosa, path, sr=ANALYZE_SR, mono=False, duration=ANALYZE_SECONDS)
         y = librosa.to_mono(y_src)
         # CLAP wants 48 kHz mono — decode fresh copies at that rate from the
         # SAME file (still present here, before the finally removes owned
@@ -1345,8 +1629,8 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None,
         stems_cached = None
         if detector is not None:
             try:
-                ys, _srs = librosa.load(
-                    path, sr=DEMUCS_SR, mono=False, duration=ANALYZE_SECONDS
+                ys, _srs = load_audio(
+                    librosa, path, sr=DEMUCS_SR, mono=False, duration=ANALYZE_SECONDS
                 )
                 if ys is not None and np.size(ys) > 0:
                     head_stems = detector.separate(ys)
@@ -1373,8 +1657,8 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None,
         if detector is not None and outro is not None:
             try:
                 tail_offset = max(0.0, duration_s - OUTRO_SECONDS)
-                y_tail, _srt = librosa.load(
-                    path, sr=DEMUCS_SR, mono=False,
+                y_tail, _srt = load_audio(
+                    librosa, path, sr=DEMUCS_SR, mono=False,
                     offset=tail_offset, duration=OUTRO_SECONDS,
                 )
                 if y_tail is not None and np.size(y_tail) > 0:
@@ -1600,7 +1884,6 @@ def main():
             ):
                 emit({"id": rid, "ok": False, "error": "texts must be 1-64 non-empty strings"})
                 continue
-            _touch()
             with _model_lock:
                 embedder = get_embedder(force=True)
                 if embedder is None:
@@ -1610,7 +1893,9 @@ def main():
                     emit({"id": rid, "ok": True, "text_embeddings": embedder.embed_texts(texts)})
                 except Exception as e:  # noqa: BLE001 — one bad request never kills the worker
                     emit({"id": rid, "ok": False, "error": str(e)})
-            _touch()
+                # Re-stamp on the way out so the clock reads from the END of the
+                # work, not its start. get_embedder() stamped on entry.
+                _touch_heavy()
             continue
         url = req.get("url")
         path = req.get("path")
@@ -1620,17 +1905,23 @@ def main():
         try:
             import librosa
 
-            # _touch() on both edges + the lock keep the idle-release thread
-            # honest: the clock reads fresh after a long track, and an unload
-            # can never race a request that's mid-flight.
-            _touch()
+            # No unconditional clock stamp here: this is the general request
+            # path and a lean bpm/key pass must NOT keep CLAP/Demucs pinned
+            # (#1204). The heavy clock is stamped inside get_embedder /
+            # get_vocal_detector; _model_lock is what keeps an unload from
+            # racing this request.
+            heavy_before = _heavy_last_used
             with _model_lock:
                 result = analyze(
                     librosa, url=url, path=path,
                     embed=req.get("embed"), vocal=req.get("vocal"),
                     complete=req.get("complete"), stems_dir=req.get("stems_dir"),
                 )
-            _touch()
+                # If a getter stamped the clock, this request DID use a model —
+                # re-stamp so the countdown starts from the end of the work, not
+                # its start (Demucs on a long track holds the lock for minutes).
+                if _heavy_last_used != heavy_before:
+                    _touch_heavy()
             emit({"id": rid, "ok": True, **result})
         except Exception as e:
             emit({"id": rid, "ok": False, "error": str(e)})

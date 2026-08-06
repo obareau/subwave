@@ -19,9 +19,7 @@ const METHOD_CLASS: Record<string, string> = {
   DELETE: 'border-[var(--danger)] text-[var(--danger)]',
 };
 
-// Build a copy-pasteable curl command. Admin endpoints carry a -u placeholder
-// (never the operator's cached credentials); the pre-filled body example rides
-// along for mutating calls.
+// Admin endpoints get a -u placeholder, never the operator's cached credentials.
 function toCurl(ep: EndpointDoc, apiBase: string): string {
   const parts = ['curl'];
   if (ep.method !== 'GET') parts.push('-X', ep.method);
@@ -62,10 +60,8 @@ export default function EndpointCard({ endpoint, apiBase, adminFetch }: Props) {
       onToggle={e => setOpen((e.target as HTMLDetailsElement).open)}
       className="border border-separator-strong bg-bg"
     >
-      {/* Phone: method + path + auth pills stay on the header line and the
-          one-line summary drops underneath (order-last + w-full), instead of
-          the path breaking mid-word to make room for a 4-word blurb. Restored
-          to the single flex row from sm: up. */}
+      {/* Phone: the summary drops below the header line (order-last + w-full) so the
+          path doesn't break mid-word. Single flex row again from sm: up. */}
       <summary className="flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2 sm:flex-nowrap">
         <span className={`shrink-0 border px-1.5 py-[2px] text-[10px] font-bold tracking-[0.1em] ${METHOD_CLASS[endpoint.method] || ''}`}>
           {endpoint.method}

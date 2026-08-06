@@ -113,4 +113,47 @@ const song = (id: string, title: string, artist: string) => ({ id, title, artist
   assert.equal(b.pool[0]._source, 'starred', 'pool entry carries the source label');
 }
 
+// ── neverStarve (dedicated show sources) ─────────────────────────────────────
+
+// A show pinned to a narrow playlist, every track of which is inside the
+// (library-scaled, up to 36 h) recency window. WITHOUT neverStarve this source
+// contributes nothing, and scheduler.ts's strict end-filter then never-starves
+// to the full pool — so the coast plays entirely OFF-playlist, the exact
+// opposite of the lock. Only the dedicated show sources opt in; a discovery
+// source going quiet is fine, because the others carry the pool.
+{
+  const tracks = [song('p1', 'One', 'A'), song('p2', 'Two', 'B')];
+  const allRecent = { recentIds: new Set(['p1', 'p2']), recentKeys: new Set<string>() };
+
+  const off = createPoolBuilder({ ...allRecent, targetPool: 30, maxPerArtist: 99 });
+  off.take('show-playlist', tracks, 30);
+  assert.equal(off.pool.length, 0, 'without neverStarve an all-recent source contributes nothing');
+
+  const on = createPoolBuilder({ ...allRecent, targetPool: 30, maxPerArtist: 99 });
+  on.take('show-playlist', tracks, 30, { neverStarve: true });
+  assert.equal(on.pool.length, 2, 'neverStarve re-admits recents rather than abandoning the show universe');
+  assert.equal(on.fromSource['show-playlist'], 2, 'the retry is counted under the same label');
+}
+
+// The retry only fires on a TOTALLY empty first pass — one fresh track is
+// enough for recency to keep doing its job.
+{
+  const b = createPoolBuilder({
+    recentIds: new Set(['p1']), recentKeys: new Set(), targetPool: 30, maxPerArtist: 99,
+  });
+  b.take('show-genre', [song('p1', 'One', 'A'), song('p2', 'Two', 'B')], 30, { neverStarve: true });
+  assert.deepEqual(b.pool.map((t: any) => t.id), ['p2'], 'a fresh candidate suppresses the fallback');
+}
+
+// The fallback drops ONLY the recency guard: dedup and the artist cap still hold.
+{
+  const b = createPoolBuilder({
+    recentIds: new Set(['p1', 'p2', 'p3']), recentKeys: new Set(), targetPool: 30, maxPerArtist: 2,
+  });
+  b.take('show-playlist', [
+    song('p1', 'One', 'Band'), song('p2', 'Two', 'Band'), song('p3', 'Three', 'Band'),
+  ], 30, { neverStarve: true });
+  assert.equal(b.pool.length, 2, 'the artist cap survives the never-starve retry');
+}
+
 console.log('auto-pool.test.ts: all assertions passed');

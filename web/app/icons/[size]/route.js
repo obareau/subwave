@@ -1,10 +1,9 @@
 import { ImageResponse } from 'next/og';
 import { DiscMark } from '../../../lib/discMark';
 
-// Renders the SUB/WAVE disc mark at any size, with an optional maskable
-// variant that respects the Android 80% safe zone (smaller disc + larger
-// dark padding so it fills the adaptive icon mask without clipping).
-// Routes (all served as PNG):
+// Renders the SUB/WAVE disc mark at any size. The maskable variant respects the
+// Android 80% safe zone (smaller disc + larger dark padding so it fills the
+// adaptive icon mask without clipping). Routes (all served as PNG):
 //   /icons/192            — manifest standard 192
 //   /icons/512            — manifest standard 512
 //   /icons/192-maskable   — Android adaptive 192
@@ -30,8 +29,8 @@ export async function GET(_req, { params }) {
   if (!variant) return new Response('Not Found', { status: 404 });
 
   const { size, maskable } = variant;
-  // Standard icons fill most of the canvas; maskable shrinks the disc to
-  // ~58% so it stays inside the launcher's safe zone after the mask.
+  // Maskable shrinks the disc to ~58% so it stays inside the launcher's safe
+  // zone after the mask.
   const fill = maskable ? 0.58 : 0.8;
   // Maskable icons need the opaque dark plate to fill the adaptive-icon safe
   // zone; standard icons stay transparent so the disc reads as round.

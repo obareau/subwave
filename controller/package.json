@@ -1,6 +1,6 @@
 {
   "name": "sub-wave-controller",
-  "version": "1.0.0",
+  "version": "1.5.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -18,19 +18,20 @@
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
-    "gen:themes": "tsx scripts/gen-theme-tokens.ts"
+    "gen:themes": "tsx scripts/gen-theme-tokens.ts",
+    "gen:schemas": "tsx scripts/gen-schemas.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.11",
-    "@ai-sdk/deepseek": "^3.0.7",
-    "@ai-sdk/elevenlabs": "^3.0.8",
-    "@ai-sdk/google": "^4.0.11",
-    "@ai-sdk/openai": "^4.0.11",
+    "@ai-sdk/anthropic": "^4.0.27",
+    "@ai-sdk/deepseek": "^3.0.19",
+    "@ai-sdk/elevenlabs": "^3.0.19",
+    "@ai-sdk/google": "^4.0.31",
+    "@ai-sdk/openai": "^4.0.27",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openrouter/ai-sdk-provider": "^3.0.0",
     "adm-zip": "^0.5.16",
-    "ai": "^7.0.19",
-    "ai-sdk-ollama": "^4.0.0",
+    "ai": "^7.0.48",
+    "ai-sdk-ollama": "^4.1.0",
     "better-sqlite3": "^11.10.0",
     "express": "^4.21.0",
     "multer": "^2.0.1",

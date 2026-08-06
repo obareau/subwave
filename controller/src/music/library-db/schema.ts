@@ -344,6 +344,67 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 17');
   }
 
+  if (userVersion < 18) {
+    // Which SHAPE of embed text the stored vectors were built from
+    // (music/embeddings.ts EMBED_TEXT_VERSION) — provenance alongside model,
+    // dim and text_mode, and for the same reason those exist: the KNN space is
+    // only coherent if every vector in it came from the same recipe. A format
+    // change doesn't invalidate the old vectors the way a model/dim change
+    // does (they still embed the same head line), so this is a soft advisory —
+    // library-coverage surfaces it and the operator chooses when to re-embed —
+    // never a hard block. NULL = written before format tracking, i.e. v1.
+    runDdl(d, `ALTER TABLE embedding_meta ADD COLUMN text_format INTEGER;`);
+    d.pragma('user_version = 18');
+  }
+
+  if (userVersion < 19) {
+    // Per-track analysis FAILURE stamp (#1300 bug 3c).
+    //
+    // A track whose analysis throws — a corrupt file, a stale library row, a
+    // container the decoder can't open — leaves every analysis column NULL,
+    // which is byte-identical to "never attempted". needsAnalysisIds therefore
+    // re-targets it on every pass, forever, and nothing anywhere records that
+    // it has already failed forty times or why. That is the second half of the
+    // "same count every run" report: the first half is a capability the backend
+    // lied about, and this is a file that will never analyse no matter who is
+    // asking.
+    //
+    // Three columns because the three questions are different: how many
+    // consecutive failures (the scope gate), when the last one was (is this
+    // stale?), and what it said (the only thing that makes it fixable). The
+    // count RESETS on success — it counts consecutive failures, so a track that
+    // failed twice on a flaky mount and then succeeded is not carrying a
+    // sentence. A --re-analyze clears all three: an explicit "do it all again"
+    // is exactly the operator saying the past does not apply.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN analyze_error TEXT;`);
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN analyze_failed_at TEXT;`);
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN analyze_fail_count INTEGER;`);
+    d.pragma('user_version = 19');
+  }
+
+  if (userVersion < 20) {
+    // Covering indexes for the airing index (plays.lastAiredIndex).
+    //
+    // That read is "when did each track last go to air", and every pick path
+    // consults it. It GROUP BYs the whole play history, which idx_plays_track
+    // (track_id alone) cannot serve: SQLite has to build a temp b-tree over
+    // every row on a station with a year of history, then again for the
+    // title|artist half. Trailing played_at makes each half an ordered
+    // covering scan with no sort at all — MAX() of the last row per group.
+    //
+    // Two indexes because the index has two keys and they are not
+    // interchangeable: ids resolve a track exactly, and the lowercased
+    // `title|artist` key is what catches a DUPLICATE COPY of an aired song
+    // (N Subsonic ids for one recording) — the same reason recency keys on
+    // both. Write cost is two extra inserts per airing, i.e. one row every
+    // few minutes.
+    runDdl(d, `
+      CREATE INDEX IF NOT EXISTS idx_plays_track_played ON plays(track_id, played_at);
+      CREATE INDEX IF NOT EXISTS idx_plays_key_played   ON plays(title, artist, played_at);
+    `);
+    d.pragma('user_version = 20');
+  }
+
   // Reconcile the requested embedding dim against what physically exists.
   //
   // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —

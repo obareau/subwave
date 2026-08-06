@@ -17,11 +17,12 @@
 // template, restoring the as-shipped skill (and pulling in a newer image's
 // tool.mjs). It backs the admin "Reset to default" button.
 
-import { copyFile, mkdir, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { STATE_DIR, config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
-import { SEEDED_KINDS, discoverSeededKinds, readTemplate } from './loader.js';
+import { SEEDED_KINDS, discoverSeededKinds, readTemplate, parseFrontmatter } from './loader.js';
+import { preservedFrontmatter } from './config-fields.js';
 
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
 
@@ -42,8 +43,15 @@ interface SkillFileFields {
   contextFields?: string[]; // "right now" fields the segment may mention (#471)
   window?: 'any' | 'commute'; // custom skills only — emitted when 'commute'
   requiresKey?: string;       // custom skills only — env var the skill needs
-  feed?: string;        // news only
-  feedMaxItems?: number; // news only
+  // Values for the knobs the skill's own tool.mjs declares (`configFields`),
+  // already validated by skills/config-fields.ts. Written as flat frontmatter
+  // lines — an omitted key clears its line. Replaces the old news-only
+  // feed/feedMaxItems pair (#1300).
+  config?: Record<string, string | number>;
+  // The keys the skill DECLARES, whether or not `config` carries a value for
+  // each. Drives the preserve pass below: a declared-but-cleared knob stays
+  // cleared, while anything undeclared is carried through verbatim.
+  configKeys?: string[];
   tags?: string[];      // freeform organisation tags
   brief?: string;
 }
@@ -55,6 +63,21 @@ interface SkillFileFields {
 // sibling `tool.mjs`, so editing a skill's brief leaves its data tool intact.
 export async function writeSkillFile(fields: SkillFileFields): Promise<void> {
   const { kind } = fields;
+  const dir = join(SKILLS_DIR, kind);
+
+  // Frontmatter this rewrite must not eat. Everything below is emitted from
+  // typed fields, so a key we don't write is a key we DELETE — which is how a
+  // hand-added `feed:` used to vanish on the operator's first save (#1300), and
+  // how a declared knob would still vanish whenever tool.mjs failed to import
+  // (no declaration visible → no values written). Read the file we're about to
+  // replace and carry the rest through. Best-effort: no file (create), or an
+  // unreadable one, just means nothing to preserve.
+  let carried: Array<[string, string]> = [];
+  try {
+    const existing = await readFile(join(dir, 'SKILL.md'), 'utf8');
+    carried = preservedFrontmatter(parseFrontmatter(existing).data, fields.configKeys || []);
+  } catch { /* no existing file — nothing to carry */ }
+
   const lines = ['---', `name: ${kind}`];
   if (fields.label) lines.push(`label: ${fields.label}`);
   if (fields.cooldown) lines.push(`cooldown: ${fields.cooldown}`);
@@ -64,11 +87,18 @@ export async function writeSkillFile(fields: SkillFileFields): Promise<void> {
   // restrictive `commute` value is worth writing.
   if (fields.window === 'commute') lines.push('window: commute');
   if (fields.requiresKey) lines.push(`requiresKey: ${fields.requiresKey}`);
-  if (fields.feed) lines.push(`feed: ${fields.feed}`);
-  if (fields.feedMaxItems) lines.push(`feedMaxItems: ${fields.feedMaxItems}`);
+  // Skill-declared knobs (news' feed / feedMaxItems, and anything a custom
+  // tool.mjs declares). Insertion order follows the declaration.
+  for (const [key, value] of Object.entries(fields.config || {})) {
+    const flat = String(value).replace(/[\r\n]+/g, ' ').trim();
+    if (flat) lines.push(`${key}: ${flat}`);
+  }
+  // Undeclared keys the previous file carried — hand-authored knobs a tool
+  // reads straight off `config`, and anything a not-currently-loadable tool.mjs
+  // declares. Kept in their original file order.
+  for (const [key, value] of carried) lines.push(`${key}: ${value}`);
   if (fields.tags && fields.tags.length) lines.push(`tags: ${fields.tags.join(', ')}`);
   lines.push('---', (fields.brief || '').trim(), '');
-  const dir = join(SKILLS_DIR, kind);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, 'SKILL.md'), lines.join('\n'), 'utf8');
 }

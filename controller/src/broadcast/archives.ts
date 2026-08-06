@@ -88,8 +88,9 @@ export function openStream(abs: string) {
   return createReadStream(abs);
 }
 
-// Retention sweep — delete whole day directories older than `days`. 0 (the
-// default setting) means keep forever, and callers gate on that before calling.
+// Retention sweep — delete whole day directories older than `days`. 0 means
+// keep forever (the pre-30-day-default legacy value, preserved on upgrade by
+// normalizeArchiveRetentionDays), and callers gate on that before calling.
 // Day-granular on purpose: comparing the YYYY-MM-DD directory name against a
 // cutoff date can never touch the file Liquidsoap currently holds open (today's
 // dir is always inside any positive retention window). `.ndignore` and anything

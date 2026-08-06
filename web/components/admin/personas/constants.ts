@@ -16,12 +16,10 @@ export const SCRIPT_LENGTHS = [
   { id: 'extended',    label: 'Extended',    desc: 'Longer, storytelling segments. Roughly double the length across intros, links, weather and idents.' },
   { id: 'storyteller', label: 'Storyteller', desc: 'Long-form — proper scene-setting monologues, roughly triple the default length.' },
 ];
-// Personality dials, 0–10, default 5. They map to three prompt bands server-side
+// 0–10, default 5, mapping to three prompt bands server-side
 // (settings.personaToneDirectives): 0–3 low, 7–10 high, 4–6 neutral (nothing
-// injected). Surfacing the band keeps operators from expecting 6 vs 7 to differ.
-// `words` is the one-word band readout shown next to the knob value, indexed by
-// toneBandIndex (low / neutral / high). The longer `low`/`high` strings caption
-// the knob's travel ends.
+// injected). Surfacing the band stops operators expecting 6 vs 7 to differ.
+// `words` is indexed by toneBandIndex; `low`/`high` caption the travel ends.
 export const TONE_DIALS = [
   { id: 'humour',      label: 'Humour',       low: 'play it straight', high: 'playful & dry',  words: ['straight',  'neutral', 'playful'] },
   { id: 'localColour', label: 'Local colour', low: 'universal',        high: 'leans local',    words: ['universal', 'neutral', 'local']   },
@@ -32,10 +30,9 @@ export const DIAL_NEUTRAL = 5;
 // noUncheckedIndexedAccess (no `string | undefined`).
 export const toneBandIndex = (v: number): 0 | 1 | 2 => (v <= 3 ? 0 : v >= 7 ? 2 : 1);
 
-// The knob is detented to 11 integer positions, so the rotation is a fixed
-// lookup rather than an inline transform (inline styles are forbidden in admin
-// sources — issue #50). Keeping each class a literal lets Tailwind's JIT emit
-// them. 0 → −135°, 10 → +135°: a 270° sweep.
+// 11 detented positions, so rotation is a fixed lookup rather than an inline
+// transform (inline styles are forbidden in admin sources — issue #50). Each class
+// must stay a literal for Tailwind's JIT. 0 → −135°, 10 → +135°: a 270° sweep.
 export const KNOB_ROTATIONS = [
   '-rotate-[135deg]', '-rotate-[108deg]', '-rotate-[81deg]', '-rotate-[54deg]', '-rotate-[27deg]',
   'rotate-0',
@@ -43,10 +40,8 @@ export const KNOB_ROTATIONS = [
 ] as const;
 export const VOICE_CELLS = 32;
 
-// SteppedFader cap/tick/fill positions, keyed by stop count. Same rationale as
-// KNOB_ROTATIONS: the fader is detented to named stops, so position is a fixed
-// class lookup (inline styles are forbidden in admin sources — issue #50) and
-// each literal lets Tailwind's JIT emit it. Stops are evenly spaced.
+// Keyed by stop count, evenly spaced. Same rationale as KNOB_ROTATIONS: fixed
+// class lookup, literals only (issue #50).
 export const FADER_STOP_LEFT: Record<number, readonly string[]> = {
   2: ['left-0', 'left-full'],
   3: ['left-0', 'left-1/2', 'left-full'],
@@ -93,13 +88,8 @@ export const PERSONA_MAX = 48;
 // phone photo lands in the tens of KB, well under both.
 export const AVATAR_TARGET_PX = 512;
 
-// DiceBear styles to roll through when the operator clicks Generate. Each
-// click picks one at random along with a fresh random seed, so re-clicking
-// produces a different face. Lorelei / notionists / personas / open-peeps are
-// illustrated humans; bottts-neutral / micah / fun-emoji add a robot/abstract
-// option so the operator can keep clicking until they land on a vibe that
-// fits the persona. All return PNG at the size we ask for, with permissive
-// CORS — the fetch can run in the browser.
+// A mix of illustrated humans and robot/abstract styles. All return PNG at the
+// requested size with permissive CORS, so the fetch can run in the browser.
 export const DICEBEAR_STYLES = [
   'lorelei', 'notionists', 'personas', 'open-peeps',
   'micah', 'bottts-neutral', 'fun-emoji',

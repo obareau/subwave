@@ -10,17 +10,15 @@ const SUCCESS_HOLD_MS = 2800;
 const POLL_INTERVAL_MS = 1500;
 const POLL_DEADLINE_MS = 60000;
 
-// Notebook ruled-paper background for the writing field: faint horizontal rules
-// every 30px, applied via an arbitrary Tailwind `bg-[…]` utility (inline styles
-// are banned project-wide). `leading-[30px]` on the textarea lands each line of
-// serif text on a rule so the prompt reads like a note scrawled on a request
-// card. Kept low-contrast so a sub-pixel baseline drift never reads as broken.
+// Rules every 30px, as an arbitrary Tailwind `bg-[…]` utility because inline
+// styles are banned project-wide. The textarea's `leading-[30px]` must match
+// the stripe, and the low contrast keeps sub-pixel baseline drift from reading
+// as broken.
 const RULED_PAPER =
   'bg-[repeating-linear-gradient(to_bottom,transparent_0,transparent_29px,var(--separator-soft)_29px,var(--separator-soft)_30px)]';
 
-// Instant, no-LLM acknowledgement shown the moment the booth accepts the
-// request — so there's zero dead time before the listener gets feedback. The
-// real on-air ack from the DJ replaces it once the pick resolves.
+// Shown the moment the booth accepts, so there's no dead time before feedback.
+// The real on-air ack replaces it once the pick resolves.
 function templatedAck(name: string): string {
   const n = name.trim();
   return n
@@ -33,11 +31,8 @@ interface Suggestion {
   attribution: string;
 }
 
-// Pull a handful of context-aware suggestion chips out of what's already
-// on-air. Each chip carries an attribution so the listener understands why
-// it's being offered — "from track", "from time", etc. — instead of a flat
-// list of canned moods. Order: most-specific (current track) first, weakest
-// (random) last. Capped at 5 so the drawer doesn't sprawl.
+// Ordered most-specific (current track) first, weakest (random) last, capped
+// at 5. Each chip carries an attribution saying why it's offered.
 function buildSuggestions(
   nowPlaying: NowPlayingTrack | null,
   context: StationContext | null,
@@ -52,9 +47,8 @@ function buildSuggestions(
   };
 
   if (nowPlaying?.artist) {
-    // The controller has a dedicated "more like this" code path that picks
-    // another song by the currently-playing artist, so attribute it that way
-    // — clearer than vague "track-derived".
+    // The controller has a dedicated "more like this" path that picks another
+    // song by the on-air artist, hence the artist-named attribution.
     push('more like this', `more ${nowPlaying.artist}`);
   }
 
@@ -86,7 +80,6 @@ function buildSuggestions(
     push(weatherMap[cond] || `${cond} day`, `weather`);
   }
 
-  // Always-available fallback.
   push('surprise me', `random`);
 
   return out.slice(0, 5);
@@ -112,9 +105,8 @@ export default function RequestDrawer({
   nowPlaying, context,
 }: RequestDrawerProps) {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
-  // `result` drives the render: { success, pending, ack, track, message }.
-  // Null while idle. On accept it's a `pending` success card showing the
-  // instant templated ack; polling fills in the real track + on-air ack.
+  // Null while idle. On accept it holds a `pending` success card with the
+  // templated ack; polling fills in the real track + on-air ack.
   const [result, setResult] = useState<RequestResult | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -126,20 +118,18 @@ export default function RequestDrawer({
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
   }, []);
 
-  // Hold the resolved card briefly, then slide the drawer shut and reset.
   const scheduleClose = () => {
     if (!onClose || closeTimerRef.current) return;
     closeTimerRef.current = setTimeout(() => {
       onClose();
-      // Defer state reset until after the close animation so the form
-      // doesn't flash back in during the slide.
+      // Deferred past the close animation so the form doesn't flash back in
+      // during the slide.
       setTimeout(() => setResult(null), 300);
     }, SUCCESS_HOLD_MS);
   };
 
-  // Poll the controller until the request resolves, fails, or the deadline
-  // passes. While pending the templated ack card stays up; on resolve it
-  // morphs into the real track + DJ ack, then auto-closes.
+  // While pending the templated ack card stays up; on resolve it morphs into
+  // the real track + DJ ack, then auto-closes.
   const startPolling = (requestId: string) => {
     pollStopRef.current = false;
     const deadline = Date.now() + POLL_DEADLINE_MS;
@@ -180,7 +170,6 @@ export default function RequestDrawer({
       setResult(data);
       return;
     }
-    // Accepted. Show the instant ack now; poll for the real pick.
     setResult({
       success: true,
       pending: true,
@@ -204,7 +193,6 @@ export default function RequestDrawer({
   const canSend = !isSubmitting && !!requestText.trim();
 
   return (
-    // Outer layout animates the height delta when form ↔ success swaps.
     <m.div layout>
       <AnimatePresence mode="wait" initial={false}>
         {result?.success ? (
@@ -225,9 +213,6 @@ export default function RequestDrawer({
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.12 }}
           >
-            {/* The request slip — a bordered card framed like an on-air request
-                ticket. Top strip = live-line indicator + ticket label; body =
-                the serif "note to the booth" writing field on ruled paper. */}
             <div className="border border-ink bg-field/40 shadow-[3px_3px_0_var(--separator-strong)]">
               <div className="flex items-center justify-between border-b border-ink px-3.5 py-2">
                 <span className="inline-flex items-center gap-2">
@@ -249,9 +234,8 @@ export default function RequestDrawer({
                 <label className="mb-2 block text-[9px] tracking-[0.3em] text-muted uppercase">
                   Dear DJ —
                 </label>
-                {/* Vermilion margin rule (left) + faint horizontal rules: the
-                    writing field reads as a note on a request card. The textarea
-                    is borderless and transparent so only the paper shows. */}
+                {/* The textarea is borderless and transparent so only the
+                    ruled paper below shows through. */}
                 <div className={cn('relative border-l-2 border-l-vermilion pl-3', RULED_PAPER)}>
                   <textarea
                     ref={taRef}
@@ -266,8 +250,6 @@ export default function RequestDrawer({
                   />
                 </div>
 
-                {/* Signature line — the name field as a hand-signed dateline
-                    rather than a boxed input. */}
                 <div className="mt-3 flex items-baseline gap-2 border-t border-soft-border pt-3">
                   <span className="[font-family:var(--font-display),Georgia,serif] text-[15px] leading-none text-muted italic">
                     —
@@ -353,13 +335,9 @@ function SuccessCard({ result }: SuccessCardProps) {
         </div>
       )}
 
-      {/* layout on the inner block animates the height delta between the
-          pending "finding your track…" prose and the resolved track title +
-          artist — the bordered slab eases instead of snapping. Skipped
-          entirely on a resolved-but-no-track outcome (a conversational reply,
-          not a music request): the ack quote above already carries the whole
-          answer, so an empty "Now in the booth" title/artist pair would just
-          read as a broken card. */}
+      {/* Skipped entirely on a resolved-but-no-track outcome (a conversational
+          reply, not a music request): the ack quote above carries the whole
+          answer, and an empty title/artist pair would read as a broken card. */}
       {(pending || track) && (
         <m.div layout className="border-y border-soft-border py-4">
           <div className="mb-1.5 text-[9px] tracking-[0.3em] text-muted uppercase">
@@ -418,16 +396,11 @@ interface SuggestionChipsProps {
   onPick: (text: string) => void;
 }
 
-// Context-aware chip row. Each chip is a two-line button: the prompt text on
-// top, a small attribution caption underneath ("more <artist>", "weather",
-// "festival", "right now", "random"). Listeners see *why* a suggestion is
-// being offered instead of a flat canned list.
-//
 // Chips stagger in after the drawer's slide-in finishes (delayChildren: 0.12)
-// so the row arrives as a row rather than competing with the drawer entrance.
+// so the row doesn't compete with the drawer entrance.
 function SuggestionChips({ nowPlaying, context, onPick }: SuggestionChipsProps) {
-  // Listing only the fields buildSuggestions actually reads — depending on the
-  // whole nowPlaying/context objects would recompute on every poll cycle.
+  // Only the fields buildSuggestions reads: depending on the whole
+  // nowPlaying/context objects would recompute on every poll cycle.
   const chips = useMemo(
     () => buildSuggestions(nowPlaying, context),
     // eslint-disable-next-line react-hooks/exhaustive-deps

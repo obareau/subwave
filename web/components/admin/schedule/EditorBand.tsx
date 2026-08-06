@@ -1,10 +1,8 @@
 'use client';
 
-// The order desk — the full-width band under the board. Holds the sentence
-// order editor ("Put Chill Lounge on the air from 16:00 until 18:00"), the
-// orders behind the day being edited, the week's numbers, computed
-// suggestions, and airtime-vs-target bars. All of it renders from the same
-// grid the board uses.
+// The order desk under the board: the sentence order editor, the week's numbers,
+// computed suggestions and airtime-vs-target bars, all rendered from the same grid
+// the board uses.
 
 import { useRef } from 'react';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
@@ -57,9 +55,8 @@ export interface LineEditorProps {
   orderNo: number;
 }
 
-/** The sentence-based order editor — rendered above the board. A board-card
- *  click loads its order here; the card's × removes directly. This line is
- *  the tool for finer ranges, other shows, and multi-day writes. */
+/** A board-card click loads its order here; this line is the tool for finer
+ *  ranges, other shows and multi-day writes. */
 export function LineEditor({
   shows, line, lineShowId, lineDays, currentName, colorOf,
   onLineChange, onLineShow, onToggleLineDay, onSetLineDays, onAir, onQuiet, orderNo,
@@ -161,7 +158,6 @@ export default function EditorBand({
   return (
     <section className="border-t border-ink bg-[var(--page-bg)] px-5 py-[22px] sm:px-[30px]">
       <div className={cn('grid items-start gap-x-9 gap-y-7', hasSuggestions && 'xl:grid-cols-[minmax(360px,1fr)_2fr]')}>
-        {/* ── Worth a look ──────────────────────────────────────────────── */}
         {hasSuggestions && (
           <div className="min-w-0">
             <div className="mb-2.5">
@@ -195,7 +191,6 @@ export default function EditorBand({
           </div>
         )}
 
-        {/* ── The week in numbers + airtime ─────────────────────────────── */}
         <div className={cn('min-w-0', hasSuggestions && 'xl:border-l xl:border-separator-strong xl:pl-9')}>
           <div className="mb-2.5">
             <span className="eyebrow text-ink">The week in numbers</span>

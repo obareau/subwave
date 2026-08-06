@@ -1,21 +1,13 @@
-// The canonical GitHub URLs, kept here so every "share to community" flow and
-// back-link has one place to point at.
+// Canonical GitHub URLs, one place for every share-to-community flow.
 
-// The main SUB/WAVE project repo — code, issues, docs.
-export const REPO_URL = 'https://github.com/perminder-klair/subwave';
-
-// The community catalog repo — where shared skills / personas / shows / stations
-// live, and where the "share to community" issue forms open. Split out of the
-// code repo so contributions review + publish on their own cadence (the running
-// station fetches the catalog live). Override the fetch URL per station with
-// COMMUNITY_CATALOG_URL; this constant is only the human-facing GitHub link.
+// The community catalog repo, split out of the code repo so contributions
+// review and publish on their own cadence (stations fetch the catalog live).
+// COMMUNITY_CATALOG_URL overrides the FETCH url; this is only the human link.
 export const COMMUNITY_REPO_URL = 'https://github.com/getsubwave/community';
 
-// Build a prefilled community submission link — opens a GitHub Issue Form (no
-// fork, no YAML). A workflow in the community repo turns the issue into a
-// one-file PR; the catalog rebuilds on merge and the entry becomes installable
-// from every station shortly after. `params` map to the form field ids, so
-// GitHub prefills the fields.
+// Opens a GitHub Issue Form; a workflow in the community repo turns the issue
+// into a one-file PR and the catalog rebuilds on merge. `params` keys must match
+// the form field ids for GitHub to prefill them.
 function communitySubmitUrl(template: string, params: Record<string, string | undefined> = {}): string {
   const qs = new URLSearchParams({ template });
   for (const [k, v] of Object.entries(params)) {
@@ -38,4 +30,10 @@ export function stationSubmitUrl(params: Record<string, string | undefined> = {}
 }
 export function reportStationUrl(params: Record<string, string | undefined> = {}): string {
   return communitySubmitUrl('report-station.yml', params);
+}
+export function appSubmitUrl(params: Record<string, string | undefined> = {}): string {
+  return communitySubmitUrl('add-app.yml', params);
+}
+export function reportAppUrl(params: Record<string, string | undefined> = {}): string {
+  return communitySubmitUrl('report-app.yml', params);
 }

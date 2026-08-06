@@ -1,60 +1,60 @@
 import Figure from './Figure';
 import EditorialReveal from '../landing/EditorialReveal';
 
-const PANELS = [
+// The console as a numbered directory of its real departments — the same
+// names the operator sees in the admin nav — rather than another
+// headline+blurb card grid (that shape already carries Parts 1–4).
+const DEPARTMENTS = [
   {
+    dept: 'Dash',
     title: 'The command center.',
     body:
       'Live status: who is on air, the mood, listener count, weather. See the queue, read the booth log, skip a track, fire a station ID, or send your own words to air as raw or styled voice.',
   },
   {
+    dept: 'Personas',
     title: 'The voices on the station.',
     body:
       'Up to twenty-four DJ identities: name, soul, tagline, talk frequency, voice, and which skills each one may use. One persona hosts at a time; a show can hand it the hour and bring guests into the booth. Or install a ready-made host from the community catalog.',
   },
   {
+    dept: 'Skills',
     title: 'What the DJ does between tracks.',
     body:
       'Each skill is an autonomous segment: a weather check, a news headline, a dig on the song playing, an oddly-specific fact. Toggle each one on, assign it to a persona, or run any one now. Write your own in the built-in editor, or install one from the community exchange.',
-    fig: {
-      src: '/screenshots/admin-skills.webp',
-      label: 'Admin — Skills',
-      caption:
-        'Skills: the autonomous segments the DJ runs between tracks. Toggle each, run any one now.',
-    },
   },
   {
+    dept: 'Shows',
     title: 'A weekly schedule you paint.',
     body:
       'A 24×7 grid you brush shows onto. Each show carries a persona, a music mood, and a topic brief: genres, eras, the host’s tone. Or anchor it to a Navidrome playlist and let the DJ pick from that. Autonomous hours fill whatever you leave blank.',
-    fig: {
-      src: '/screenshots/admin-shows.webp',
-      label: 'Admin — Weekly Schedule',
-      caption:
-        'Shows: brush programming onto a 24×7 grid, each slot its own persona and mood.',
-    },
   },
   {
+    dept: 'Library',
     title: 'Search, queue, and tag.',
     body:
       'Search the Navidrome library by text, mood, and energy, queue any track, and browse recent additions. The mood tagger walks the library album-by-album and classifies every track.',
   },
   {
+    dept: 'Playlists',
     title: 'A generator, not a spreadsheet.',
     body:
       'Describe a set in a line, drop in a seed track or artist, and the Playlist Builder curates a running order from your library, with an energy arc you shape and mood, genre, era, and tempo to tune. Save it for a show to anchor to, or for the DJ to draw on.',
   },
   {
+    dept: 'Imaging',
     title: 'The sounds between the songs.',
     body:
       'Jingles are the station idents rotated between tracks, SFX are stingers mixed under the DJ’s voice, and beds are instrumentals the host talks over when a link runs long. Render each from the configured voice or a text-to-sound prompt, or import your own audio.',
   },
   {
+    dept: 'Moods',
     title: 'The vocabulary of feeling.',
     body:
       'The words the library is tagged with, and how the DJ reaches for them: which mood each part of the day and each weather condition leans into, a festival calendar that colors the day, and pronunciation fixes for the voice. Edit the list and every show, festival, and auto-pick draws from it.',
   },
   {
+    dept: 'System',
     title: 'Health and diagnostics.',
     body:
       'Debug and Stats show health, Liquidsoap logs, LLM call history, and usage at a glance. DJ Doc runs a full station check-up and has your own LLM review the findings. Settings (TTS, LLM, mixer, streams) and a danger zone that starts, stops, and restarts the broadcast.',
@@ -80,32 +80,38 @@ export default function BehindTheDesk() {
         caption="The Dash panel: live status, the queue, the booth log, and manual voice control."
       />
 
-      <div className="bs-whatis-grid mt-4">
-        {PANELS.map((p) => (
-          <article key={p.title} className="bs-whatis-card">
-            <h3 className="m-0 mb-[10px] text-[clamp(20px,2.2vw,26px)] leading-[1.15] font-extrabold tracking-[-0.02em]">
-              {p.title}
-            </h3>
-            <p className="m-0 text-[14px] leading-[1.55] text-muted">
-              {p.body}
-            </p>
-            {p.fig && (
-              <div className="mt-4">
-                <Figure
-                  src={p.fig.src}
-                  alt={p.fig.label}
-                  label={p.fig.label}
-                  caption={p.fig.caption}
-                  width={2360}
-                  height={1640}
-                />
-              </div>
-            )}
+      <div className="bs-desk-ledger mt-4">
+        {DEPARTMENTS.map((d, i) => (
+          <article key={d.dept} className="bs-desk-row">
+            <div>
+              <div className="bs-desk-no">{String(i + 1).padStart(2, '0')}</div>
+              <div className="bs-desk-dept">{d.dept}</div>
+            </div>
+            <div>
+              <h3>{d.title}</h3>
+              <p>{d.body}</p>
+            </div>
           </article>
         ))}
       </div>
 
-      <div className="bs-whatis-grid mt-4">
+      <div className="bs-whatis-grid mt-6">
+        <Figure
+          src="/screenshots/admin-skills.webp"
+          alt="Admin — Skills"
+          label="Admin — Skills"
+          width={2360}
+          height={1640}
+          caption="Skills: the autonomous segments the DJ runs between tracks. Toggle each, run any one now."
+        />
+        <Figure
+          src="/screenshots/admin-shows.webp"
+          alt="Admin — Weekly Schedule"
+          label="Admin — Weekly Schedule"
+          width={2360}
+          height={1640}
+          caption="Shows: brush programming onto a 24×7 grid, each slot its own persona and mood."
+        />
         <Figure
           src="/screenshots/admin-library.webp"
           alt="Admin — Library"

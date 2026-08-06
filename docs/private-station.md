@@ -68,6 +68,65 @@ every listener connect, so:
 While the password is on, `/listen.pls` and `/listen.m3u` return 403 — they
 would otherwise hand out credential-less URLs that no longer play.
 
+## A different thing: HTTP Basic Auth in front of the whole station
+
+Everything above is SUB/WAVE's *own* privacy lock. Plenty of operators instead
+put **HTTP Basic Auth on the reverse proxy** (nginx `auth_basic`, Caddy
+`basic_auth`, Traefik's `BasicAuth` middleware), which gates the admin UI, the
+player, the API and the streams in one go — before a request ever reaches the
+controller.
+
+> Identity proxies like **Cloudflare Access** are a different mechanism and are
+> **not** supported by the apps: they authenticate with an SSO session cookie
+> (or `CF-Access-Client-*` service-token headers), not HTTP Basic Auth, so
+> there is no `user:pass@` form to type. Everything below is about plain basic
+> auth.
+
+Plain basic auth works, and the mobile apps support it. The credential form is
+the same:
+
+```
+https://dj:secret@radio.yourhost.com
+```
+
+Enter that as the **station address** (iOS and Android; on the add-station
+screen just type `dj:secret@radio.yourhost.com`). From there the app takes two
+different routes with the same credentials, which is worth knowing when
+something half-works:
+
+- **API polls and cover artwork** keep the credentials **on the URL**. RN's
+  `fetch` and `<Image>` sit on NSURLSession / OkHttp, which answer the server's
+  basic-auth challenge from the userinfo themselves — nothing to do.
+- **The audio stream** gets a credential-free URL plus an explicit
+  `Authorization: Basic` header, because **iOS's AVPlayer silently drops
+  `user:pass@` userinfo from a media URL** (and Android's player is no more
+  reliable about it). That is why a basic-auth station could report *Stream
+  Unreachable* / HTTP 401 in the app while the exact same URL played fine in a
+  browser, in VLC and via `curl` (#764).
+
+Three things to know:
+
+- **The URL is stored as you typed it**, credentials included, in the app's
+  saved-stations list. It's a shared listening password, not an account —
+  don't reuse a password that matters.
+- **Google Cast is unavailable** for a station whose address carries
+  credentials (the cast button doesn't appear). A Chromecast fetches the stream
+  itself, and it has no way to send the header — this applies to SUB/WAVE's own
+  stream password too, since that also travels as userinfo.
+- **An `@` in the password must be percent-encoded** as `%40`. The app cuts the
+  userinfo at the first `@`, so an unencoded one takes part of the hostname
+  with it and the address silently points somewhere else. A `:` is only a
+  problem in the **username** (`%3A`) — the split is on the first colon, so a
+  password may contain them freely.
+
+Percent-encoded values are decoded before the credentials are used, so
+`dj:p%40ss@radio.example` authenticates as `dj` / `p@ss`.
+
+Basic auth on the proxy and SUB/WAVE's own stream password are independent and
+can be combined, but there's rarely a reason to: the proxy lock is broader
+(it covers admin too) while the stream password is what lets you hand a
+listener the stream without handing them the console.
+
 ## Known limits
 
 - One shared password for both locks; rotating it logs every listener out

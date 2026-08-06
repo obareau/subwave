@@ -1,19 +1,9 @@
 'use client';
 
-// Unit SW-9 — the station rendered as a physical receiver.
-// Milled aluminium · soft-touch keys · one glowing dot-matrix window.
-// Design ref: design_handoff_unit_sw9 (Skins Canvas 5a).
-//
-// Desktop is the full front panel: a key grid (TIMELINE / BOOTH / PLAY / MUTE
-// / REQ), the speaker grille, a recessed knob rail (volume + LOG dials around
-// a mount fader) and the play-log pads on the left; the dot-matrix display
-// window on the right. TIMELINE, BOOTH and REQ open full-panel windows over
-// the chassis (UnitWindows.tsx). Mobile stacks status strip → wordmark →
-// display → knob rail → grille → key rows; the play-log pads stay desktop-only
-// (history lives behind TIMELINE there). Everything that moves is a co-located
-// keyframe (Unit.module.css) — the one exception is the display's level meter,
-// which follows the real stream spectrum and writes each bar's scaleY straight
-// to the DOM (see Bars). Either way playback churn never re-renders React.
+// Everything that moves is a co-located keyframe (Unit.module.css); the one
+// exception is the display's level meter, which follows the real stream
+// spectrum and writes each bar's scaleY straight to the DOM (see Bars). Either
+// way playback churn never re-renders React.
 
 import {
   useEffect,
@@ -55,38 +45,33 @@ import { BoothWindow, RequestWindow, TimelineWindow, type UnitModal } from './Un
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
-// ── meter tuning ────────────────────────────────────────────────────────
-// Resting bar height — the same scaleY the `unit-bar` keyframe idles at, so
-// the audio-driven meter and the CSS fallback sit at an identical floor and
-// swapping between them is invisible.
+// Must match the scaleY the `unit-bar` keyframe idles at, so the audio-driven
+// meter and the CSS fallback share a floor and the swap is invisible.
 const BAR_REST = 0.28;
 
-// The band the meter sweeps, logarithmically: equal width per octave, like
-// hardware. A linear bin split would hand four of seven bars to >8 kHz, where
-// music carries almost no energy, and the right half would never move.
+// Swept logarithmically, equal width per octave. A linear bin split would hand
+// four of seven bars to >8 kHz, where music carries almost no energy.
 const BAR_FREQ_LO = 50;
 const BAR_FREQ_HI = 16000;
 
 // Minimum ms between style writes. rAF fires at display refresh (120 Hz+ on
-// ProMotion); the analyser's own smoothing makes frames ~33 ms apart visually
+// ProMotion); the analyser's own smoothing makes ~33 ms frames visually
 // identical at a third of the cost.
 const BAR_FRAME_MS = 30;
 
-// How long every bin may read zero before the meter gives up on the analyser
-// and hands the bars back to the CSS keyframes. Desktop Safari wires the graph
-// up and then returns silence on a live MP3 mount (issues #298/#302) in ways
-// the hook's one-shot probe can miss. Long enough that a genuinely quiet
-// passage can't trip it — the stream never carries seconds of digital silence.
+// How long every bin may read zero before handing the bars back to the CSS
+// keyframes. Desktop Safari wires the graph up then returns silence on a live
+// MP3 mount (issues #298/#302) in ways the hook's one-shot probe can miss. Long
+// enough that a quiet passage can't trip it.
 const BAR_DEAD_MS = 2000;
 
 // Asymmetric follower: snap up on a transient, fall back slowly. A symmetric
-// lerp reads as mush on a seven-segment meter — the kick has to punch.
+// lerp reads as mush on a seven-segment meter.
 const BAR_ATTACK = 0.55;
 const BAR_RELEASE = 0.16;
 
-/** Per-bar [start, end) analyser-bin spans for the log sweep. With only 6–7
- *  bars every span is many bins wide, so there's no need for the fractional
- *  interpolation the classic skin's 120-bar strip does. */
+/** Per-bar [start, end) analyser-bin spans. With only 6–7 bars every span is
+ *  many bins wide, so no fractional interpolation is needed. */
 function barBinRanges(count: number, binCount: number, sampleRate: number): Array<[number, number]> {
   const nyquist = sampleRate / 2;
   const hi = Math.min(BAR_FREQ_HI, nyquist);
@@ -101,19 +86,13 @@ function barBinRanges(count: number, binCount: number, sampleRate: number): Arra
   return ranges;
 }
 
-/** Level bars inside the display glass — the station's actual spectrum.
- *
- *  Real frequency data via the shared Web Audio analyser (the graph is cached
- *  per <audio> element, so arriving from another skin's visualiser reuses it),
- *  written straight to each bar's `scaleY` so playback churn still never
- *  re-renders React. Where the analyser can't deliver — iOS, CORS, a browser
- *  with no Web Audio, or a graph that goes silent mid-stream — the bars fall
- *  back to the co-located `unit-bar` keyframes, which is what the meter always
- *  did. Both paths idle at BAR_REST, so the handover doesn't show.
- *
- *  Motion gates: html.lite's global keyframe kill can't reach a rAF loop and
- *  neither can prefers-reduced-motion, so both are checked here (the CSS
- *  freezes the keyframe path in lockstep) and the bars simply stand still. */
+/** Level bars driven by the shared Web Audio analyser (graph cached per
+ *  <audio> element), written straight to each bar's `scaleY` so playback churn
+ *  never re-renders React. Where the analyser can't deliver — iOS, CORS, no Web
+ *  Audio, or a graph that goes silent mid-stream — the bars fall back to the
+ *  `unit-bar` keyframes; both paths idle at BAR_REST so the handover doesn't
+ *  show. html.lite and prefers-reduced-motion can't reach a rAF loop, so both
+ *  are checked here as well as in the CSS. */
 function Bars({
   count,
   playing,
@@ -125,16 +104,14 @@ function Bars({
   playing: boolean;
   mobile?: boolean;
   className?: string;
-  /** The shared stream element. Omitted for decorative meters (the mount
-   *  window's inert preview), which stay on the CSS keyframes. */
+  /** Omitted for decorative meters, which stay on the CSS keyframes. */
   audioRef?: RefObject<HTMLAudioElement | null>;
 }) {
   const rootRef = useRef<HTMLSpanElement | null>(null);
   const { lite } = useLiteMode();
 
-  // Reduced motion is a media query, so it has to be read here rather than
-  // left to CSS — the loop below is JS motion and sails straight through both
-  // the query and lite's `animation: none`.
+  // Read here rather than left to CSS: the rAF loop below sails through both
+  // the media query and lite's `animation: none`.
   const [reduced, setReduced] = useState(false);
   useEffect(() => {
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -148,9 +125,8 @@ function Bars({
   const canDrive = !!audioRef && playing && !calm;
   const { ready, read, sampleRate } = useAnalyser(audioRef ?? null, canDrive);
 
-  // Whether the bars are currently audio-driven. Only flips when the analyser
-  // arrives or dies, so it re-renders a handful of times per session — the
-  // per-frame heights never touch React.
+  // Only flips when the analyser arrives or dies; per-frame heights never
+  // touch React.
   const [driven, setDriven] = useState(false);
   const drivenRef = useRef(false);
 
@@ -182,8 +158,8 @@ function Bars({
       const bins = read();
       if (!bins) return;
 
-      // Silence watchdog — hand the bars back to the keyframes rather than
-      // freeze them at rest, then keep reading so real data can reclaim them.
+      // Hand the bars back to the keyframes rather than freeze them at rest,
+      // then keep reading so real data can reclaim them.
       let alive = false;
       for (let b = 0; b < bins.length; b++) {
         if (bins[b]) { alive = true; break; }
@@ -217,12 +193,11 @@ function Bars({
           sum += v;
           if (v > peak) peak = v;
         }
-        // Half mean, half peak. A pure mean over a band this wide is dragged
-        // down by the quiet top of the band and barely twitches; a pure peak
-        // jitters on narrowband content.
+        // Half mean, half peak: a pure mean over a band this wide barely
+        // twitches, a pure peak jitters on narrowband content.
         const raw = (sum / (b1 - b0) / 255) * 0.5 + (peak / 255) * 0.5;
-        // Mild lift toward the top of the sweep — recorded music sheds energy
-        // with frequency, so without it the last two bars sit near the floor.
+        // Lift toward the top of the sweep — recorded music sheds energy with
+        // frequency, so without it the last two bars sit near the floor.
         const target = clamp01(Math.pow(clamp01(raw * (1 + 0.45 * (i / Math.max(1, count - 1)))), 0.62));
         const cur = levels[i] ?? 0;
         const next = cur + (target - cur) * (target > cur ? BAR_ATTACK : BAR_RELEASE);
@@ -258,8 +233,7 @@ function Bars({
   );
 }
 
-/** A weighted rotary knob — drag vertically (or use arrow keys) to turn. The
- *  pointer indicator rides a root-level CSS var so the desktop and mobile
+/** The pointer indicator rides a root-level CSS var so the desktop and mobile
  *  instances always agree. */
 function Knob({
   outerClass,
@@ -338,10 +312,8 @@ function Knob({
   );
 }
 
-/** The speaker grille. When a library track is on air its cover rides the
- *  root's --u-cover var and paints through the perforation as a halftone —
- *  the artwork visible only inside the holes, so the panel keeps reading as
- *  hardware. Falls back to the plain metal grid when no artwork exists. */
+/** The on-air cover rides the root's --u-cover var and paints through the
+ *  perforation as a halftone; falls back to the plain metal grid without it. */
 function Grille({ hasArt, className }: { hasArt: boolean; className?: string }) {
   return (
     <div className={cn(styles.grille, 'relative overflow-hidden', className)} aria-hidden="true">
@@ -356,9 +328,8 @@ function Grille({ hasArt, className }: { hasArt: boolean; className?: string }) 
   );
 }
 
-/** The mount fader — hardware trim for the stream mounts. The core owns mount
- *  selection (the probe in usePlayer), so this stays a physical prop like
- *  Platter's strobe rim: cap parked on the MP3 floor every listener gets. */
+/** Decorative only: the core owns mount selection (the probe in usePlayer), so
+ *  the cap is parked on the MP3 floor every listener gets. */
 function Fader({ slotClass, capClass }: { slotClass: string; capClass: string }) {
   return (
     <div className="relative flex h-[34px] w-full items-center" aria-hidden="true">
@@ -411,16 +382,14 @@ export default function UnitSkin(_props: SkinProps) {
       : `track ${trackNo} · ${fmtTime(elapsed)} · live`;
   const nextLine = upNext?.title ? `next: ${upNext.title}` : "next: the dj's call";
   const footerRight = `${showName || 'freeform'} · ${djName}`;
-  // The masthead caption — live show facts where the handoff engraved the
-  // model name, matching the other skins' mastheads.
   const showLine = [
     showName || 'freeform',
     `with ${djName}`,
     contextLine(context) || (offline ? 'off air' : 'on air'),
   ].join(' · ');
 
-  // Station-time clock (mobile status strip). Seeded in an effect, not at
-  // render, so SSR markup can't mismatch the client's clock on hydration.
+  // Seeded in an effect, not at render, so SSR markup can't mismatch the
+  // client's clock on hydration.
   const [clockNow, setClockNow] = useState<Date | null>(null);
   useEffect(() => {
     setClockNow(new Date());
@@ -429,14 +398,12 @@ export default function UnitSkin(_props: SkinProps) {
   }, []);
   const clock = clockNow ? fmtClockMinute(clockNow, timezone, stationLocale) : '--:--';
 
-  // Windows — mutually exclusive, keyed by the TIMELINE / BOOTH / REQ keys.
   const [modal, setModal] = useState<UnitModal>(null);
   const toggleModal = (m: Exclude<UnitModal, null>) =>
     setModal(cur => (cur === m ? null : m));
 
-  // LOG dial — winds the play-log pads back through /state history. Offset 0
-  // shows [now, then the three most recent]; each step scrolls one entry
-  // deeper. Clamped at render so a shrinking history can't strand the dial.
+  // Offset 0 shows [now, then the three most recent]; each step scrolls one
+  // entry deeper. Clamped at render so a shrinking history can't strand it.
   const [logOffset, setLogOffset] = useState(0);
   const maxLogOffset = Math.max(0, history.length + 1 - 4);
   const logAt = Math.min(logOffset, maxLogOffset);
@@ -466,14 +433,12 @@ export default function UnitSkin(_props: SkinProps) {
     escape: () => setModal(null),
   });
 
-  // On-air cover art, shown as a halftone through the speaker grille; its
-  // dominant colour tints the grille metal so the panel reads seamless.
   const coverUrl =
     !offline && nowPlaying?.subsonic_id ? client.coverUrl(nowPlaying.subsonic_id) : null;
   const coverColors = useCoverColors(coverUrl);
 
   // Progress fill, both knob pointers and the grille artwork ride root CSS
-  // vars (no inline styles).
+  // vars, never inline styles.
   const rootRef = useRef<HTMLDivElement | null>(null);
   useDynamicStyle(rootRef, {
     '--pf': ratio ?? 0,
@@ -483,7 +448,6 @@ export default function UnitSkin(_props: SkinProps) {
     '--u-tint': coverUrl ? coverColors.vibrant : null,
   });
 
-  // ── shared atoms ────────────────────────────────────────────────────────
   const keyLabel = 'font-mono font-bold tracking-[0.16em] uppercase';
   const hardKey = (
     label: string,
@@ -492,7 +456,7 @@ export default function UnitSkin(_props: SkinProps) {
       down?: boolean;
       accent?: boolean;
       led?: boolean;
-      /** Compact LED for the short mobile keys (7px, tucked to the corner). */
+      /** Compact LED for the short mobile keys. */
       ledSm?: boolean;
       pressed?: boolean;
       aria?: string;
@@ -582,9 +546,7 @@ export default function UnitSkin(_props: SkinProps) {
     >
       <div className={cn(styles.striation, 'pointer-events-none absolute inset-0')} aria-hidden="true" />
 
-      {/* ============ desktop: the full front panel ============ */}
       <div className="relative hidden min-h-0 flex-1 flex-col gap-[18px] p-5 lg:flex">
-        {/* brand strip */}
         <div className="flex h-[30px] flex-none items-center justify-between px-1.5">
           <div className="flex min-w-0 items-baseline gap-4">
             {wordmark('text-[18px]')}
@@ -623,11 +585,8 @@ export default function UnitSkin(_props: SkinProps) {
           </div>
         </div>
 
-        {/* body */}
         <div className="grid min-h-0 flex-1 grid-cols-2 gap-[18px]">
-          {/* left half — controls */}
           <div className="flex min-h-0 min-w-0 flex-col gap-4">
-            {/* key grid */}
             <div className="grid flex-none grid-cols-4 gap-3">
               <div className="flex flex-col gap-3">
                 {hardKey('timeline', {
@@ -667,10 +626,8 @@ export default function UnitSkin(_props: SkinProps) {
               })}
             </div>
 
-            {/* speaker grille */}
             <Grille hasArt={!!coverUrl} className="min-h-10 flex-1" />
 
-            {/* knob rail */}
             <div
               className={cn(
                 styles.rail,
@@ -701,7 +658,6 @@ export default function UnitSkin(_props: SkinProps) {
               />
             </div>
 
-            {/* play-log pads — LOG dial winds this window back through history */}
             <div className="grid flex-none grid-cols-4 gap-3">
               {logAt === 0 && (
                 <button
@@ -764,7 +720,6 @@ export default function UnitSkin(_props: SkinProps) {
             </div>
           </div>
 
-          {/* right half — the display window */}
           <div
             className={cn(
               styles.glass,
@@ -818,9 +773,7 @@ export default function UnitSkin(_props: SkinProps) {
         </div>
       </div>
 
-      {/* ============ mobile: stacked panel ============ */}
       <div className="relative flex min-h-0 flex-1 flex-col lg:hidden">
-        {/* status strip */}
         <div
           className={cn(
             styles.engravedSoft,
@@ -835,7 +788,6 @@ export default function UnitSkin(_props: SkinProps) {
           </span>
         </div>
 
-        {/* wordmark row */}
         <div className="flex flex-none items-baseline justify-between px-4 pb-3">
           {wordmark('text-[19px]')}
           <span
@@ -848,7 +800,6 @@ export default function UnitSkin(_props: SkinProps) {
           </span>
         </div>
 
-        {/* display window */}
         <div
           className={cn(
             styles.glass,
@@ -904,7 +855,6 @@ export default function UnitSkin(_props: SkinProps) {
           </div>
         </div>
 
-        {/* knob rail */}
         <div
           className={cn(
             styles.rail,
@@ -926,10 +876,8 @@ export default function UnitSkin(_props: SkinProps) {
           </div>
         </div>
 
-        {/* speaker grille absorbs the slack */}
         <Grille hasArt={!!coverUrl} className="mx-4 mt-3.5 min-h-6 flex-1" />
 
-        {/* key rows */}
         <div className="mx-4 mt-3.5 grid flex-none grid-cols-3 gap-2.5">
           {hardKey('play', {
             onClick: handleTune,
@@ -975,12 +923,9 @@ export default function UnitSkin(_props: SkinProps) {
         </div>
       </div>
 
-      {/* windows — one at a time, over the chassis (the brand strip stays
-          visible behind the 20px inset). */}
       {windows}
 
-      {/* tune-in gate — the set is powered but the speaker is cold; one tap
-          is the browser's audio-unblock gesture. */}
+      {/* The tap is the browser's audio-unblock gesture. */}
       {showOverlay && !offline && (
         <button
           type="button"
@@ -999,7 +944,7 @@ export default function UnitSkin(_props: SkinProps) {
               >
                 {stationName}
               </span>
-              <span className={cn(styles.doto, 'truncate text-[15px] text-[var(--accent)] uppercase')}>
+              <span className={cn(styles.doto, 'truncate text-[15px] text-[var(--accent-2,var(--accent))] uppercase')}>
                 {nowPlaying?.title ? `now: ${nowPlaying.title}` : 'one live broadcast'}
               </span>
               <Bars count={7} playing={false} mobile className="h-16 gap-1.5" />

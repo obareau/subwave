@@ -14,6 +14,12 @@
 //                  when disabled so a lean-engine row can say "off · needs the
 //                  heavy analyzer"; the panel pairs it with the (optimistic)
 //                  enable to pick "waiting…" vs "off · needs…" wording.
+//   load-failed    backend HAS the model and it failed to load (weights it
+//                  couldn't download, a broken checkpoint). Split out of
+//                  pending-heavy because the two are the same `capable: false`
+//                  and take opposite actions — telling someone already on the
+//                  heavy image to switch to the heavy image is how #1300 bug 3
+//                  stayed unexplained. Carries the reason.
 //   incapable      backend up, capability UNKNOWN (older sidecar that doesn't
 //                  advertise), the bpm/key pass HAS run yet produced zero here —
 //                  today's `*Starved`. Also enable-independent for the same
@@ -34,6 +40,7 @@ export type DimensionStatus =
   | 'off'
   | 'pending-engine'
   | 'pending-heavy'
+  | 'load-failed'
   | 'incapable'
   | 'ready'
   | 'partial'
@@ -48,6 +55,10 @@ export interface DimensionInputs {
   // Backend can emit THIS dimension. false = lean image; null = unknown (older
   // sidecar that doesn't advertise).
   capable: boolean | null;
+  // Why `capable` is false, when the model is INSTALLED and failed to load
+  // (analyzer.audioEmbeddingError / vocalActivityError). null in every other
+  // case, a lean image included — nothing is wrong there.
+  loadError?: string | null;
   // Tracks through the always-on bpm/key pass — the evidence that the engine has
   // actually processed audio (used to tell "starved" from "not run yet").
   analysed: number;
@@ -62,6 +73,9 @@ export function dimensionStatus(x: DimensionInputs): DimensionStatus {
   // Engine down while wanted — nothing can progress until it's back. Gated on
   // enable so a disabled dimension on a downed engine reads as plain 'off'.
   if (x.enabled && x.analysisAvailable === false) return 'pending-engine';
+  // Installed but broken, checked ahead of the lean-image case it would
+  // otherwise be indistinguishable from. Enable-independent like that one.
+  if (x.capable === false && x.loadError) return 'load-failed';
   // Hard capability gap (lean image). Enable-independent (see PRECEDENCE NOTE).
   if (x.capable === false) return 'pending-heavy';
   // Existing coverage wins over "not run yet" so a paused-with-data dimension
@@ -83,5 +97,10 @@ export function dimensionStatus(x: DimensionInputs): DimensionStatus {
 // move the enum off 'off'. Matches today's gate, which likewise still offers the
 // action on the unknown 'incapable' case so the operator can try.
 export function isBackfillable(status: DimensionStatus): boolean {
-  return status !== 'pending-heavy' && status !== 'pending-engine' && status !== 'complete';
+  return (
+    status !== 'pending-heavy' &&
+    status !== 'load-failed' &&
+    status !== 'pending-engine' &&
+    status !== 'complete'
+  );
 }

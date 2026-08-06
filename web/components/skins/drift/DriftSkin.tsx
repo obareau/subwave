@@ -1,12 +1,8 @@
 'use client';
 
-// Drift — ninety percent weather, ten percent type; the cover art becomes
-// the room. Weightless · dim · patient. Design ref: Skins Canvas 1d.
-//
-// Three slow washes take their colors from the current cover (vibrant +
-// average via useCoverColors, accent as the third voice) and crossfade over
-// twenty seconds at a track change. Request + history live behind the ···
-// chip; everything else is corners.
+// Three washes take their colors from the current cover (vibrant + average via
+// useCoverColors, accent as the third) and crossfade over twenty seconds at a
+// track change.
 
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
@@ -39,20 +35,16 @@ import {
 import { useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
-/* Nothing here moves — the room already says everything with color, and the
-   type's job is to wait for it (see Drift.module.css). Pure opacity, and slow:
-   the washes take twenty seconds, so a 900ms dissolve still reads as the
-   hurried part of the transition. mode="wait" leaves a beat of empty page
-   between tracks, which suits a skin where nothing else is in a hurry. */
+/* Opacity only, paced against the washes' twenty seconds. mode="wait" leaves a
+   beat of empty page between tracks. */
 const TYPE_DISSOLVE = {
   initial: { opacity: 0 },
   animate: { opacity: 1 },
   exit: { opacity: 0 },
   transition: { duration: 0.9 },
 };
-/* Lite: mount straight at rest. A zero-duration transition isn't enough — motion
-   still paints `initial` for a frame first, which flashes blank type. mode="wait"
-   happens to hide that most of the time; initial={false} removes it outright. */
+/* Lite: mount straight at rest. A zero-duration transition isn't enough —
+   motion still paints `initial` for a frame first, which flashes blank type. */
 const TYPE_CUT = {
   initial: false,
   animate: { opacity: 1 },
@@ -61,8 +53,6 @@ const TYPE_CUT = {
   exit: {},
   transition: { duration: 0 },
 };
-/* The cover overlaps itself instead of waiting — two stacked frames reading as
-   one true dissolve, over the longest beat in the skin. */
 const COVER_DISSOLVE = { ...TYPE_DISSOLVE, transition: { duration: 1.2 } };
 const COVER_CUT = TYPE_CUT;
 
@@ -97,7 +87,6 @@ export default function DriftSkin(_props: SkinProps) {
   const voice = lastVoiceLine(session.messages);
   const upNext = state.upcoming?.[0];
 
-  // The room's colors — cover-derived, accent as the third voice.
   const coverId = nowPlaying?.subsonic_id ?? null;
   const coverSrc = coverId ? client.coverUrl(coverId) : null;
   const colors = useCoverColors(coverSrc);
@@ -110,16 +99,15 @@ export default function DriftSkin(_props: SkinProps) {
   useDynamicStyle(washBRef, { '--sw-drift-c': `color-mix(in oklab, ${c2} 34%, transparent)` });
   useDynamicStyle(washCRef, { '--sw-drift-c': 'color-mix(in oklab, var(--accent) 10%, transparent)' });
 
-  // Progress hairline fill.
   const fillRef = useRef<HTMLDivElement | null>(null);
   useDynamicStyle(fillRef, { width: `${Math.round((ratio ?? 0) * 100)}%` });
 
   const adjustVolume = useVolumeNudge();
   const like = useTrackLike();
 
-  // One key per airing — offline and the "somewhere on the dial" placeholder
-  // collapse to constants (as classic/CenterStage does) so a transient null
-  // from the 5s /state poll can't re-fire the dissolve mid-track.
+  // One key per airing: offline and the placeholder collapse to constants so a
+  // transient null from the 5s /state poll can't re-fire the dissolve
+  // mid-track.
   const trackKey = offline
     ? 'offline'
     : coverId
@@ -132,7 +120,6 @@ export default function DriftSkin(_props: SkinProps) {
   const typeSwap = animates ? TYPE_DISSOLVE : TYPE_CUT;
   const coverSwap = animates ? COVER_DISSOLVE : COVER_CUT;
 
-  // The ··· chip: request + recent history in one quiet panel.
   const [panelOpen, setPanelOpen] = useState(false);
   const slip = useRequestSlip({
     sent: 'the DJ has it.',
@@ -166,7 +153,6 @@ export default function DriftSkin(_props: SkinProps) {
 
   return (
     <div className="absolute inset-0 overflow-hidden font-sans text-ink">
-      {/* the weather */}
       <div ref={washARef} className={cn(styles.wash, styles.washA, 'top-[-20%] left-[-10%] h-[70vmax] w-[70vmax]')} />
       <div ref={washBRef} className={cn(styles.wash, styles.washB, 'right-[-14%] bottom-[-28%] h-[85vmax] w-[85vmax]')} />
       <div ref={washCRef} className={cn(styles.wash, styles.washC, 'top-[-30%] left-[40%] h-[55vmax] w-[55vmax]')} />
@@ -175,14 +161,13 @@ export default function DriftSkin(_props: SkinProps) {
         aria-hidden="true"
       />
 
-      {/* corners — on a phone the clock/context text is dropped so the station
-          line and the theme icon can't collide in the middle; it returns from
-          sm up where there's room for both halves. */}
-      <div className="absolute top-7 left-8 max-w-[70%] truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase sm:max-w-[45%]">
+      {/* The clock/context text is dropped on phones so the station line and
+          the theme icon can't collide in the middle. */}
+      <div className="absolute top-7 left-8 max-w-[70%] truncate font-mono text-[11px] tracking-[0.24em] text-ink uppercase sm:max-w-[45%]">
         {stationName} — {showName ? `${showName} with ${djName}` : `small hours with ${djName}`}
       </div>
       <div className="absolute top-7 right-8 flex max-w-[45%] items-center gap-3">
-        <span className="hidden min-w-0 truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase sm:block">
+        <span className="hidden min-w-0 truncate font-mono text-[11px] tracking-[0.24em] text-muted uppercase sm:block">
           {clock
             ? [
                 `${turnClock(clock.getTime(), timezone, stationLocale)} ${stationWeekday(clock, timezone)}`,
@@ -192,10 +177,10 @@ export default function DriftSkin(_props: SkinProps) {
         </span>
         <ThemeSwitcher />
       </div>
-      <div className="absolute bottom-7 left-8 max-w-[38%] truncate font-mono text-[10px] tracking-[0.18em] text-muted uppercase">
+      <div className="absolute bottom-7 left-8 max-w-[38%] truncate font-mono text-[11px] tracking-[0.18em] text-muted uppercase">
         {upNext?.title ? `up next · ${[upNext.title, upNext.artist].filter(Boolean).join(' — ')}` : ''}
       </div>
-      <div className="absolute right-8 bottom-7 flex items-baseline gap-2 font-mono text-[10px] tracking-[0.18em] text-muted uppercase">
+      <div className="absolute right-8 bottom-7 flex items-baseline gap-2 font-mono text-[11px] tracking-[0.18em] text-muted uppercase">
         <span className="hidden items-center gap-1.5 sm:inline-flex">
           {listenerCount != null && (
             <span className="inline-flex items-center gap-1" aria-label={`${listenerCount} listening`}>
@@ -238,13 +223,11 @@ export default function DriftSkin(_props: SkinProps) {
           className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">+</button>
       </div>
 
-      {/* the ten percent of type. Shown whenever the full-bleed gate isn't
-          covering the screen (!showOverlay) — so when the operator disables the
-          tune-in overlay, this layer is drift's tune affordance: the label reads
-          "tap to listen" and the title tunes in. pointer-events-none so this
-          full-screen centering layer doesn't sit over the corner controls
-          (ThemeSwitcher, volume) and eat their clicks — the one interactive
-          child (the title, which tunes in) re-enables events on itself. */}
+      {/* Shown whenever the full-bleed gate isn't covering the screen, so with
+          the tune-in overlay disabled this layer IS the tune affordance.
+          pointer-events-none keeps this full-screen centering layer from
+          eating the corner controls' clicks; the one interactive child (the
+          title) re-enables events on itself. */}
       {!showOverlay && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 text-center">
           {coverSrc && !offline && (
@@ -260,7 +243,7 @@ export default function DriftSkin(_props: SkinProps) {
               </AnimatePresence>
             </div>
           )}
-          <div className="mt-2 font-mono text-[9px] tracking-[0.32em] text-muted uppercase">
+          <div className="mt-2 font-mono text-[10px] tracking-[0.28em] text-accent-2 uppercase">
             {offline ? 'off air' : tunedIn ? 'now playing' : 'now playing — tap to listen'}
           </div>
           {!offline && (
@@ -281,7 +264,7 @@ export default function DriftSkin(_props: SkinProps) {
               <m.div
                 key={trackKey}
                 {...typeSwap}
-                className="max-w-full truncate font-mono text-[12px] tracking-[0.2em] text-muted uppercase"
+                className="max-w-full truncate font-mono text-[12px] tracking-[0.2em] text-ink/75 uppercase"
               >
                 {metaLine}
               </m.div>
@@ -289,11 +272,11 @@ export default function DriftSkin(_props: SkinProps) {
           )}
           {!offline && ratio != null && (
             <div className="mt-2 flex items-center gap-3">
-              <span className="font-mono text-[10px] text-muted">{fmtTime(elapsed)}</span>
-              <div className="relative h-0.5 w-[min(260px,50vw)] bg-soft-border">
+              <span className="font-mono text-[11px] text-ink/70">{fmtTime(elapsed)}</span>
+              <div className="relative h-[3px] w-[min(260px,50vw)] bg-[color-mix(in_oklab,var(--ink)_18%,transparent)]">
                 <div ref={fillRef} className="absolute top-0 bottom-0 left-0 bg-[var(--accent)]" />
               </div>
-              <span className="font-mono text-[10px] text-muted">{fmtTime(nowPlaying?.duration)}</span>
+              <span className="font-mono text-[11px] text-ink/70">{fmtTime(nowPlaying?.duration)}</span>
             </div>
           )}
           {voice && (
@@ -309,7 +292,6 @@ export default function DriftSkin(_props: SkinProps) {
         </div>
       )}
 
-      {/* the ··· chip — available whenever the poster is up (gate not covering) */}
       {!showOverlay && (
         <button
           type="button"
@@ -321,7 +303,6 @@ export default function DriftSkin(_props: SkinProps) {
         </button>
       )}
 
-      {/* behind the chip: request + recent history */}
       {panelOpen && (
         <div className="absolute bottom-16 left-1/2 flex w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 flex-col gap-3 border border-soft-border bg-[var(--bg)]/90 p-4 backdrop-blur-sm">
           <form
@@ -379,12 +360,11 @@ export default function DriftSkin(_props: SkinProps) {
         </div>
       )}
 
-      {/* the gate: just the wash and one lowercase word */}
       {showOverlay && !offline && (
         <button
           type="button"
           onClick={tuneInFromOverlay}
-          className="absolute inset-0 z-40 grid w-full cursor-pointer place-items-center border-0 bg-transparent"
+          className="absolute inset-0 z-40 grid w-full cursor-pointer place-items-center border-0 bg-[color-mix(in_srgb,var(--bg)_30%,transparent)]"
         >
           <span className={cn('font-display text-[clamp(28px,4vw,40px)] font-semibold text-ink lowercase', styles.breathe)}>
             listen

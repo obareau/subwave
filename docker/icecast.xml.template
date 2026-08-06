@@ -7,40 +7,26 @@
         <sources>4</sources>
         <!-- queue-size: per-client backlog before Icecast drops a lagging
              listener. Computed by broadcast-entrypoint.sh as 4x burst-size
-             (floored at the historical 2 MB) — it must comfortably exceed the
-             burst or a client is evicted the moment it falls behind its own
-             primed buffer, and it gives jittery mobile and Cloudflare-proxied
-             clients a good minute of rope to ride out a coverage gap without
-             being kicked (issue #993). -->
+             (floored at 2 MB) — it must comfortably exceed the burst or a
+             client is evicted the moment it falls behind its own primed
+             buffer (issue #993). -->
         <queue-size>${ICECAST_QUEUE_SIZE}</queue-size>
         <client-timeout>30</client-timeout>
         <header-timeout>15</header-timeout>
         <source-timeout>10</source-timeout>
         <burst-on-connect>1</burst-on-connect>
-        <!-- burst-size: audio bursted to a client on connect to prime its
-             buffer, deep enough that a real cellular dead zone drains the
-             buffer instead of stalling (issue #993). Delivered at line speed,
-             so tune-in stays instant — the cost is listening that far behind
-             the live edge. Every player-watchdog reconnect carries a ?t=
-             cache-buster, so each reconnect primes a fresh burst.
+        <!-- burst-size: audio bursted on connect to prime the client's buffer
+             (issue #993). Delivered at line speed, so tune-in stays instant;
+             the cost is listening that far behind the live edge, which is why
+             /now-playing publishes stream.bufferSeconds and players shift
+             their displays by it (issue #1114).
 
              Computed by broadcast-entrypoint.sh from settings.stream.
-             bufferSeconds x the live bitrate, NOT hardcoded: this is a byte
-             count, so a fixed value drifts badly across bitrates (the old flat
-             512 KB was ~22s at 192k but ~66s at 64k). Deriving it keeps the
-             depth the operator picked the depth every bitrate gets.
-
-             This is also roughly how far behind the live edge a listener
-             sits, so /now-playing publishes stream.bufferSeconds and players
-             use it to align the now-playing title and elapsed clock with the
-             audio actually in someone's ears (issue #1114) — the web player
-             prefers its own measured lag (buffered.end − currentTime) and
-             falls back to the advertised figure when it isn't the thing
-             playing the audio.
+             bufferSeconds x the live bitrate, NOT hardcoded — it's a byte
+             count, so a fixed value drifts badly across bitrates.
 
              These <limits> values are sized for the MP3 mount and act as the
-             default; every stream mount below carries its own burst/queue
-             sized for its own bitrate. -->
+             default; every stream mount below carries its own burst/queue. -->
         <burst-size>${ICECAST_BURST_SIZE}</burst-size>
     </limits>
 
@@ -59,14 +45,11 @@
 
     <fileserve>1</fileserve>
 
-    <!-- Stream mounts: the entrypoint replaces the marker below with one
-         <mount> block per stream mount, always rendered. Each carries its own
-         <burst-size>/<queue-size> sized from settings.stream.bufferSeconds x
-         THAT mount's bitrate — the global <limits> values above are sized for
-         the MP3 mount only, and a byte count that means 22s of MP3 is ~43s of
-         Opus or ~6s of FLAC. When state/icecast_listener_auth.txt is 'true'
-         (#478), each block additionally carries <authentication type="url">
-         pointing at the controller's POST /listener-auth. -->
+    <!-- The entrypoint replaces the marker with one <mount> block per stream
+         mount, each with its own burst/queue sized from bufferSeconds x THAT
+         mount's bitrate (the global <limits> above only fit MP3). Under
+         listener auth (#478) each block also carries <authentication
+         type="url"> pointing at the controller's POST /listener-auth. -->
     <!--@STREAM_MOUNTS@-->
 
 
@@ -78,22 +61,13 @@
         <pidfile>/var/run/icecast2/icecast.pid</pidfile>
         <alias source="/" destination="/status.xsl"/>
 
-        <!-- Trusted reverse proxies: the entrypoint replaces the marker below
-             with one <x-forwarded-for> element per proxy IP. Without at least
-             one, icecast attributes EVERY listener to the proxy's container IP
-             (the 172.x rows in admin → Listeners), because the only peer it
-             ever sees is Caddy.
-
-             Two icecast-KH quirks drive the shape of this (both verified
-             against 2.4.0-kh22, the build in this image):
-               - the value must be an EXACT IP. A CIDR (172.16.0.0/12) is
-                 accepted without complaint and then silently never matches,
-                 so a subnet can't stand in for the proxy's address.
-               - the LEFT-MOST entry of the X-Forwarded-For chain wins, which
-                 is the original client — correct even though Caddy appends
-                 its own peer to the chain on the way through.
-             Multiple elements are allowed, which is how a multi-hop or
-             multi-proxy front end is covered. -->
+        <!-- The entrypoint replaces the marker with one <x-forwarded-for>
+             element per trusted proxy IP; without one, every listener shows as
+             the proxy's container IP. Two icecast-KH quirks (verified on
+             2.4.0-kh22): the value must be an EXACT IP — a CIDR is accepted
+             and then silently never matches — and the LEFT-MOST entry of the
+             X-Forwarded-For chain wins (the original client, correct even
+             though Caddy appends its own peer). -->
         <!--@TRUSTED_PROXIES@-->
     </paths>
 

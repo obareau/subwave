@@ -2,9 +2,13 @@
 // in broadcast/webhooks.ts and reads its config from settings on each fire.
 //
 // Event payloads emitted by the fan-out:
-//   track.play       { event, t, title, artist, album?, source, requestedBy?, listeners? }
+//   track.play       { event, t, title, artist, album?, sourceTrackId?, source,
+//                      requestedBy?, listeners? }
 //                    (when webhooksPolicy.trackPlayListenerGated is on, only POSTs
 //                     when listener count > 0 — fail-closed; `listeners` included)
+//                    `sourceTrackId` is the music backend's own id (Subsonic/
+//                    Navidrome), null when unknown; `source` is how the track got
+//                    queued (auto | ai | request) — two different things.
 //   dj.say           { event, t, text, kind }      // kind is the original `announce` kind
 //   dj.link          { event, t, text }
 //   request.received { event, t, requestedBy, text }   // text is the listener's raw ask
@@ -12,8 +16,10 @@
 // All payloads carry `event` (one of the above) and `t` (ISO timestamp).
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validate.js';
 import * as settings from '../settings.js';
 import { WEBHOOK_EVENTS, fireTest } from '../broadcast/webhooks.js';
+import { webhooksPatchSchema } from '../schemas/webhook.js';
 
 export const router = express.Router();
 
@@ -32,7 +38,7 @@ router.get('/webhooks', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/webhooks', requireAdmin, async (req, res) => {
+router.post('/webhooks', requireAdmin, validateBody(webhooksPatchSchema), async (req, res) => {
   // The UI sends the whole list back. settings.update() validates the array
   // strictly and replaces it atomically — same pattern as personas/shows.
   // Both fields are optional so the gate toggle can save on its own without

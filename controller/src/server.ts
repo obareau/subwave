@@ -29,6 +29,7 @@ import { router as requestRoutes } from './routes/request.js';
 import { router as settingsRoutes } from './routes/settings.js';
 import { router as jingleRoutes } from './routes/jingles.js';
 import { router as sfxRoutes } from './routes/sfx.js';
+import { router as voiceRoutes } from './routes/voices.js';
 import { router as bedsRoutes } from './routes/beds.js';
 import { router as debugRoutes } from './routes/debug.js';
 import { router as statsRoutes } from './routes/stats.js';
@@ -111,6 +112,7 @@ app.use(requestRoutes);
 app.use(settingsRoutes);
 app.use(jingleRoutes);
 app.use(sfxRoutes);
+app.use(voiceRoutes);
 app.use(bedsRoutes);
 app.use(debugRoutes);
 app.use(statsRoutes);
@@ -280,8 +282,13 @@ app.listen(config.server.port, async () => {
     console.error('[curiosity] ledger load failed:', err.message);
   }
 
+  // Take one listener reading BEFORE the watcher can dispatch a pick: an
+  // unknown count fails open, so a watcher that beats the first poll bought the
+  // DJ a free agent pick on every restart (#1256). Bounded internally — a slow
+  // or absent Icecast costs at most FIRST_POLL_WAIT_MS, never a boot hang, and
+  // the HTTP server is already listening by this point.
+  await startListenerMonitor();
   queue.startWatcher();
-  startListenerMonitor();
   startStreamIdleMonitor();
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));
   // Load likes up front so the sync readers (pickSystem's favourites lean, the

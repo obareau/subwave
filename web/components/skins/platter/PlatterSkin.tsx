@@ -1,16 +1,7 @@
 'use client';
 
-// Platter — the flagship vinyl face: a reference turntable IS the interface.
-// Flagship · warm · hi-fi. Design ref: Skins Canvas 3a.
-//
-// The record spins at 33⅓ while a light-catch sheen sweeps on its own slower
-// cycle and the strobe rim ticks; the tonearm swings from its rest onto the
-// lead-in when the listener drops the needle (tunes in), then rides the groove
-// inward with the track's progress. The plinth holds the
-// transport (START = tune in/out), while the sleeve, metadata, up-next stack,
-// booth quote and request slip live in the right-hand column. Everything that
-// moves is a co-located keyframe (Platter.module.css) so playback churn never
-// touches React.
+// Everything that moves is a co-located keyframe (Platter.module.css) so
+// playback churn never touches React.
 
 import { useCallback, useRef } from 'react';
 import { AnimatePresence, m } from 'motion/react';
@@ -42,12 +33,8 @@ import {
 import { useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
-/* A record change. The sleeve lifts and settles, then the label becomes
-   legible a beat later — record down, then read it.
-
-   The easing is deliberately the tonearm's own curve (Platter.module.css), so
-   the deck reads as one mechanism rather than two things that happen to move
-   near each other. */
+/* Shares the tonearm's easing curve (Platter.module.css) so the deck reads as
+   one mechanism. */
 const DECK_EASE = [0.22, 1, 0.36, 1] as const;
 const SLEEVE_DROP = {
   initial: { opacity: 0, scale: 1.04, y: -6 },
@@ -80,9 +67,8 @@ const LABEL_CUT = {
   transition: { duration: 0 },
 };
 
-/** The spinning platter itself — rim, vinyl + printed label, light sheen,
- *  spindle cap and the tonearm. Sized to fill its square container so it
- *  scales fluidly; reused (parked, not playing) inside the tune-in gate. */
+/** Sized to fill its square container so it scales fluidly; reused (parked,
+ *  not playing) inside the tune-in gate. */
 function Deck({
   playing,
   stationName,
@@ -96,7 +82,6 @@ function Deck({
 }) {
   return (
     <div className="[container-type:inline-size] relative aspect-square w-[min(52vw,29vh,210px)] lg:w-[min(42vw,72vh,520px)]">
-      {/* pitch strobe rim */}
       <div
         className={cn(
           'pointer-events-none absolute inset-[2%] rounded-full border-2 border-dotted border-[var(--muted)] opacity-50',
@@ -106,7 +91,6 @@ function Deck({
         aria-hidden="true"
       />
 
-      {/* the record — grooves, accent ring, printed paper label */}
       <div
         className={cn('absolute inset-[6%] rounded-full', styles.vinyl, styles.record, playing && styles.playing)}
         aria-hidden="true"
@@ -129,26 +113,19 @@ function Deck({
         </div>
       </div>
 
-      {/* light-catch sheen — independent slower sweep */}
       <div
         className={cn('pointer-events-none absolute inset-[6%] rounded-full', styles.sheen, playing && styles.playing)}
         aria-hidden="true"
       />
 
-      {/* centre spindle cap */}
       <div
         className="absolute top-1/2 left-1/2 size-[2.3%] -translate-x-1/2 -translate-y-1/2 rounded-full border border-[#0c0a09] bg-[#b9b1a1]"
         aria-hidden="true"
       />
 
-      {/* tonearm — one SVG in the deck's own coordinate space, so the headshell
-          stays welded to the tube end and the stylus lands on the groove. The
-          pivot sits rear-right (86% 19%) like a real deck; the arm reaches down
-          onto the RIGHT-hand grooves (never crossing the label) so the record's
-          clockwise spin draws the stylus along the groove instead of shoving it.
-          While playing, .armLive sweeps the arm across the groove band with the
-          track's progress (the shared --pf var); the whole arm swings up off
-          the record when tuned out (see .arm). */}
+      {/* One SVG in the deck's own coordinate space; the pivot at 86% 19% must
+          match .arm's transform-origin in Platter.module.css. .armLive sweeps
+          with the shared --pf var, .armRest parks it off the record. */}
       <svg
         viewBox="0 0 100 100"
         className={cn(
@@ -158,17 +135,12 @@ function Deck({
         )}
         aria-hidden="true"
       >
-        {/* arm tube — dark outline under a light-metal core */}
         <line x1="86" y1="19" x2="72.8" y2="58.5" strokeWidth={2.3} strokeLinecap="round" className="stroke-ink" />
         <line x1="86" y1="19" x2="72.8" y2="58.5" strokeWidth={1.1} strokeLinecap="round" className="stroke-[#e6e0d2]" />
-        {/* counterweight past the pivot */}
         <rect x="83.1" y="11.8" width="9" height="5" rx="1" strokeWidth={0.6} transform="rotate(108.4 87.6 14.3)" className="fill-[#22201d] stroke-ink" />
-        {/* pivot mount */}
         <circle cx="86" cy="19" r="3.6" strokeWidth={0.8} className="fill-[#d9d2c4] stroke-ink" />
         <circle cx="86" cy="19" r="1.2" className="fill-ink" />
-        {/* headshell + cartridge at the tip */}
         <rect x="67.3" y="60.5" width="8" height="5.4" rx="0.8" strokeWidth={0.6} transform="rotate(130.4 71.3 63.2)" className="fill-[#22201d] stroke-ink" />
-        {/* stylus dropped onto the groove */}
         <line x1="70" y1="67" x2="69.4" y2="69.7" strokeWidth={1.1} strokeLinecap="round" className="stroke-[var(--accent)]" />
       </svg>
     </div>
@@ -199,9 +171,8 @@ export default function PlatterSkin(_props: SkinProps) {
   const title = offline ? '— off air —' : (nowPlaying?.title ?? 'Scanning the dial…');
   const artist = offline ? '' : (nowPlaying?.artist ?? '');
 
-  // One key per airing — offline and the scanning placeholder collapse to
-  // constants (as classic/CenterStage does) so a transient null from the 5s
-  // /state poll can't re-drop the sleeve mid-track.
+  // One key per airing: offline and the placeholder collapse to constants so a
+  // transient null from the 5s /state poll can't re-drop the sleeve mid-track.
   const trackKey = offline
     ? 'offline'
     : nowPlaying?.subsonic_id
@@ -217,7 +188,6 @@ export default function PlatterSkin(_props: SkinProps) {
   const adjustVolume = useVolumeNudge();
   const like = useTrackLike();
 
-  // The vertical fader doubles as the volume control — map pointer Y to level.
   const faderRef = useRef<HTMLDivElement | null>(null);
   const setVolFromPointer = useCallback(
     (clientY: number) => {
@@ -230,7 +200,7 @@ export default function PlatterSkin(_props: SkinProps) {
     [setVolume],
   );
 
-  // Drive the progress + volume fills through CSS vars (no inline style attr).
+  // Progress + volume fills ride CSS vars, never an inline style attr.
   const rootRef = useRef<HTMLDivElement | null>(null);
   useDynamicStyle(rootRef, { '--pf': ratio ?? 0, '--vf': volume });
 
@@ -252,7 +222,6 @@ export default function PlatterSkin(_props: SkinProps) {
 
   return (
     <div ref={rootRef} className="absolute inset-0 flex flex-col overflow-hidden bg-bg font-sans text-ink">
-      {/* masthead */}
       <div className="flex flex-none items-center justify-between gap-x-6 border-b border-ink px-5 py-3 sm:px-8">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex-none text-[15px] font-extrabold tracking-[0.14em]">{stationName.toUpperCase()}</span>
@@ -269,28 +238,21 @@ export default function PlatterSkin(_props: SkinProps) {
         </div>
       </div>
 
-      {/* body — turntable over metadata on phones (the body scrolls if the
-          content is taller than the screen); two side-by-side columns on lg. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
-        {/* ===== the plinth ===== */}
         <div className="relative flex flex-none flex-col items-center gap-3 border-b border-ink bg-linear-to-br from-[var(--field)] to-[color-mix(in_oklab,var(--field)_82%,var(--bg))] px-6 py-3 lg:w-[46%] lg:max-w-[680px] lg:flex-1 lg:flex-row lg:justify-center lg:gap-0 lg:border-r lg:border-b-0 lg:py-10">
           <span className="absolute top-5 left-6 font-mono text-[9px] tracking-[0.24em] text-muted uppercase">
             direct drive · quartz lock
           </span>
 
-          {/* deck-area: on phones this flex-1 wrapper centres the platter in the
-              space above the controls (breathing room above it, not stuck to
-              the top); on lg it collapses (display:contents) so the deck centres
-              in the whole plinth. */}
+          {/* On lg this wrapper collapses (display:contents) so the deck
+              centres in the whole plinth instead of this box. */}
           <div className="flex w-full items-center justify-center pt-8 lg:contents">
             <Deck playing={playing} stationName={stationName} title={title} artist={artist} />
           </div>
 
-          {/* the deck IS the control surface: START/STOP drops or lifts the
-              needle, MUTE sits beside it, and the fader is the volume. Laid out
-              as a row beneath the deck on phones (clear of the vinyl); mounted
-              in the plinth corners from lg up (the wrapper goes display:contents
-              so each cluster positions itself absolutely). */}
+          {/* A row beneath the deck on phones; from lg the wrapper goes
+              display:contents so each cluster positions itself absolutely in
+              the plinth corners. */}
           <div className="flex w-full items-end justify-between gap-4 lg:contents">
             <div className="flex items-end gap-3 lg:absolute lg:bottom-6 lg:left-6">
               <button
@@ -336,7 +298,6 @@ export default function PlatterSkin(_props: SkinProps) {
               )}
             </div>
 
-            {/* volume fader — the pitch-slider hardware, now the volume control */}
             <div className="flex flex-col items-center gap-2 lg:absolute lg:right-6 lg:bottom-6">
               <div
                 ref={faderRef}
@@ -365,11 +326,9 @@ export default function PlatterSkin(_props: SkinProps) {
           </div>
         </div>
 
-        {/* ===== metadata column ===== */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-hidden p-4 lg:gap-4 lg:overflow-hidden lg:p-6">
-          {/* now playing */}
           <div className="flex items-start gap-5">
-            <div className="relative size-[84px] flex-none border border-ink bg-[var(--field)] sm:size-[104px]">
+            <div className="relative size-[104px] flex-none border border-ink bg-[var(--field)] sm:size-[128px]">
               {nowPlaying?.subsonic_id && !offline ? (
                 <AnimatePresence mode="popLayout" initial={false}>
                   <m.img
@@ -406,7 +365,6 @@ export default function PlatterSkin(_props: SkinProps) {
             </div>
           </div>
 
-          {/* chips */}
           {(meta.facts.length > 0 || meta.moods.length > 0) && !offline && (
             <div className={cn('flex gap-[7px] overflow-x-auto lg:flex-wrap lg:overflow-visible', styles.chipRow)}>
               {meta.facts.map(f => (
@@ -420,10 +378,9 @@ export default function PlatterSkin(_props: SkinProps) {
             </div>
           )}
 
-          {/* progress */}
           <div className="flex items-center gap-3">
             <span className="font-mono text-[13px] font-bold tabular-nums">{fmtTime(elapsed)}</span>
-            <div className="relative h-1 flex-1 bg-soft-border">
+            <div className="relative h-[6px] flex-1 bg-[color-mix(in_oklab,var(--ink)_14%,var(--bg))]">
               <div className={cn('absolute inset-y-0 left-0 bg-[var(--accent)]', ratio == null ? 'w-full opacity-40' : styles.progFill)} />
               {ratio != null && <div className={cn('absolute top-[-5px] h-[13px] w-[3px] bg-ink', styles.progHead)} />}
             </div>
@@ -434,9 +391,8 @@ export default function PlatterSkin(_props: SkinProps) {
 
           <div className="h-px bg-soft-border" />
 
-          {/* up next */}
-          <div className="flex flex-col border border-ink bg-[var(--field)]">
-            <div className="border-b border-soft-border px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
+          <div className="flex flex-col border border-ink bg-surface">
+            <div className="border-b border-[var(--line)] px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
               next on the platter
             </div>
             {upNext.length > 0 ? (
@@ -449,7 +405,7 @@ export default function PlatterSkin(_props: SkinProps) {
                     i > 0 && 'hidden lg:flex',
                   )}
                 >
-                  <span className={cn('font-mono text-[9px] tracking-[0.18em]', i === 0 ? 'text-[var(--accent)]' : 'text-muted')}>
+                  <span className={cn('font-mono text-[9px] tracking-[0.18em]', i === 0 ? 'text-[var(--accent)]' : 'text-accent-2')}>
                     {i === 0 ? 'CUED' : 'THEN'}
                   </span>
                   <div className="min-w-0 flex-1">
@@ -465,11 +421,10 @@ export default function PlatterSkin(_props: SkinProps) {
             )}
           </div>
 
-          {/* booth quote — the DJ's voice. Hidden in the single-column (phone /
-              narrow) layout so the deck fits one screen without scrolling; it
-              returns in the two-column layout (lg) where the column scrolls. */}
+          {/* Hidden in the single-column layout so the deck fits one screen
+              without scrolling. */}
           {voice && (
-            <div className="hidden flex-none flex-col gap-2 border border-ink bg-bg px-4 py-3.5 lg:flex">
+            <div className="hidden flex-none flex-col gap-2 border border-ink bg-surface px-4 py-3.5 lg:flex">
               <span className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--accent)] uppercase">
                 <span className={cn('size-[7px] rounded-full bg-[var(--accent)]', styles.pulse, playing && styles.playing)} />
                 on air — {djName}
@@ -478,14 +433,11 @@ export default function PlatterSkin(_props: SkinProps) {
             </div>
           )}
 
-          {/* recently spun — the flip side of the up-next stack, and what fills
-              the tall right column. Desktop only: the phone layout drops it (as
-              the booth quote is) so the deck + metadata fit one screen. The panel
-              takes the leftover height (flex-1) and ONLY its list scrolls (shadcn
-              ScrollArea) — the surrounding column never scrolls (lg:overflow-hidden),
-              so the deck, transport and request slip stay put. */}
-          <div className="hidden min-h-0 flex-1 flex-col border border-ink bg-[var(--field)] lg:flex">
-            <div className="flex-none border-b border-soft-border px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
+          {/* Desktop only, like the booth quote. Takes the leftover height and
+              ONLY its list scrolls — the surrounding column stays put
+              (lg:overflow-hidden), so the transport and slip don't move. */}
+          <div className="hidden min-h-0 flex-1 flex-col border border-ink bg-surface lg:flex">
+            <div className="flex-none border-b border-[var(--line)] px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
               recently spun
             </div>
             <ScrollArea type="auto" className="min-h-0 flex-1">
@@ -495,7 +447,7 @@ export default function PlatterSkin(_props: SkinProps) {
                     key={`${entryTime(h) ?? ''}-${h.title ?? i}`}
                     className="flex items-center gap-3 border-b border-soft-border px-3.5 py-2 last:border-b-0"
                   >
-                    <span className="size-1.5 flex-none rounded-full border border-[var(--muted)]" aria-hidden="true" />
+                    <span className="size-1.5 flex-none rounded-full border border-[var(--accent-2)]" aria-hidden="true" />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[14px] font-bold">{h.title ?? '—'}</div>
                       {h.artist && <div className="truncate text-[11px] text-muted">{h.artist}</div>}
@@ -513,9 +465,8 @@ export default function PlatterSkin(_props: SkinProps) {
             </ScrollArea>
           </div>
 
-          {/* request slip */}
           <form
-            className="border border-ink bg-[var(--field)] px-4 py-3"
+            className="border border-ink bg-surface px-4 py-3"
             onSubmit={e => { e.preventDefault(); void slip.send(); }}
           >
             {slip.ack ? (
@@ -557,7 +508,6 @@ export default function PlatterSkin(_props: SkinProps) {
         </div>
       </div>
 
-      {/* footer status strip */}
       <div className="flex flex-none items-center gap-4 border-t border-ink bg-[var(--field)] px-6 py-3 font-mono text-[10px] tracking-[0.16em] uppercase">
         <span className={cn('flex items-center gap-2 font-bold', offline ? 'text-muted' : 'text-[var(--accent)]')}>
           <span className={cn('size-2 rounded-full', offline ? 'bg-[var(--muted)]' : cn('bg-[var(--accent)]', styles.pulse, playing && styles.playing))} />
@@ -580,8 +530,7 @@ export default function PlatterSkin(_props: SkinProps) {
         <span className="ml-auto hidden text-muted sm:inline">stereo · 96 kHz</span>
       </div>
 
-      {/* tune-in gate — the deck sits at rest with the arm parked; one tap
-          drops the needle and the platter spins up. */}
+      {/* The tap is the browser's audio-unblock gesture. */}
       {showOverlay && !offline && (
         <button
           type="button"

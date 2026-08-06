@@ -42,6 +42,7 @@ const settings = {
       genres: ['Jazz'],
       eras: [{ fromYear: 1960, toYear: 1979 }],
       energies: ['low'],
+      vocals: 'instrumental',
       filtersStrict: true,
       playlistIds: ['pl-anchor-1', 'pl-anchor-2'],
       playlistStrict: true,
@@ -77,6 +78,8 @@ await test('carries the strict music filters', () => {
   assert.deepEqual(show.moods, ['calm']);
   assert.deepEqual(show.energies, ['low']);
   assert.deepEqual(show.eras, [{ fromYear: 1960, toYear: 1979 }]);
+  // Scalar, not a list — but the same silent-disable failure mode as the rest.
+  assert.equal((show as any).vocals, 'instrumental');
 });
 
 await test('returns null on an unscheduled slot', () => {

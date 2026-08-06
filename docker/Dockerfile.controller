@@ -1,26 +1,20 @@
 FROM node:22-bookworm-slim
 
-# Shared build deps + espeak-ng for Kokoro phonemization (British English).
-# ffmpeg transcodes + level-matches operator-imported jingles/SFX (see
-# audio/audio-import.ts); without it the import path stores raw uploads as-is.
-# iputils-ping supplies `ping` for network debugging when you exec into the container.
+# espeak-ng: Kokoro phonemization. ffmpeg: transcode + level-match imported
+# jingles/SFX (audio/audio-import.ts). iputils-ping: in-container debugging.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates wget tar iputils-ping \
     python3 python3-venv \
     espeak-ng libsndfile1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Common wget retry policy for the model/binary pulls below. GitHub releases and
-# HuggingFace's xet bridge intermittently return 429/5xx in CI; without retries
-# a single transient blip fails the whole release build (wget exit code 8).
-# --retry-on-http-error needs GNU wget >= 1.20 (bookworm ships 1.21).
-# ARG (not ENV) so it stays a build-time detail and isn't baked into the image.
+# Retry policy for the model/binary pulls below — GitHub releases and HF's xet
+# bridge intermittently 429/5xx in CI, and one blip fails the release build.
+# ARG (not ENV) so it stays build-time only.
 ARG WGET_RETRY="--tries=5 --retry-connrefused --waitretry=10 --timeout=60 --retry-on-http-error=429,500,502,503,504"
 
-# --- Piper -----------------------------------------------------------------
-# CPU-only, ~30ms/word. Default engine; remains the fast path even after Kokoro.
-# TARGETARCH is provided automatically by buildx (amd64 / arm64); map it to the
-# Piper release's asset naming so the multi-arch build pulls the right binary.
+# --- Piper (default TTS, CPU-only, ~30ms/word) ------------------------------
+# TARGETARCH comes from buildx (empty on plain `docker build` → amd64).
 ARG PIPER_VERSION=2023.11.14-2
 ARG TARGETARCH
 RUN cd /tmp && \
@@ -34,18 +28,16 @@ RUN cd /tmp && \
     ln -s /opt/piper/piper /usr/local/bin/piper && \
     rm piper_linux_${piper_arch}.tar.gz
 
-# British English voice — lift the same one you use in Kaze
+# British English voice
 RUN mkdir -p /opt/piper/voices && \
     wget -q ${WGET_RETRY} -O /opt/piper/voices/en_GB-alan-medium.onnx \
       https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx && \
     wget -q ${WGET_RETRY} -O /opt/piper/voices/en_GB-alan-medium.onnx.json \
       https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json
 
-# --- Kokoro ---------------------------------------------------------------
-# Optional second engine. Slower than Piper (~300-800ms/line on CPU) but a lot
-# more natural. Lives in an isolated venv so its Python deps don't tangle with
-# anything else in the image. Worker loads the model once on first use and
-# stays resident (see controller/scripts/kokoro_worker.py).
+# --- Kokoro (optional second TTS — slower, more natural) --------------------
+# Isolated venv; the worker loads the model once and stays resident
+# (controller/scripts/kokoro_worker.py).
 RUN python3 -m venv /opt/kokoro/venv && \
     /opt/kokoro/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/kokoro/venv/bin/pip install --no-cache-dir \
@@ -61,40 +53,27 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
     KOKORO_VOICES=/opt/kokoro/models/voices-v1.0.bin \
     KOKORO_PYTHON=/opt/kokoro/venv/bin/python
 
-# --- Chatterbox (opt-in) --------------------------------------------------
-# Fourth TTS engine — Resemble AI's Chatterbox Turbo: zero-shot voice cloning
-# plus native paralinguistic tags ([laugh], [sigh], …). Uses the official
-# `chatterbox-tts` PyPI package (PyTorch — there is no turn-key ONNX runtime).
-# The runtime + weights add ~2-3GB, and CPU inference is slow, so this is
-# deliberately NOT in the default image. Build with
-# `--build-arg WITH_CHATTERBOX=1` to bundle it into an isolated venv (same
-# pattern as Kokoro above). The final `from_pretrained` doubles as a build-time
-# smoke test (it fails the build if the install is broken) and pre-warms the
-# Hugging Face cache so the first DJ line doesn't trigger a multi-GB download.
-# When the venv is absent, chatterbox.isAvailable() (an existsSync on the venv
-# interpreter) reports false and the dispatcher falls back to Piper.
-# CHATTERBOX_PIP_PKG is overridable in case the package is renamed upstream.
+# --- Chatterbox (opt-in, --build-arg WITH_CHATTERBOX=1) ---------------------
+# Resemble AI's Chatterbox Turbo: zero-shot voice cloning + paralinguistic tags.
+# PyTorch-only (~2-3GB + slow CPU inference), so deliberately NOT in the default
+# image. The from_pretrained call doubles as a build-time smoke test and
+# pre-warms the HF cache. With the venv absent, chatterbox.isAvailable() reports
+# false and the dispatcher falls back to Piper.
 ENV HF_HOME=/opt/chatterbox/hf-cache
 ARG WITH_CHATTERBOX=0
 ARG CHATTERBOX_PIP_PKG=chatterbox-tts
-# GPU opt-in, mirroring docker/Dockerfile.tts-heavy. Defaults keep the CPU-only
-# build. Point CHATTERBOX_TORCH_INDEX_URL at a cuXXX wheel index, and for
-# RTX 50-series (Blackwell) also set CHATTERBOX_TORCH_SPEC to a newer torch
-# (e.g. "torch==2.9.1 torchaudio==2.9.1") to override chatterbox's ==2.6.0 pin.
-# The in-process route still needs a GPU device reservation on the controller
-# service itself — see docs/gpu-tts.md.
+# GPU opt-in (mirrors docker/Dockerfile.tts-heavy): point the index at a cuXXX
+# wheel; RTX 50-series also needs CHATTERBOX_TORCH_SPEC to override the ==2.6.0
+# pin. The in-process route still needs a GPU reservation on the controller
+# service — see docs/gpu-tts.md.
 ARG CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 ARG CHATTERBOX_TORCH_SPEC=
-# Image size: the default PyPI `torch` wheel is the CUDA build, which drags in
-# ~3.6GB of NVIDIA libraries (nvidia-*, triton, cusparselt) that are dead weight
-# on a CPU-only station. torch + torchaudio + chatterbox-tts are therefore all
-# installed in ONE resolve with PyTorch's CPU wheel index as the primary index
-# and PyPI as the extra (for the non-torch deps). The CPU wheels carry a `+cpu`
-# local version tag, which sorts ABOVE the plain PyPI version, so pip prefers
-# them — and the CPU torch wheel simply doesn't declare the nvidia-* deps, so
-# they're never pulled. Installing in two separate commands does NOT work: the
-# second resolve sees only PyPI and re-pulls the CUDA torch. The final cleanup
-# strips compiled bytecode and torch's C++ headers/test suite (unused at runtime).
+# The default PyPI torch wheel is the CUDA build (~3.6GB of nvidia-* deps that
+# are dead weight on CPU). torch + torchaudio + chatterbox must be installed in
+# ONE resolve with the CPU wheel index primary: the `+cpu` local version tag
+# sorts above PyPI's, so pip prefers it, and the CPU wheel declares no nvidia-*
+# deps. Two separate installs do NOT work — the second resolve re-pulls CUDA
+# torch from PyPI.
 RUN if [ "$WITH_CHATTERBOX" = "1" ]; then \
       echo "Bundling Chatterbox Turbo (PyTorch) — adds ~3-4GB to the image" && \
       python3 -m venv /opt/chatterbox/venv && \
@@ -119,23 +98,16 @@ RUN if [ "$WITH_CHATTERBOX" = "1" ]; then \
       echo "Chatterbox not bundled — build with --build-arg WITH_CHATTERBOX=1 to include it" ; \
     fi
 
-# --- PocketTTS (opt-in) ---------------------------------------------------
-# Fifth TTS engine — kyutai-labs' PocketTTS: a 100M-param CPU-only model
-# (~6× real-time on a modern CPU, ~200ms time-to-first-chunk) covering EN/FR/
-# DE/IT/ES/PT built-in voices, MIT-licensed. Sits between Piper (fast, robotic)
-# and Chatterbox (heavy, expressive) in the local-engine ladder. The runtime
-# still drags PyTorch in, so this is deliberately NOT in the default image —
-# build with `--build-arg WITH_POCKETTTS=1` to bundle the venv. Same isolation
-# pattern as Chatterbox (its own venv at /opt/pocket-tts/venv, CPU torch wheels
-# only, model preload doubling as a build-time smoke test). When the venv is
-# absent, pocketTts.isAvailable() reports false and the dispatcher falls back
-# to Piper, so settings can safely reference the engine regardless.
-# HF_TOKEN (optional) unlocks PocketTTS voice cloning (issue #238): the cloning
-# weights (kyutai/pocket-tts) are GATED on Hugging Face. Without it the pre-warm
-# loads the open "without-voice-cloning" weights and cloned .wav voices revert
-# to a built-in. Setting HF_TOKEN at RUNTIME also works (lazy download on first
-# load); the build-arg only bakes the gated weights in. A build-arg token lands
-# in image history, so prefer the runtime env unless you control the image.
+# --- PocketTTS (opt-in, --build-arg WITH_POCKETTTS=1) -----------------------
+# kyutai-labs' PocketTTS: 100M-param CPU model between Piper (fast, robotic)
+# and Chatterbox (heavy, expressive). Still drags PyTorch in, so NOT in the
+# default image; same venv-isolation pattern as Chatterbox, model preload as
+# build-time smoke test. With the venv absent, pocketTts.isAvailable() reports
+# false and the dispatcher falls back to Piper.
+# HF_TOKEN (optional) unlocks voice cloning (#238) — the cloning weights are
+# gated; without it the pre-warm loads the open weights and cloned .wav voices
+# revert to a built-in. Runtime env also works (lazy download); a build-arg
+# token lands in image history, so prefer runtime unless you control the image.
 ARG WITH_POCKETTTS=0
 ARG HF_TOKEN=""
 RUN if [ "$WITH_POCKETTTS" = "1" ]; then \
@@ -161,31 +133,25 @@ ENV POCKET_TTS_PYTHON=/opt/pocket-tts/venv/bin/python \
 # --- Controller app -------------------------------------------------------
 WORKDIR /app
 # .npmrc carries `legacy-peer-deps=true` (OpenRouter provider still declares a
-# stale `peer ai@^6` after the AI SDK v7 upgrade); it must land before install
-# or npm hits ERESOLVE.
+# stale `peer ai@^6`); it must land before install or npm hits ERESOLVE.
 COPY controller/package*.json controller/.npmrc ./
-# npm ci (not install): controller ships a package-lock.json, so ci gives a
-# reproducible, lockfile-exact install and is faster in CI. The package*.json
-# glob above already brings the lockfile in before this runs.
 RUN npm ci --omit=dev
 COPY controller/src ./src
 COPY controller/scripts ./scripts
 
-# Version reported by the controller (e.g. the backup manifest). Set from `git
-# describe` by scripts/update.sh and the publish-images CI; unset → falls back
-# to controller/package.json (see routes/backup.ts).
+# Version reported by the controller (backup manifest). Set from `git describe`
+# by scripts/update.sh + CI; unset → controller/package.json (routes/backup.ts).
 ARG SUBWAVE_BUILD_VERSION
 ENV SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 
-# Bake repo-bundled audio (emergency loop + studio bed + sfx). Prod no longer
-# bind-mounts ../sounds — operators install via the image-only path. Dev
-# compose can still bind-mount over the top for hot reload of new SFX.
+# Repo-bundled audio (emergency loop + studio bed + sfx). Prod is image-only;
+# dev compose can bind-mount over the top.
 COPY sounds /sounds
 
 # State dir shared with Liquidsoap
 RUN mkdir -p /var/sub-wave/voice && chmod 777 /var/sub-wave
 
 EXPOSE 7701
-# `tsx` is in `dependencies` (not devDeps) so it survives `npm install --omit=dev`
-# above; we run .ts directly — no separate build step. See controller/tsconfig.json.
+# tsx is in `dependencies` (not devDeps) so it survives --omit=dev; we run .ts
+# directly — no build step.
 CMD ["node_modules/.bin/tsx", "src/server.ts"]

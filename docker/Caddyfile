@@ -1,33 +1,22 @@
-# Caddy edge router for SUB/WAVE production.
-# Cloudflare terminates TLS in front, so we speak plain HTTP on :80 only.
-# All listener-facing traffic lands here and is routed to internal services
-# by URL prefix. Broadcast (icecast2 + liquidsoap), controller, and web
-# have no host port bindings — they're only reachable through this proxy.
+# Caddy edge router for SUB/WAVE production. Cloudflare terminates TLS in
+# front, so plain HTTP on :80 only; broadcast/controller/web have no host ports
+# and are routed by URL prefix.
 {
 	auto_https off
-	# Trust Cloudflare's X-Forwarded-* headers so logs and rate-limits see real IPs.
-	# This list is hardcoded and must be refreshed by hand when Cloudflare changes
-	# its ranges — pull the canonical lists from:
-	#   https://www.cloudflare.com/ips-v4  and  https://www.cloudflare.com/ips-v6
+	# Trust Cloudflare's X-Forwarded-* so logs and rate-limits see real IPs.
+	# Hardcoded — refresh by hand from https://www.cloudflare.com/ips-v4 and
+	# /ips-v6. These are the peers that CONNECT TO CADDY, which with proxied
+	# DNS really are Cloudflare edges.
 	#
-	# These are the addresses of the machines that CONNECT TO CADDY, which is why
-	# the list is Cloudflare's public ranges: with proxied DNS, the peer really is
-	# a Cloudflare edge. A Cloudflare TUNNEL is different — `cloudflared` runs as
-	# a container beside this one, so the peer is a private Docker address, no
-	# entry here matches, and Caddy discards the forwarded header it arrived
-	# with. Tunnel operators need to append `private_ranges` to the list below.
-	#
-	# It is not the default because it is a real trust decision: trusting private
-	# ranges means anything that can reach this Caddy from private address space
-	# can forge X-Forwarded-For, which both fakes rows in admin → Listeners and
-	# defeats the controller's per-IP limits — the request caps, the admin
-	# brute-force lockout, the station-password throttle and like dedup all key
-	# on the address middleware/ratelimit.ts resolves, and X-Forwarded-For is
-	# what it reads unless TRUST_CF_CONNECTING_IP is set. Keeping the list to
-	# Cloudflare's ranges is what makes that read sound: for any other peer Caddy
-	# replaces the header with the real connecting address. Safe when the tunnel
-	# is the only ingress; not safe when the host port is also reachable from a
-	# shared LAN. See docs/deployment.md for the full recipe.
+	# A Cloudflare TUNNEL is different: cloudflared is a container beside this
+	# one, so the peer is a private Docker address and Caddy discards the
+	# forwarded header — tunnel operators must append `private_ranges`. That is
+	# NOT the default because it's a real trust decision: anything reaching
+	# Caddy from private address space could then forge X-Forwarded-For, faking
+	# admin → Listeners rows and defeating every per-IP limit in
+	# middleware/ratelimit.ts (request caps, admin lockout, station-password
+	# throttle, like dedup). Safe when the tunnel is the only ingress; not when
+	# the host port is also reachable from a shared LAN. See docs/deployment.md.
 	servers {
 		trusted_proxies static \
  173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 \
@@ -41,35 +30,23 @@
 }
 
 :80 {
-	# -------------------------------------------------------------------------
-	# Security response headers — applied to every response (streams, /api, web)
-	# -------------------------------------------------------------------------
-	# These are inert metadata headers: they don't buffer or rewrite the body, so
-	# they don't interfere with the streams' `flush_interval -1` live path or the
-	# /api reverse proxy. X-Frame-Options SAMEORIGIN is safe — the app never
-	# embeds itself cross-origin (no iframe/postMessage embedding in web/).
+	# Security headers on every response — inert metadata, so they don't fight
+	# the streams' flush_interval -1 live path. SAMEORIGIN is safe: the app
+	# never embeds itself cross-origin.
 	header {
-		# Drop Caddy's default `Server: Caddy` banner (don't advertise the edge).
+		# Don't advertise the edge.
 		-Server
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		X-Frame-Options SAMEORIGIN
-		# HSTS — opt-in. Cloudflare terminates TLS in front of this origin, so
-		# HSTS at the edge is only meaningful when the site is served https-only.
-		# Uncomment to force HTTPS in browsers for a year (operator's call; be
-		# sure every subdomain is https before enabling includeSubDomains):
+		# HSTS — opt-in (Cloudflare terminates TLS; only meaningful https-only,
+		# and every subdomain must be https before includeSubDomains):
 		# Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	}
 
-	# -------------------------------------------------------------------------
-	# /stream.mp3 + /stream.opus + /stream.flac + /stream.aac — Icecast endpoints
-	# -------------------------------------------------------------------------
-	# All mounts are served by the same Icecast on broadcast:7702 (Liquidsoap
-	# encodes the same source bus into MP3, Ogg-Opus, Ogg-FLAC lossless and
-	# AAC-LC in parallel; Opus/FLAC/AAC are off by default and their bitrates
-	# are operator-configurable). flush_interval -1 disables buffering so the
-	# audio stays live. Query strings (e.g. ?t=12345 cache-busters) pass
-	# through automatically.
+	# Icecast mounts. Opus/FLAC/AAC are off by default but must be listed or
+	# they fall through to the Next.js catch-all and 404. flush_interval -1
+	# disables buffering so the audio stays live.
 	@streams path /stream.mp3 /stream.opus /stream.flac /stream.aac
 	handle @streams {
 		reverse_proxy broadcast:7702 {
@@ -82,51 +59,34 @@
 		}
 	}
 
-	# -------------------------------------------------------------------------
-	# /api/listener-auth — NOT reachable from the internet
-	# -------------------------------------------------------------------------
-	# The Icecast URL-auth callback (#478). Icecast lives in the broadcast
-	# container and calls the controller DIRECTLY over the compose network
-	# (http://controller:7701/listener-auth — see docker/broadcast-entrypoint.sh),
-	# so it never needs the edge. Exposing it through /api/* handed the internet
-	# an unthrottled password oracle: it answers 200/401 on the shared
-	# privacy.password, while POST /station-auth throttles that SAME password at
-	# 20 tries / 15 min. Must be declared BEFORE the /api/* handler — Caddy sorts
-	# by specificity, but keeping it adjacent makes the pairing obvious.
+	# Icecast's URL-auth callback (#478) — NOT reachable from the internet.
+	# Icecast calls the controller directly over the compose network, so the
+	# edge never needs it; exposed through /api/* it is an unthrottled password
+	# oracle for the shared privacy.password that POST /station-auth throttles.
 	handle /api/listener-auth {
 		respond 404
 	}
 
-	# -------------------------------------------------------------------------
-	# /api/* — Controller REST API
-	# -------------------------------------------------------------------------
-	# handle_path strips the /api prefix before forwarding, so the controller
-	# keeps its existing routes (/now-playing, /state, /request, /skip, /health).
+	# Controller REST API. handle_path strips the /api prefix, so the
+	# controller keeps its existing routes.
 	handle_path /api/* {
 		reverse_proxy controller:7701
 	}
 
-	# -------------------------------------------------------------------------
-	# /listen.pls + /listen.m3u — one-paste tune-in files (VLC, Sonos, hardware)
-	# -------------------------------------------------------------------------
-	# Served by the controller at its root (NOT under /api), so use a plain
-	# handle with no path stripping. Without this they fall through to the
-	# Next.js catch-all below and 404.
+	# One-paste tune-in files (VLC, Sonos, hardware) — served by the controller
+	# at its root (NOT under /api), so plain handle, no path stripping.
 	@listen path /listen.pls /listen.m3u
 	handle @listen {
 		reverse_proxy controller:7701
 	}
 
-	# -------------------------------------------------------------------------
-	# Everything else → Next.js web UI
-	# -------------------------------------------------------------------------
+	# Everything else → Next.js web UI.
 	handle {
 		reverse_proxy web:7700
 	}
 
-	# Don't compress the live audio mounts — MP3/Opus/FLAC/AAC are already
-	# compressed (gzip just burns CPU on incompressible data) and an encoder
-	# layer on the never-ending body fights the `flush_interval -1` live path.
+	# Don't compress the live audio mounts — already-compressed data, and an
+	# encoder layer on the never-ending body fights flush_interval -1.
 	@compressible not path /stream.mp3 /stream.opus /stream.flac /stream.aac
 	encode @compressible gzip zstd
 

@@ -8,22 +8,19 @@ interface CountUpProps {
   className?: string;
 }
 
-// Honour reduced-motion at call time (a mid-session setting change is respected)
-// — matches the pattern in TransportBar.
+// Read at call time so a mid-session setting change is respected.
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined'
     && typeof window.matchMedia === 'function'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
-// A number that smoothly climbs from its previous value to the next, rendered
-// with thousands separators (en-US, fixed so it doesn't drift with the
-// browser locale). Unlike OdometerNumber (a whole-value digit swap), this
-// tweens through the in-between integers — the right feel for a large, slowly
-// rising counter like the LLM token total polled every ~5s.
+// Tweens through the in-between integers, unlike OdometerNumber's whole-value
+// digit swap. Thousands separators are pinned to en-US so they don't drift with
+// the browser locale.
 export default function CountUp({ value, className }: CountUpProps) {
   const [display, setDisplay] = useState(value);
-  // Seed with the first value so mount snaps to it rather than sweeping 0 → N.
+  // Seeded so mount snaps to the first value rather than sweeping 0 → N.
   const prevRef = useRef(value);
 
   useEffect(() => {

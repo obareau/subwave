@@ -38,12 +38,14 @@ import {
   Music,
   AudioLines,
   Waves,
+  Mic,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import NavidromeBanner from './NavidromeBanner';
+import MusicStarvedBanner from './MusicStarvedBanner';
 import StationSwitcher from './StationSwitcher';
 import OdometerNumber from '../OdometerNumber';
 import BoothBuddy from '../BoothBuddy';
@@ -110,10 +112,9 @@ interface NavSubItem {
   id: string;
   label: string;
   icon: NavIcon;
-  // Tab-based children (Moods / Imaging) share the parent's page and differ
-  // only by ?tab=. `tab` is the query value this item selects; `defaultTab`
-  // marks the one shown when the URL carries no (or an unknown) ?tab=. Route
-  // children (Library → Playlists / Observatory) leave both unset.
+  // `tab` is the ?tab= value this item selects; `defaultTab` marks the one
+  // shown when the URL carries no (or an unknown) tab. Route children leave
+  // both unset.
   tab?: string;
   defaultTab?: boolean;
 }
@@ -124,9 +125,7 @@ interface NavItem {
   label: string;
   icon: NavIcon;
   pill?: string;
-  // Nested pages surfaced under a collapsible submenu (e.g. Library →
-  // Playlists / Observatory). The parent still links to its own page; the
-  // chevron toggles the sub-items.
+  // The parent still links to its own page; the chevron toggles the sub-items.
   children?: NavSubItem[];
 }
 
@@ -135,7 +134,6 @@ interface NavSection {
   items: NavItem[];
 }
 
-// Nav is grouped: what's happening now → what the station plays → the box itself.
 const NAV_SECTIONS: NavSection[] = [
   {
     label: 'Monitor',
@@ -147,10 +145,6 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: 'Programming',
     items: [
-      // Library owns a collapsible submenu — Playlists (/admin/playlists) and
-      // the Observatory (/observatory) live under its wing. The parent still
-      // links to /admin/library; the chevron opens/closes the sub-items (which
-      // also stay reachable from the doorway cards inside the Library page).
       {
         href: '/admin/library',
         id: 'library',
@@ -161,8 +155,6 @@ const NAV_SECTIONS: NavSection[] = [
           { href: '/observatory', id: 'observatory', label: 'Observatory', icon: Telescope },
         ],
       },
-      // Shows → Schedule: the definitions live on /admin/shows; the weekly
-      // plan (The Rundown) is its own full-bleed page.
       {
         href: '/admin/shows',
         id: 'shows',
@@ -174,8 +166,6 @@ const NAV_SECTIONS: NavSection[] = [
       },
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
       { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },
-      // Imaging + Moods are single pages with ?tab= sections; the submenu
-      // deep-links into each tab (see ImagingPanel / MoodsPanel).
       {
         href: '/admin/imaging',
         id: 'imaging',
@@ -185,6 +175,7 @@ const NAV_SECTIONS: NavSection[] = [
           { href: '/admin/imaging?tab=jingles', id: 'imaging-jingles', label: 'Jingles', icon: Music, tab: 'jingles', defaultTab: true },
           { href: '/admin/imaging?tab=sfx', id: 'imaging-sfx', label: 'SFX', icon: AudioLines, tab: 'sfx' },
           { href: '/admin/imaging?tab=beds', id: 'imaging-beds', label: 'Beds', icon: Waves, tab: 'beds' },
+          { href: '/admin/imaging?tab=voices', id: 'imaging-voices', label: 'Voices', icon: Mic, tab: 'voices' },
         ],
       },
       {
@@ -217,8 +208,6 @@ interface AppLink {
   icon: NavIcon;
 }
 
-// Native player apps — surfaced from the top-bar "Listen" dropdown alongside
-// the in-browser player.
 const APP_LINKS: AppLink[] = [
   { href: 'https://apps.apple.com/app/sub-wave/id6778786696', label: 'iOS app', icon: Apple },
   {
@@ -233,17 +222,13 @@ const APP_LINKS: AppLink[] = [
   },
 ];
 
-// Footer utility links (grouped with Sign out in the sidebar footer).
 const FOOTER_LINKS: { href: string; label: string; icon: NavIcon; pill: string }[] = [
   { href: '/manual', label: 'Manual', icon: BookOpen, pill: '↗' },
   { href: 'https://discord.gg/vjVbVKnMBa', label: 'Discord', icon: MessageCircle, pill: '↗' },
 ];
 
-// Section + page label for the top-bar breadcrumb. Playlists, DJ Doc, and
-// Stations aren't sidebar items (Playlists lives under Library's doorway,
-// DJ Doc in the header strip, Stations behind the switcher at the top of the
-// rail), so they're resolved explicitly; Library stays lit in the rail while
-// on Playlists, so the crumb mirrors that with the Programming section.
+// Playlists, DJ Doc, and Stations aren't sidebar items, so they're resolved
+// explicitly; their crumb sections mirror where the rail stays lit.
 function resolveCrumb(pathname: string | null): { section?: string; page: string } {
   if (pathname?.startsWith('/admin/playlists')) return { section: 'Programming', page: 'Playlists' };
   if (pathname?.startsWith('/admin/shows/schedule')) return { section: 'Programming', page: 'Schedule' };
@@ -263,12 +248,7 @@ export interface AdminShellProps {
   defaultOpen?: boolean;
 }
 
-// Wraps every page under /admin. Renders the newsprint shell (shadcn Sidebar +
-// sticky top bar) behind a sign-in gate. Children are admin panels that
-// re-call useAdminAuth themselves to avoid prop-drilling the adminFetch.
-// Routes that take the whole inset — no max-width, no padding — so a screen
-// like the Rundown can own its full width and height (its own header bands
-// run edge to edge and the page stretches to the viewport bottom).
+// Routes that take the whole inset — no max-width, no padding.
 const FULL_BLEED_ROUTES = ['/admin/shows/schedule'];
 
 export default function AdminShell({ children, defaultOpen = true }: AdminShellProps) {
@@ -276,6 +256,8 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   const router = useRouter();
   const { auth, needsAuth, hydrated, signIn, signOut, adminFetch } = useAdminAuth();
   const fullBleed = !!pathname && FULL_BLEED_ROUTES.some(r => pathname.startsWith(r));
+  // Navidrome down raises the starve banner too; show only the specific one.
+  const [navidromeOk, setNavidromeOk] = useState(true);
 
   const handleSignIn = useCallback(
     async (user: string, pass: string): Promise<SignInResult> => {
@@ -302,9 +284,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
     };
   }, [hydrated, auth, adminFetch]);
 
-  // First-run redirect — if the controller reports needsSetup, push the
-  // operator straight into the wizard rather than dropping them on an admin
-  // dashboard that's full of empty panels. Public endpoint, no auth needed.
+  // First-run redirect into the wizard. Public endpoint, no auth needed.
   useEffect(() => {
     if (!hydrated) return;
     if (pathname?.startsWith('/onboarding')) return;
@@ -325,7 +305,6 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
     );
   }
 
-  // Authentication gate — covers both "no token yet" and "token rejected".
   if (!auth || needsAuth) {
     return (
       <div className="admin-root paper min-h-screen">
@@ -339,26 +318,21 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
 
   return (
     <div className="admin-root paper">
-      {/* Narrower rail than the shadcn 16rem default — the admin nav is short
-          labels, so ~13rem reclaims horizontal room for the panels. */}
+      {/* Narrower than the shadcn 16rem default — the nav is short labels. */}
       <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>
         <AdminSidebar pathname={pathname} onSignOut={signOut} />
         <SidebarInset className="min-w-0 bg-transparent">
           <TopBar pathname={pathname} />
-          {/* Persistent connectivity warning — visible on every admin page
-              whenever the live station can't reach Navidrome. Renders nothing
-              when healthy. */}
-          <NavidromeBanner adminFetch={adminFetch} />
+          <NavidromeBanner adminFetch={adminFetch} onStatus={setNavidromeOk} />
+          <MusicStarvedBanner adminFetch={adminFetch} suppressed={!navidromeOk} />
           <div
             className={
               fullBleed
                 ? 'flex w-full min-w-0 flex-1 flex-col'
-                : 'mx-auto w-full max-w-[1440px] min-w-0 px-5 py-4'
+                : 'mx-auto w-full max-w-[1440px] min-w-0 px-6 py-6'
             }
           >
-            {/* Panel route transitions — 120 ms cross-fade between admin pages
-                keyed on pathname. No y translate (operator surface, vertical
-                drift would feel twitchy on a list of panels). */}
+            {/* No y translate — vertical drift feels twitchy on a list of panels. */}
             <AnimatePresence mode="wait" initial={false}>
               <m.div
                 key={pathname}
@@ -380,19 +354,15 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   );
 }
 
-// ⌘K / Ctrl+K command menu for the admin console — jump between panels without
-// reaching for the sidebar. Reuses the shared cmdk-based CommandDialog, and is
-// mounted from the authenticated admin shell so it is available on every admin
-// route. The chord is a modifier combo, so it is safe to honour even while a
-// field is focused (it never intercepts a bare keystroke).
+// ⌘K / Ctrl+K panel jump list. The chord is a modifier combo, so it is safe to
+// honour even while a field is focused (it never intercepts a bare keystroke).
 function AdminCommandMenu() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      // Toggling on auto-repeat would flicker the dialog while the chord is
-      // held — fire once per press, like every other shortcut.
+      // Toggling on auto-repeat would flicker the dialog while the chord is held.
       if (e.repeat) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
@@ -408,8 +378,6 @@ function AdminCommandMenu() {
     router.push(href);
   };
 
-  // Flatten the sidebar nav (section items + their route/tab children) into one
-  // searchable jump list.
   const targets: { href: string; label: string; group: string }[] = [];
   for (const section of NAV_SECTIONS) {
     for (const item of section.items) {
@@ -442,10 +410,6 @@ function AdminCommandMenu() {
   );
 }
 
-// The wordmark (SidebarHeader), grouped nav (SidebarContent), and the footer
-// (Manual / Discord / Sign out, then the Ko-fi ask, then the version). Collapses
-// to an icon rail; the mobile branch renders inside a Sheet drawer (handled by
-// the Sidebar component).
 function AdminSidebar({
   pathname,
   onSignOut,
@@ -456,8 +420,7 @@ function AdminSidebar({
   const { setOpenMobile, isMobile } = useSidebar();
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   // The shell lives in the persistent layout, so a client-side nav doesn't
-  // remount it — the mobile Sheet would stay open over the new page. Close it
-  // explicitly on any drawer link tap.
+  // remount it — the mobile Sheet would stay open over the new page.
   const closeOnMobileNav = () => {
     if (isMobile) setOpenMobile(false);
   };
@@ -469,7 +432,6 @@ function AdminSidebar({
           onClick={closeOnMobileNav}
           className="flex items-center gap-2 px-1 no-underline"
         >
-          {/* The station's disc mark — also serves as the collapsed rail logo. */}
           <span className="inline-flex size-5 shrink-0">
             <DiscMark size={20} />
           </span>
@@ -478,9 +440,6 @@ function AdminSidebar({
           </span>
         </Link>
         <span className="caption px-1 group-data-[collapsible=icon]:hidden">control center</span>
-        {/* Multi-station: the shadcn "Teams"-style switcher — active station
-            with a dropdown of the others; no-ops down to a single row on
-            single-station installs. */}
         <StationSwitcher onNavigate={closeOnMobileNav} />
       </SidebarHeader>
 
@@ -512,16 +471,13 @@ function AdminSidebar({
       </SidebarContent>
 
       <SidebarFooter className="gap-3 px-2 py-3">
-        {/* Manual, Discord, and Sign out merged into one "More" submenu. A
-            dropdown (rather than an inline collapsible) so it stays reachable
+        {/* A dropdown rather than an inline collapsible so it stays reachable
             when the rail is collapsed to icons. */}
         <SidebarMenu className="gap-1.5">
           <SidebarMenuItem>
-            {/* Non-modal: a modal Radix menu locks body scroll, and the lock
-                compensates for the removed scrollbar with a 15px right margin
-                on <body> — which pulls the sticky top bar off the right edge
-                for as long as the menu is open. A nav menu has no reason to
-                trap scroll, so opt out and the shift never happens. */}
+            {/* Non-modal: a modal Radix menu locks body scroll, and the lock's
+                15px scrollbar-compensation margin pulls the sticky top bar off
+                the right edge while the menu is open. */}
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <SidebarMenuButton title="More">
@@ -562,7 +518,6 @@ function AdminSidebar({
           </SidebarMenuItem>
         </SidebarMenu>
 
-        {/* The Ko-fi ask — the one vermilion item on the rail. */}
         <SidebarMenu className="gap-1.5">
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -589,8 +544,6 @@ function AdminSidebar({
       </SidebarFooter>
       <SidebarRail />
 
-      {/* Sign out drops the cached credentials — worth a confirm, matching the
-          dash's skip-track dialog. */}
       <V3AlertDialog
         open={confirmingSignOut}
         onOpenChange={setConfirmingSignOut}
@@ -604,9 +557,8 @@ function AdminSidebar({
   );
 }
 
-// The filled active pill, morphed across nav rows via a shared layoutId — same
-// trick as DotRail. Only ever ONE row renders it at a time (sub-items use their
-// own subtler highlight), so the layout animation never doubles up.
+// Only ever ONE row may render this at a time (sub-items use their own
+// highlight), or the shared-layoutId animation doubles up.
 function NavActiveBg() {
   return (
     <m.span
@@ -619,7 +571,6 @@ function NavActiveBg() {
   );
 }
 
-// A plain (childless) nav row.
 function NavItemRow({
   item,
   pathname,
@@ -645,12 +596,8 @@ function NavItemRow({
   );
 }
 
-// A nav row that owns a collapsible submenu (Library → Playlists / Observatory).
-// The parent button still links to its own page; a chevron action toggles the
-// sub-items open/closed. The group auto-opens whenever the operator is on the
-// parent or any of its child pages. In the icon-collapsed rail both the chevron
-// and the sub-list hide (built into SidebarMenuAction / SidebarMenuSub), so the
-// parent icon just links straight through.
+// In the icon-collapsed rail both the chevron and the sub-list hide (built into
+// SidebarMenuAction / SidebarMenuSub), so the parent icon links straight through.
 function CollapsibleNavItem({
   item,
   pathname,
@@ -663,11 +610,9 @@ function CollapsibleNavItem({
   const children = item.children ?? [];
   const searchParams = useSearchParams();
 
-  // Tab-based groups (Moods / Imaging) share the parent page and select a
-  // section via ?tab=; resolve the effective tab (falling back to the group's
-  // default when the URL has none/unknown), then a child is active when the
-  // page matches and its tab is the effective one. Route-based groups (Library)
-  // just prefix-match their child's own path.
+  // Tab-based groups share the parent page, so a child is active when the page
+  // matches and its tab is the effective one (falling back to the group's
+  // default). Route-based groups just prefix-match their child's own path.
   const tabChildren = children.filter(c => c.tab != null);
   const validTabs = tabChildren.map(c => c.tab as string);
   const rawTab = searchParams.get('tab');
@@ -682,14 +627,13 @@ function CollapsibleNavItem({
 
   const hasActiveChild = children.some(childActive);
   const onSection = (!!pathname && pathname.startsWith(item.href)) || hasActiveChild;
-  // Parent shows the filled pill only on its own page with no child selected
-  // (Library's overview). Tab groups always have a child selected, so the pill
-  // moves to the child and the parent stays a plain, open group header.
+  // Parent takes the pill only with no child selected; tab groups always have
+  // one, so there the pill moves to the child.
   const parentActive = onSection && !hasActiveChild;
 
   const [open, setOpen] = useState(onSection);
-  // Reveal the group whenever a nav lands on one of its pages (the shell is
-  // persistent, so the state survives across route changes otherwise).
+  // The shell is persistent, so open state survives route changes — re-reveal
+  // the group whenever a nav lands on one of its pages.
   useEffect(() => {
     if (onSection) setOpen(true);
   }, [onSection]);
@@ -738,7 +682,6 @@ function CollapsibleNavItem({
   );
 }
 
-// Sticky top bar — sidebar toggle, breadcrumb, and the live-station strip.
 function TopBar({ pathname }: { pathname: string | null }) {
   const { section, page } = resolveCrumb(pathname);
   const { nowPlaying, listeners } = useStationFeed();
@@ -760,8 +703,7 @@ function TopBar({ pathname }: { pathname: string | null }) {
       : 'none',
   });
 
-  // Pulse the dot when onAir flips false → true (track just started). We
-  // don't pulse on the steady-state polls — only on transitions.
+  // Pulse only on the false → true transition, not on steady-state polls.
   const wasOnAirRef = useRef(onAir);
   useEffect(() => {
     if (onAir && !wasOnAirRef.current && dotRef.current) {
@@ -775,13 +717,11 @@ function TopBar({ pathname }: { pathname: string | null }) {
   }, [onAir]);
 
   return (
-    <header className="sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink bg-[var(--card-bg)] px-4 py-2.5 sm:px-6">
-      {/* Roomier hit box on a phone, where this is the only way back to the
-          nav; the dense desktop button returns at sm. */}
+    <header className="sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--line)] bg-[var(--sidebar)] px-4 py-2.5 sm:px-6">
+      {/* Roomier hit box on a phone, where this is the only way back to the nav. */}
       <SidebarTrigger className="-ml-1 size-9 shrink-0 sm:size-7" />
       <Separator orientation="vertical" className="hidden h-5 sm:block" />
-      {/* Breadcrumb text is hidden on mobile — space is tight next to the
-          hamburger, and the current page is already obvious from the drawer. */}
+      {/* Hidden on mobile — space is tight next to the hamburger. */}
       <Breadcrumb className="hidden sm:block">
         <BreadcrumbList className="gap-1.5 text-[10px] tracking-[0.28em] uppercase sm:gap-2">
           {section && (
@@ -797,8 +737,6 @@ function TopBar({ pathname }: { pathname: string | null }) {
       </Breadcrumb>
 
       <span className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-2 text-[10px] tracking-[0.22em] text-ink uppercase">
-        {/* Live dot only — the on-air/off-air word is dropped; the dot's colour
-            (accent when live, muted when not) already carries the state. */}
         <span
           ref={dotRef}
           className="size-2 rounded-full bg-[var(--accent)]"
@@ -818,8 +756,6 @@ function TopBar({ pathname }: { pathname: string | null }) {
             </span>
           </>
         )}
-        {/* DJ Doc — the primary entry point lives here in the header, right
-            after the listener count, with the booth buddy in its on-air mood. */}
         <span className="h-4 w-px bg-separator-strong" />
         <Link
           href="/admin/doctor"
@@ -830,7 +766,6 @@ function TopBar({ pathname }: { pathname: string | null }) {
           <span className="caption">DJ Doc</span>
         </Link>
         <ThemeSwitcher variant="admin" />
-        {/* Listen — a menu grouping the in-browser player with the native apps. */}
         {/* modal={false} for the same reason as the sidebar's More menu — no
             body scroll lock, so no scrollbar-compensation margin shift. */}
         <DropdownMenu modal={false}>
@@ -869,7 +804,6 @@ function TopBar({ pathname }: { pathname: string | null }) {
   );
 }
 
-// Slim header for the signed-out gate — no sidebar behind it.
 function SignedOutHeader() {
   return (
     <header className="flex items-center gap-3 border-b border-ink bg-[var(--card-bg)] px-4 py-2.5 sm:px-7">

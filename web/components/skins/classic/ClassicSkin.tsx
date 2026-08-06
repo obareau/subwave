@@ -1,9 +1,8 @@
 'use client';
 
-// The original SUB/WAVE player face — masthead, centre stage, waveform,
-// transport deck, dot-rail drawers, ⌘K palette. The first consumer of the
-// skin contract (see ../types.ts): everything here reads the core contexts;
-// the shell owns the <audio> element, the root frame, and the toaster.
+// The reference consumer of the skin contract (see ../types.ts): everything
+// here reads the core contexts; the shell owns the <audio> element, the root
+// frame, and the toaster.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
@@ -61,14 +60,12 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
     usePlayerActions();
   const { showOverlay, tuneInFromOverlay, handleTune } = useTuneInGate();
 
-  // Listener count now lives in the footer's signal readout (not the header) —
-  // normalise the feed's number | { current } | null shape to a plain count.
+  // Normalise the feed's number | { current } | null shape to a plain count.
   const listenerCount =
     listeners == null ? null : typeof listeners === 'number' ? listeners : (listeners.current ?? null);
 
-  // Art-derived ambient wash — extract a couple of colours from the current
-  // cover and feed them to the gradient layer behind the player. Same coverSrc
-  // shape as CenterStage so the extraction hits the controller's cached proxy.
+  // Same coverSrc shape as CenterStage so the extraction hits the controller's
+  // cached proxy.
   const coverSubsonicId = nowPlaying?.subsonic_id ?? null;
   const coverSrc = coverSubsonicId ? client.coverUrl(coverSubsonicId) : null;
   const coverColors = useCoverColors(coverSrc);
@@ -110,9 +107,8 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
-  // Mirror the tune-button feel from TransportBar: a short pulse on open,
-  // a lighter one on close, so every entry point (DotRail, shortcut, palette,
-  // swipe-dismiss) gets the same tactile confirmation.
+  // Haptics live here rather than at each call site so every entry point
+  // (DotRail, shortcut, palette, swipe-dismiss) feels the same.
   const prevDrawerRef = useRef<PlayerDrawer | null>(drawer);
   useEffect(() => {
     const prev = prevDrawerRef.current;
@@ -132,10 +128,9 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
     } catch {}
   }, []);
 
-  // Ticker that increments only on keyboard-driven volume adjusts. The
-  // TransportBar watches it to pulse the volume cells; knob drags don't
-  // tick it (the cells need to track the finger pixel-for-pixel during a
-  // drag — pulsing would fight that).
+  // Increments only on keyboard-driven adjusts; the TransportBar pulses its
+  // cells off it. Knob drags must NOT tick it — the cells track the finger
+  // pixel-for-pixel during a drag and a pulse would fight that.
   const [volumePulse, setVolumePulse] = useState(0);
   const adjustVolume = (delta: number) => {
     setVolume(v => Math.min(1, Math.max(0, Math.round((v + delta) * 100) / 100)));
@@ -162,9 +157,8 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
     { disabled: paletteOpen || shortcutsOpen },
   );
 
-  // Submit a request. The controller accepts in ~50ms and returns a request
-  // id; the actual matching runs in the booth. The drawer then polls
-  // pollRequest() for the outcome.
+  // The controller accepts in ~50ms and returns a request id; the matching
+  // runs in the booth, and the drawer polls pollRequest() for the outcome.
   const submitRequest = async (): Promise<RequestResult | null> => {
     if (!requestText.trim() || isSubmitting) return null;
     setIsSubmitting(true);

@@ -62,9 +62,8 @@ export default function MoodsPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // which card is saving
 
-  // The active tab is derived from the URL (?tab=…) so it stays a single source
-  // of truth: both the in-page SectionTabs and the sidebar's Moods submenu drive
-  // it through the router, and switching tabs while already on the page works.
+  // Active tab lives in the URL (?tab=…) so SectionTabs and the sidebar submenu
+  // share one source of truth.
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -120,9 +119,7 @@ export default function MoodsPanel() {
     void load();
   }, [hydrated, needsAuth, load]);
 
-  // Deep-link: /admin/moods?tab=moments opens that tab directly (mirrors
-  // /admin/imaging?tab=… and /admin/connect?tab=…). Routed through the Next
-  // router so a soft nav (in-page tab or sidebar submenu) re-derives `tab`.
+  // Routed through the Next router so a soft nav re-derives `tab`.
   const selectTab = useCallback(
     (id: string) => {
       const params = new URLSearchParams(Array.from(searchParams.entries()));
@@ -132,9 +129,8 @@ export default function MoodsPanel() {
     [router, pathname, searchParams],
   );
 
-  // POST one settings slice; on success adopt the sent value as the new
-  // baseline. The controller validates strictly and returns a clear message
-  // (e.g. an in-use mood removal), which we surface verbatim.
+  // POST one settings slice; on success the sent value becomes the new baseline.
+  // Controller validation messages (e.g. an in-use mood removal) surface verbatim.
   const saveSlice = async (
     card: string,
     patch: Record<string, unknown>,
@@ -206,12 +202,11 @@ export default function MoodsPanel() {
             Moods &amp; moments.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            The moods your station knows, and when it reaches for them — the words your library is
-            tagged with, and which mood each part of the day, the weather, and the calendar leans
-            into. Edit the list and every show, festival, and auto-DJ pick draws from it.
+            The words your library is tagged with, and which of them each part of the day, the
+            weather, and the calendar leans into. Edit the list and every show, festival, and
+            auto-DJ pick draws from it.
           </div>
         </div>
-        {/* Shared editorial section-tabs, edge-to-edge along the card's foot. */}
         <SectionTabs tabs={tabs} value={tab} onChange={selectTab} label="Moods sections" />
       </section>
 
@@ -219,25 +214,22 @@ export default function MoodsPanel() {
 
       {loading && tab !== 'festivals' && <SkeletonCards cards={6} />}
 
-      {/* --- Vocabulary --- */}
       {tab === 'vocab' && moods !== null && (
         <Card title="Mood vocabulary" sub="the moods every track is tagged with">
           <div className="field">
             <div className="field-hint">
               Give each mood a short id (letters, digits, dashes) and, if you like, a sound
               description we use for audio tagging (needs the heavy analyzer). Change a mood or its
-              description and we’ll re-score audio moods on the next analysis pass and mark the
-              older tags stale — re-run the tagger to refresh them. If a mood is still used by a
+              description and the older tags are marked stale; audio moods re-score on the next
+              analysis pass, so re-run the tagger to refresh them. If a mood is still used by a
               show, festival, or one of the maps in Moments, you’ll need to reassign it before you
               can remove it.
             </div>
             <ScrollArea className="max-h-[420px]">
               <div className="flex flex-col gap-2 pr-2">
                 {moods.map((m, idx) => (
-                  /* Mobile: id + bin on row one, the long sound description on
-                     row two (a 160px id beside a bin left ~110px for the
-                     description at 390px). From `sm:` the three sit on one
-                     line exactly as before. */
+                  /* Mobile: id + bin on row one, sound description on row two —
+                     a 160px id beside a bin leaves ~110px at 390px. */
                   <div
                     key={idx}
                     className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[160px_minmax(0,1fr)_auto]"
@@ -293,14 +285,13 @@ export default function MoodsPanel() {
         </Card>
       )}
 
-      {/* --- Moments: time-of-day + weather --- */}
       {tab === 'moments' && moods !== null && (
         <>
           <Card title="Time of day → mood" sub="the mood your station leans into through the day">
             <div className="grid gap-2">
               {PERIODS.map(p => (
                 /* `flex-wrap` lets the select drop under the label at 390px
-                   rather than being squeezed to a few clipped characters. */
+                   rather than being clipped. */
                 <div key={p.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
                   <div className="min-w-0">
                     <span className="text-[13px] font-bold">{p.label}</span>
@@ -360,10 +351,8 @@ export default function MoodsPanel() {
         </>
       )}
 
-      {/* --- Festivals (self-contained, composed as-is) --- */}
       {tab === 'festivals' && <FestivalsSection />}
 
-      {/* --- Speech corrections (relocated from the TTS tab) --- */}
       {tab === 'speech' && moods !== null && (
         <Card title="Speech corrections" sub="how names and tricky words should sound">
           <div className="field">
@@ -377,12 +366,10 @@ export default function MoodsPanel() {
             <ScrollArea className="max-h-[360px]">
               <div className="flex flex-col gap-2 pr-2">
                 {corrections.map((c, idx) => (
-                  /* Mobile: "on air" + bin on row one, "reads as" + the spoken
-                     form on row two — two 220/260px inputs plus a label never
-                     fit the 320px a card body leaves at 390px. `sm:` puts the
-                     four back on one left-aligned line (`justify-start` is what
-                     keeps the auto tracks at content width, as the flex row
-                     was). */
+                  /* Mobile: "on air" + bin on row one, "reads as" + spoken form on
+                     row two — 220/260px inputs plus a label never fit the 320px a
+                     card body leaves at 390px. `sm:justify-start` keeps the auto
+                     tracks at content width. */
                   <div
                     key={idx}
                     className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[220px_auto_260px_auto] sm:justify-start"

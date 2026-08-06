@@ -6,6 +6,7 @@
 // Part of the settings/ split — see ../settings.ts for the public barrel.
 
 import { randomBytes } from 'node:crypto';
+import { DISCOVERY_STEPS_MIN, DISCOVERY_STEPS_MAX } from '../llm/internal/provider/capabilities.js';
 
 // Default DJ system-prompt template. Placeholders are substituted at LLM
 // call time via renderDjPrompt(). Keep {name} mandatory — update() refuses
@@ -281,7 +282,7 @@ export function clampNumCtx(raw: unknown, def: number): number {
 // Non-numeric/NaN falls back to `def`. See appliedRepeatPenalty() in
 // capabilities.ts — Ollama ignores this field (ai-sdk-ollama v4 has no
 // per-call repeat_penalty channel at all; restoration is a tracked follow-up).
-function clampRepeatPenalty(raw: unknown, def: number): number {
+export function clampRepeatPenalty(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(2.0, Math.max(1.0, raw));
 }
@@ -325,14 +326,38 @@ export function clampMaxOutputTokens(raw: unknown, def: number): number {
   return Math.min(MAX_OUTPUT_TOKENS_MAX, Math.max(MAX_OUTPUT_TOKENS_MIN, n));
 }
 
+// Operator override for the DJ agent's discovery-round budget. 0 is a
+// first-class value meaning "off — follow the provider capability table", so it
+// passes through unclamped; any other value is floored into the harness's own
+// band. Non-numeric/NaN falls back to `def`. Same 0-means-auto shape as
+// clampMaxOutputTokens above.
+//
+// The band is imported from the harness rather than restated here: it is a
+// property of the tool loop (a 0 budget corners the model at step 0 with an
+// empty candidate set; an unbounded one eats the shared deadline the recovery
+// legs need), and a second copy of the numbers would be free to drift from the
+// clamp discoveryStepsFor() applies. This is the one place settings reaches past
+// an `llm/` barrel: capabilities.ts imports nothing, while the llm/provider.js
+// barrel pulls in registry.ts, which imports settings — a cycle.
+export function clampDiscoverySteps(raw: unknown, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  const n = Math.floor(raw);
+  if (n <= 0) return 0;
+  return Math.min(DISCOVERY_STEPS_MAX, Math.max(DISCOVERY_STEPS_MIN, n));
+}
+
 // Count-based hard no-repeat window (distinct plays). Floored to an integer in
-// [0, 290]: 0 disables; the 290 ceiling stays under the 300-entry _recentPlays
-// cap so the requested window is never silently truncated by a too-short
-// sidecar. Library-size clamping happens separately at use time
-// (effectiveNoRepeatWindow). Non-numeric/NaN falls back to `def`.
+// [0, 1000]: 0 disables. The ceiling stays under the _recentPlays sidecar cap
+// (config.queue.recentPlaysMax) so the requested window is never silently
+// truncated by a too-short sidecar — 1000 against a 2500-entry cap. It was 290
+// against a 300-entry cap, which is under a day of airtime even maxed out and
+// far too short a memory for a 10k–50k library; the sidecar was sized up with
+// the ceiling, so it stays honestly suppliable. Library-size clamping happens
+// separately at use time (effectiveNoRepeatWindow). Non-numeric/NaN falls back
+// to `def`.
 export function clampNoRepeatWindow(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
-  return Math.min(290, Math.max(0, Math.floor(raw)));
+  return Math.min(1000, Math.max(0, Math.floor(raw)));
 }
 
 // Validate + apply the connection fields shared by the primary LLM leg and its
@@ -410,6 +435,10 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   }
   if (l.repeatPenalty !== undefined) {
     target.repeatPenalty = clampRepeatPenalty(Number(l.repeatPenalty), target.repeatPenalty as number);
+  }
+  // Discovery-round budget. 0 = follow the provider capability table.
+  if (l.discoverySteps !== undefined) {
+    target.discoverySteps = clampDiscoverySteps(Number(l.discoverySteps), target.discoverySteps as number);
   }
   // Forced-tool tool_choice: 'required' (default) or 'auto'. Only those two are
   // legal; anything else is a config error. See forcedToolChoice() / issue #570.
@@ -519,7 +548,7 @@ export function normalizeLlmProviderBaseUrls(
 // any self-hosted OpenAI-compatible speech server (Chatterbox, Qwen3 TTS,
 // VibeVoice, etc.) via the operator-supplied `tts.cloud.baseUrl` — mirrors the
 // LLM provider of the same name.
-export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs', 'openai-compatible'];
+export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs', 'fish-audio', 'openai-compatible'];
 
 // Web-search backends for the segment director's `web-search` capability.
 // `duckduckgo` is the homelab default — DuckDuckGo's Instant Answer API is free
@@ -647,6 +676,12 @@ export function normalizeMoodMap(
 // Energy bands a show can pin as a soft music-steering filter. Mirrors the
 // tagger's per-track energy classes and the `tracksByMood` agent-tool filter.
 export const SHOW_ENERGY = ['low', 'medium', 'high'];
+
+// Vocal steering a show can pin. Unlike the list filters above this is ONE
+// value, because the three states are mutually exclusive and "both" is just no
+// constraint — which is what '' means, and what every show that predates the
+// field carries. Backed by Demucs vocal ranges (music/show-filter.trackInstrumental).
+export const SHOW_VOCALS = ['instrumental', 'vocal'];
 
 // Default festival calendar — the seeded set the admin UI shows on first boot.
 // After the operator edits the list, persisted festivals replace these.
@@ -777,6 +812,14 @@ export const PERSONA_LIMIT = 48;
 // llm/internal/core/pure.ts.
 export const SOUL_MAX = 2000;
 export const SHOWS_LIMIT = 64;
+// Show `topic` — the standing brief the DJ works from while the show is on air.
+// Injected into the pick prompts (picker.ts / dj-agent schemas) and the
+// programme producer plan, so like SOUL_MAX it is a recurring per-call token
+// cost rather than a structural limit. Matched to SOUL_MAX so a show brief can
+// carry the same amount of detail as a persona sketch. Keep in lockstep with
+// TOPIC_MAX in web/components/admin/shows/types.ts and the AI-fill draft schema
+// in llm/internal/prompts/generate.ts.
+export const SHOW_TOPIC_MAX = 2000;
 // Guest co-hosts per show. Small on purpose: each guest is a full persona the
 // speaker rotation can hand a segment to, and past ~3 the host stops sounding
 // like the host.
@@ -784,14 +827,28 @@ export const GUESTS_PER_SHOW = 3;
 export const PLAYLISTS_PER_SHOW = 10;
 export const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
 // Values per multi-select music filter (moods / genres / eras). Within one
-// attribute the values OR together at pick time; across attributes they AND —
-// so past a handful the filter stops meaning anything.
-export const SHOW_FILTER_VALUES_MAX = 6;
+// attribute the values OR together at pick time; across attributes they AND.
+// Raised 6 → 15: the AND-across argument for keeping it small never applied
+// WITHIN an attribute, and genre is where it bites — a strict alt/punk show
+// has to name every library tag it wants (Punk Rock, Emo, Pop Punk,
+// Post-Hardcore, Emo Pop, …) because matching only REFINES, never broadens
+// (see trackGenres/genreMatches in music/show-filter.ts), so 6 forced the
+// operator to either drop valid tags or retag the library.
+//
+// What made 6 load-bearing was cost, not meaning: every genre used to cost a
+// getGenres() round trip to resolve (music/subsonic.ts) plus two discovery
+// fetches per genre in each pool builder, all sequential. Both are bounded now
+// — getGenres is TTL-cached and the per-genre fetches run through mapPool — so
+// the wall-clock of a pick no longer scales with this number. The per-genre
+// size budgets already divide a FIXED total (randomSize / genreSetSize in
+// music/picker.ts + broadcast/scheduler.ts), so the pool doesn't grow either.
+// Keep in lockstep with FILTER_VALUES_MAX in
+// web/components/admin/shows/types.ts (pinned by scripts/show-filter-cap.test.ts).
+export const SHOW_FILTER_VALUES_MAX = 15;
 // Must comfortably exceed a realistic skill library: unticking one skill on an
 // "all skills" (null) persona materialises the FULL catalog minus one, so a cap
 // near the library size would make that first untick fail (#skill-organization).
 export const SKILLS_PER_PERSONA_LIMIT = 64;
-export const WEBHOOKS_LIMIT = 16;
 // Prompt-template library (djPrompts). Text bounds match the historical
 // single-djPrompt rule — keep them in lockstep with PROMPT_MIN/PROMPT_MAX in
 // web/components/admin/personas/constants.ts.
@@ -857,15 +914,15 @@ export function coercePlaylistIds(raw: unknown): string[] {
 // non-adjacent decades ("90s + 2010s") — inexpressible as a single range.
 export type EraWindow = { fromYear: number | null; toYear: number | null };
 
-// One outbound-webhook entry (settings.webhooks). Shared by the DEFAULTS seed,
-// the lenient load-time normalizer, and the strict update() validator.
-export interface Webhook {
-  id: string;
-  url: string;
-  events: string[];
-  enabled: boolean;
-  authHeader: string;
-}
+// Webhook shape + event list now live in the shared schema, which the web form
+// runs too (controller/src/schemas/webhook.ts). Re-exported here so the many
+// existing importers of `Webhook` / `WEBHOOK_EVENTS` from vocab keep working.
+export {
+  WEBHOOK_EVENTS,
+  WEBHOOKS_LIMIT,
+  type Webhook,
+  type WebhookEvent,
+} from '../schemas/webhook.js';
 
 // One saved DJ prompt-template library entry (settings.djPrompts).
 export interface DjPromptEntry {
@@ -891,6 +948,8 @@ export interface NormalizedShow {
   genres: string[];
   eras: EraWindow[];
   energies: string[];
+  /** '' = no constraint. See SHOW_VOCALS. */
+  vocals: string;
   filtersStrict: boolean;
   maxTrackSeconds: number | null;
   playlistIds: string[];
@@ -965,6 +1024,14 @@ export function coerceShowEnergies(item: unknown): string[] {
     (v) => v);
 }
 
+// Anything unrecognised — absent, null, 'any', a typo — reads as no constraint.
+// A show whose vocal steering silently stops applying is a much smaller failure
+// than one that stops playing music.
+export function coerceShowVocals(item: unknown): string {
+  const v = (item as { vocals?: unknown } | null | undefined)?.vocals;
+  return typeof v === 'string' && SHOW_VOCALS.includes(v) ? v : '';
+}
+
 export function coerceShowEras(item: unknown): EraWindow[] {
   // Legacy singular is a pair of top-level keys, not one value — synthesize
   // the window before handing off to the shared list coercer.
@@ -993,16 +1060,6 @@ export function coerceExcludedPlaylistIds(raw: unknown): string[] {
   }
   return out;
 }
-
-// Event names the outbound webhook fan-out can subscribe to. Kept in sync
-// with broadcast/webhooks.ts WEBHOOK_EVENTS — duplicated here so settings.ts
-// has no runtime dependency on the broadcast module.
-export const WEBHOOK_EVENTS = [
-  'track.play',
-  'dj.say',
-  'dj.link',
-  'request.received',
-];
 
 export function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0;

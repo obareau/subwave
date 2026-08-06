@@ -41,7 +41,7 @@ import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt } from '../core/pure.js';
 import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage } from '../core/pure.js';
-import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice } from '../provider/capabilities.js';
+import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice, runDiscoverySteps } from '../provider/capabilities.js';
 import type { Leg } from '../provider/legs.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { agentPlan } from './plan.js';
@@ -85,6 +85,13 @@ interface DjAgentOptions {
   kind?: string;
   timeoutMs?: number;
   validate?: (object: unknown) => boolean;
+  // Follow the leg's per-provider discovery budget (descriptor + operator
+  // override) instead of the pinned single historical step. Opt-in per agent,
+  // OFF by default: a caller's step cap can be load-bearing — the segment
+  // director's `maxSteps: 2` (skills/_agent.ts) documents a run burning the
+  // FULL agentTimeoutMs when its loop silently widened — so only the agents
+  // the widening was designed for (pick/request) ask for it.
+  providerDiscoveryBudget?: boolean;
 }
 
 // Operator-overridable via settings.llm.maxOutputTokens (issue #712); 0 keeps
@@ -103,16 +110,29 @@ const MAX_TOKENS_AGENT = 8000;
 const TOOL_TIMEOUT_MS = 10_000;
 
 // prepareStep pins activeTools so EVERY step is a cornered single-purpose
-// request — step 0 = discovery only, step >= COMMIT_AFTER_STEPS = `done` only.
-// Both restrict activeTools at the request level, the only lever cloud Ollama
-// models actually honour (they ignore a plain `toolChoice:'required'` when
-// several tools are visible and just emit prose — ending the loop with no `done`
-// call). COMMIT_AFTER_STEPS = 1 leaves NO free middle step, so that failure
-// window is closed: the model gets exactly one discovery call, then must emit
-// `done`. One targeted, session-aware discovery call still yields ~8 candidates.
-// Raising this re-opens the middle-step failure window on cloud Ollama; don't,
-// unless the provider honours `toolChoice`.
-const COMMIT_AFTER_STEPS = 1;
+// request — steps below the commit point = discovery only, at or past it =
+// `done` only. Both restrict activeTools at the request level, the only lever
+// cloud Ollama models actually honour (they ignore a plain
+// `toolChoice:'required'` when several tools are visible and just emit prose —
+// ending the loop with no `done` call).
+//
+// The commit point is `runDiscoverySteps(leg.cfg, providerDiscoveryBudget)` — a
+// PER-PROVIDER budget for the agents that OPT IN (the pick/request agents pass
+// providerDiscoveryBudget: true), the historical single step for every other
+// caller. On every forced-tool provider (ollama, openai-compatible, locca) even
+// the opted-in budget still resolves to 1, leaving NO free middle step, so that
+// failure window stays closed exactly as before: one discovery call, then
+// `done`. Providers that honour `toolChoice` and reason across tool results get
+// a wider budget, because the one-call ceiling was never their constraint — it
+// was the weakest provider's, applied to everyone. Do NOT re-widen the
+// forced-tool providers here; the descriptor in provider/capabilities.ts is the
+// one place that decision lives.
+//
+// The step cap that goes with it is DERIVED (gatedMaxStepsFor = budget + 1), so
+// however tall the discovery budget gets, the run still makes exactly ONE forced
+// `done` attempt before falling to the recovery cascade below. That invariant is
+// load-bearing: per dj-agent/agents.ts, extra `done` steps on a polluted trail
+// make GLM-class compliance worse, not better — recovery is what rescues those.
 
 function buildDoneTool(schema: z.ZodTypeAny) {
   return tool({
@@ -121,22 +141,23 @@ function buildDoneTool(schema: z.ZodTypeAny) {
   });
 }
 
-// Step 0 forces a discovery tool — never `done` — so the model can't commit a
-// hallucinated id before seeing any library results. Step >= COMMIT_AFTER_STEPS
-// forces `done`: with only `done` active the model cannot keep exploring and
-// must emit its final answer, guaranteeing a `done` call before the step cap.
-// `toolChoice` is the leg's forced value ('required', or 'auto' when the operator
-// downgrades it for a crash-prone server — issue #570); the activeTools pinning
-// holds either way, so on 'auto' the single visible tool is still the strong nudge.
-function gatedDiscoveryPrepareStep(discoveryToolNames: string[], toolChoice: 'required' | 'auto') {
+// Steps below `commitAfter` force a discovery tool — never `done` — so the model
+// can't commit a hallucinated id before seeing any library results. Step >=
+// `commitAfter` forces `done`: with only `done` active the model cannot keep
+// exploring and must emit its final answer, guaranteeing a `done` call before the
+// step cap. `toolChoice` is the leg's forced value ('required', or 'auto' when
+// the operator downgrades it for a crash-prone server — issue #570); the
+// activeTools pinning holds either way, so on 'auto' the single visible tool is
+// still the strong nudge.
+//
+// At commitAfter = 1 (every forced-tool provider) this is byte-for-byte the
+// previous two-branch function: step 0 discovers, every later step commits.
+function gatedDiscoveryPrepareStep(discoveryToolNames: string[], toolChoice: 'required' | 'auto', commitAfter: number) {
   return async ({ stepNumber }: { stepNumber: number }) => {
-    if (stepNumber === 0) {
-      return { activeTools: discoveryToolNames, toolChoice };
-    }
-    if (stepNumber >= COMMIT_AFTER_STEPS) {
+    if (stepNumber >= commitAfter) {
       return { activeTools: ['done'], toolChoice };
     }
-    return {};
+    return { activeTools: discoveryToolNames, toolChoice };
   };
 }
 
@@ -216,6 +237,7 @@ export async function djAgent({
   maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_AGENT),
   kind = 'sdk.djAgent',
   timeoutMs,
+  providerDiscoveryBudget = false,
   // Optional caller-supplied acceptance check on the native path's object
   // (e.g. "the picked id must be one a discovery tool actually surfaced").
   // The native path is the only branch with no structural control over WHAT
@@ -235,6 +257,15 @@ export async function djAgent({
     async (leg: Leg) => {
       const toolCount = tools ? Object.keys(tools).length : 0;
       const plan = agentPlan(leg.cfg, schema, toolCount);
+      // Loop shape for this run (see gatedDiscoveryPrepareStep's note). The
+      // opt-in is the CALLER's (providerDiscoveryBudget — only the pick/request
+      // agents follow the per-provider budget); the budget itself is read off
+      // the LEG, so a failover to a backup on a different provider re-resolves
+      // it for the leg actually running. The cap is gatedMaxStepsFor's
+      // derivation (budget + 1) applied to the budget in force: exactly ONE
+      // forced-`done` attempt at any budget.
+      const discoverySteps = runDiscoverySteps(leg.cfg, providerDiscoveryBudget);
+      const gatedMaxSteps = discoverySteps + 1;
       // Default to the agent path; branches override before their await. A
       // failure record always attributes to the path actually attempted.
       let lastVia = 'ai-sdk:agent';
@@ -291,7 +322,12 @@ export async function djAgent({
               model: leg.noThinkModel ?? leg.model,
               instructions: system,
               tools,
-              stopWhen: [isStepCount(maxSteps)],
+              // The native leg has no `done` tool to force — it explores under
+              // auto tool_choice and emits via Output.object — so its cap is
+              // just "every discovery step, plus one to emit". Taking the max
+              // with the caller's value keeps a caller that deliberately asked
+              // for a taller loop from being shrunk by a narrow descriptor.
+              stopWhen: [isStepCount(Math.max(maxSteps, gatedMaxSteps))],
               temperature,
               maxOutputTokens,
               timeout: { toolMs: TOOL_TIMEOUT_MS },
@@ -347,7 +383,14 @@ export async function djAgent({
 
         const discoveryToolNames = tools ? Object.keys(tools) : [];
         const useGatedDiscovery = useDoneTool && discoveryToolNames.length > 0;
-        const prepareStep = useGatedDiscovery ? gatedDiscoveryPrepareStep(discoveryToolNames, forcedChoice) : undefined;
+        const prepareStep = useGatedDiscovery ? gatedDiscoveryPrepareStep(discoveryToolNames, forcedChoice, discoverySteps) : undefined;
+        // On a gated run the cap is DERIVED, not the caller's: it has to be
+        // exactly `discoverySteps + 1` or the two disagree — a caller cap below
+        // it ends the loop before the forced `done` step ever runs (no commit,
+        // straight to recovery), and one above it hands the model extra `done`
+        // steps to decline in. Ungated runs (free text, schema-without-tools)
+        // keep the caller's value untouched.
+        const effectiveMaxSteps = useGatedDiscovery ? gatedMaxSteps : maxSteps;
 
         const agent = new ToolLoopAgent({
           // useDoneTool legs force tool calls → no-think model; the schema-only
@@ -358,7 +401,7 @@ export async function djAgent({
           // The no-execute `done` tool already terminates the loop when called;
           // hasToolCall('done') is belt-and-suspenders, and inert on the native
           // path where no `done` tool exists.
-          stopWhen: [isStepCount(maxSteps), hasToolCall('done')],
+          stopWhen: [isStepCount(effectiveMaxSteps), hasToolCall('done')],
           temperature,
           maxOutputTokens,
           timeout: { toolMs: TOOL_TIMEOUT_MS },

@@ -75,7 +75,7 @@ async function main() {
   });
 
   // Regression: the in-memory memo cache must key on recency, otherwise
-  // segment-tools (recency: 'week') and picker-tools (no recency) would
+  // segment-tools (recency: 'week') and the picker tools (no recency) would
   // share a cache slot and the second caller would get the wrong window.
   await test('cache key format includes recency', () => {
     // We don't reach into the private cache map. Instead we assert that

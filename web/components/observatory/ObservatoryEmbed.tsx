@@ -2,12 +2,9 @@
 
 import dynamic from 'next/dynamic';
 
-// Client boundary so the interactive, client-only constellation
-// (requestAnimationFrame, window, pointer gestures) can be loaded with
-// ssr:false from the otherwise-server DJ section. All the weight sits behind
-// this lazy boundary, keeping the landing page's initial payload light. Lives
-// under components/observatory alongside the showcase it loads (and shares the
-// obs-* lint exemption).
+// Client boundary so the constellation (requestAnimationFrame, window, pointer
+// gestures) can be loaded with ssr:false from the otherwise-server DJ section.
+// The weight sits behind this lazy boundary, keeping the landing page light.
 const ObservatoryShowcase = dynamic(() => import('./ObservatoryShowcase'), {
   ssr: false,
   loading: () => (

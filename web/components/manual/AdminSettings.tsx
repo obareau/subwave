@@ -67,7 +67,14 @@ export default function AdminSettings() {
             <strong>Playlist Builder</strong>, where you generate a set from a vibe prompt
             and tuning, then save it for the DJ and shows to draw on, and the{' '}
             <Link href="/manual/observatory" className="bs-link">Library Observatory</Link>,
-            a visual map of everything the station has heard.
+            a visual map of everything the station has heard. The <strong>Blocked</strong>{' '}
+            tab is the never-play list: block one exact track, album or artist from any
+            row, or write a <strong>blocking rule</strong> — everything carrying a tag or
+            genre, everything in a playlist — optionally with a seasonal window (Christmas
+            songs only air Dec 1–26) or scoped to certain shows. Rules match any tag the
+            station ingests (genre tags, moods, audio moods, Last.fm tags); a custom label
+            like a country works as soon as you write it into the genre or mood field of
+            your files. Both kinds are absolute: refused everywhere, requests included.
           </li>
           <li>
             <strong>Shows</strong> — a show is a reusable definition: a name, a topic, a

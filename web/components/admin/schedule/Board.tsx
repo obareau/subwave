@@ -1,24 +1,14 @@
 'use client';
 
-// The board — a kanban-style 7-column × 24-hour view of the week, all seven
-// days always open. Shows are cards whose height equals their duration; silent
-// runs are hatched slots. Direct manipulation everywhere: click a silent slot
-// (or drop a shelf chip on it) to book a show over those hours, click a card to
-// load its order into the Write-an-order line, drag a card's top or bottom edge
-// to move that boundary an hour at a time, click a card's × to take the run
-// off the air. Every write is a local edit — Save the week persists.
+// The board — a kanban 7-column × 24-hour view of the week. Cards are shows,
+// hatched slots are silent runs; every write is local until Save the week.
 //
-// Two geometry rules earn their keep (#1204):
-//
-//  * The seven columns divide whatever width the board is given from `sm` up
-//    (`sm:w-full` + `sm:min-w-0`) instead of holding a 188px floor. At that
-//    floor the board's intrinsic width was 1428px against ~1072px of admin
-//    content on a 1280 laptop, so a quarter of the week sat off-screen and the
-//    hour gutter — which had been released from `sticky` at `sm` on the
-//    assumption the board fits there — scrolled away with it, leaving an
-//    unlabelled field of hatched rectangles. Columns that shrink mean no
-//    horizontal scroll at all on a laptop, and the gutter now stays pinned at
-//    every width for the narrow windows where scroll survives.
+// Two geometry rules (#1204):
+//  * The columns divide the board's width from `sm` up (`sm:w-full` +
+//    `sm:min-w-0`) instead of holding a 188px floor: at that floor the board was
+//    1428px wide against ~1072px of admin content, so a quarter of the week sat
+//    off-screen. The hour gutter stays `sticky` at every width, for the narrow
+//    windows where horizontal scroll survives.
 //  * The hour unit is a CSS variable (`--hour-px`) set from the density
 //    preference, so the gutter's static `h-[var(--hour-px)]` and each card's
 //    computed `calc()` height can never drift apart.
@@ -61,16 +51,14 @@ export interface BoardProps {
   hoursOf: (id: string) => number;
   onPick: (b: Block) => void;
   onRemove: (b: Block) => void;
-  /** A card's edge dragged (or arrow-keyed) to new boundaries — the run moves
-   *  to [start, end) and the hours it vacates fall silent. */
+  /** The run moves to [start, end); the hours it vacates fall silent. */
   onResize: (b: Block, start: number, end: number) => void;
   onDropShow: (b: Block, showId: string) => void;
-  /** The armed show — the shelf chip acting as a brush, or null. */
   armedShowId: string | null;
-  /** Arm/disarm a shelf chip (the same id twice disarms). */
+  /** The same id twice disarms. */
   onArmShow: (id: string) => void;
-  /** Bulk writes behind a day header / an hour in the gutter. Only reachable
-   *  with a show armed; both toggle off when the target already runs it. */
+  /** Only reachable with a show armed; both toggle off when the target already
+   *  runs it. */
   onFillDay: (day: number) => void;
   onFillHour: (hour: number) => void;
   density: BoardDensity;
@@ -91,11 +79,9 @@ export default function Board({
   return (
     <section>
       <div className="mb-3 flex flex-wrap items-center gap-x-3.5 gap-y-2 px-5 sm:px-[30px]">
-        {/* Two lengths, not one truncated line. The long copy runs to three
-            wrapped rows of mono on a phone, and half of what it describes is
-            mouse-only: HTML5 drag-and-drop does not fire from a touch, and the
-            7px card edges are a poor target for a fingertip. The short copy
-            names the gestures a phone can actually perform. */}
+        {/* Two lengths: half of what the long copy describes is mouse-only —
+            HTML5 drag-and-drop does not fire from a touch, and the 7px card edges
+            are a poor target for a fingertip. */}
         <Mu className="min-w-0 flex-1 tracking-[0.08em] sm:hidden">
           {armedName
             ? `${armedName} is armed — tap an hour to book it, or a day header for the whole day`
@@ -107,18 +93,13 @@ export default function Board({
             : 'Click a silent hour (or drag a show onto it) to book a show — click a card to edit its order, drag its top or bottom edge to change the hours, its × to take it off the air'}
         </Mu>
         <span className="ml-auto flex flex-none items-center gap-2">
-          {/* The label stays: two row icons on their own in the corner of a
-              toolbar could as easily be a view switch as a density one, and
-              this control is the only thing here that isn't self-evident. */}
           <Mu className="hidden text-[8.5px] sm:inline">Rows</Mu>
           <Seg
             value={density}
             onChange={v => onDensity(v === 'compact' ? 'compact' : 'comfortable')}
             options={[
-              // Icon-only, the RosterViewToggle recipe: the glyph carries the
-              // meaning (fewer, taller rows vs more, shorter ones), an sr-only
-              // span carries the name, and `title` carries the explanation.
-              // min-h gives the tab a real tap target on a phone.
+              // Icon-only: an sr-only span carries the name and `title` the
+              // explanation. min-h gives the tab a real tap target on a phone.
               {
                 id: 'comfortable',
                 title: 'Roomy rows — the full hour range on every card',
@@ -144,12 +125,9 @@ export default function Board({
         </span>
       </div>
 
-      {/* The shelf — one draggable chip per show, wrapping to as many rows as
-          the roster needs. It used to be a single scrolling tray, but a
-          sideways slider hides most of the roster past the clipped edge —
-          every chip has to be on screen to be dragged or armed. A chip is
-          also a brush: click to arm it, then fill hours, days or a whole
-          hour-of-the-week from the board without returning here. */}
+      {/* The shelf wraps rather than scrolling sideways: every chip has to be on
+          screen to be dragged or armed. A chip is also a brush — click to arm it,
+          then fill hours or days from the board without returning here. */}
       <div className="mx-5 mb-3.5 border border-ink bg-[var(--page-bg)] sm:mx-[30px]">
         <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
           <span className="eyebrow mr-1 flex-none text-ink">The shelf</span>
@@ -196,9 +174,7 @@ export default function Board({
       </div>
 
       {/* On a phone the week is a horizontal strip and Radix only reveals its
-          scrollbar on hover, so name the gesture — and the span — outright.
-          From sm up the columns divide the available width, so there is
-          nothing to swipe. */}
+          scrollbar on hover, so name the gesture outright. */}
       <Mu className="mb-1.5 flex items-center gap-1.5 px-5 tracking-[0.08em] sm:hidden">
         <span aria-hidden="true">◂</span>
         Swipe the board — Mon through Sun
@@ -208,15 +184,13 @@ export default function Board({
       <ScrollArea>
         <div ref={gridRef} className="flex w-max min-w-full items-start gap-2.5 pb-1.5 sm:w-full">
           {/* Hour gutter — pt clears the 38px column headers (+border+padding).
-              Pinned at every width: on a phone the week is a scrolling strip,
-              and in a narrow desktop window the columns bottom out and the
-              board scrolls too. Either way the hour a card sits on has to stay
-              readable, which is exactly what releasing this at `sm` broke. */}
+              Pinned at every width: wherever the board scrolls sideways, the hour
+              a card sits on has to stay readable. */}
           <div className="sticky left-0 z-10 w-[42px] flex-none bg-[var(--card-bg)] pt-[43px]">
             {HOURS.map(h => (
-              // aria-disabled, not disabled: Firefox drops the tooltip (and
-              // focus) on a disabled control, and the title is the only
-              // in-place explanation of what arming a show unlocks here.
+              // aria-disabled, not disabled: Firefox drops the tooltip (and focus)
+              // on a disabled control, and the title is the only in-place
+              // explanation of what arming a show unlocks here.
               <button
                 key={h}
                 type="button"
@@ -302,19 +276,14 @@ function DayColumn({
   const showById = (id: string | null) => shows.find(s => s.id === id) ?? null;
   const booked = blocks.reduce((a, b) => a + (b.showId ? b.span : 0), 0);
   return (
-    // A phone still gets a fixed-width scrolling strip narrow enough that the
-    // next day peeks past the right edge; from sm up `min-w-0` lets the seven
-    // columns divide the board's width instead of forcing it past the screen.
+    // A phone gets a fixed-width scrolling strip narrow enough that the next day
+    // peeks past the right edge; from sm up `min-w-0` lets the seven columns
+    // divide the board's width instead of forcing it past the screen.
     <div className="flex min-w-[164px] flex-1 flex-col border border-ink bg-[var(--page-bg)] sm:min-w-0">
-      {/* The header carries two gestures. Its body folds the column — what it
-          has always done, and the reason the day names read as handles — until
-          a brush is armed, when it fills the whole day instead (the bulk write
-          the paint-brush grid had). Same armed/unarmed split the silent slots
-          make, and the hint line above the shelf names the armed one.
-          The chevron is the constant: it folds in either mode, so an armed
-          brush never leaves the column without a collapse control at the top.
-          Fold also stays in the footer — this column is 24 hours tall, and
-          scrolling ~800px back up to close it is its own annoyance. */}
+      {/* The header body folds the column, or fills the whole day while a brush
+          is armed. The chevron folds in either mode, so an armed brush never
+          leaves the column without a collapse control at the top; the footer keeps
+          a Fold too, since the column is 24 hours tall. */}
       <div className="flex h-[38px] items-stretch border-b border-solid border-b-ink">
         <button
           type="button"
@@ -373,8 +342,7 @@ function DayColumn({
       </div>
       <div className="flex items-center gap-2 border-t border-separator-strong px-2.5 py-2">
         <Mu className="text-[8px]">{booked} h booked</Mu>
-        {/* min-h-9 on a phone: fold used to be the 38px header, and an 8px
-            text label alone is no tap target. */}
+        {/* min-h-9 on a phone: an 8px text label alone is no tap target. */}
         <button
           type="button"
           onClick={onToggleFold}
@@ -388,7 +356,6 @@ function DayColumn({
   );
 }
 
-// A folded day — a slim vertical rail; click to reopen the column.
 function FoldedRail({
   label, name, count, onClick,
 }: {
@@ -415,23 +382,16 @@ function FoldedRail({
 }
 
 // One scheduled run as a card — height encodes duration (one `--hour-px` unit
-// per hour). Clicking the card loads its order into the Write-an-order line;
-// the × in the corner takes the run off the air (a local edit either way).
+// per hour). A one-hour card has ~24px of content box, which is not two lines of
+// type, so anything that short prints the name alone and leaves the hour range
+// to the tooltip.
 //
-// A one-hour card has ~24px of content box at the roomy unit and less when
-// compact, which is not two lines of type — it was slicing the show's name
-// through the middle. Anything that short prints the name alone and leaves the
-// hour range to the tooltip, which carried it all along.
-//
-// The two edges are resize handles: drag one to move that boundary an hour at
-// a time. The drag is a PURE PREVIEW — the grid is written once, on release.
-// Writing on every step would be the obvious thing and it does not work: the
-// cards are re-derived from the grid by `dayBlocks` and keyed on `start`, so a
-// top-edge drag would remount the very handle holding the pointer capture and
-// the gesture would die on its first hour. Instead the card draws itself at
-// the drafted size and pulls the difference back out of its own margins, so
-// the run appears to grow over its neighbours without the column reflowing
-// under the cursor.
+// An edge drag is a PURE PREVIEW — the grid is written once, on release. Writing
+// on every step does not work: cards are re-derived by `dayBlocks` and keyed on
+// `start`, so a top-edge drag would remount the very handle holding the pointer
+// capture and the gesture would die on its first hour. Instead the card draws
+// itself at the drafted size and pulls the difference back out of its own
+// margins, so the column never reflows under the cursor.
 function BoardCard({
   block, name, color, density, hourPx, onPick, onRemove, onResize, onDropShow,
 }: {
@@ -457,7 +417,7 @@ function BoardCard({
 
   useDynamicStyle(ref, {
     height: `calc(var(--hour-px) * ${span} - 4px)`,
-    // Negative when the draft has grown past the real run — the card overlaps
+    // Negative when the draft has grown past the real run, so the card overlaps
     // its neighbours instead of displacing them.
     marginTop: draft ? `calc(var(--hour-px) * ${start - block.start})` : undefined,
     marginBottom: draft ? `calc(var(--hour-px) * ${blockEnd - end})` : undefined,
@@ -490,8 +450,8 @@ function BoardCard({
       drag.current = null;
       setDraft(null);
     },
-    // A cancelled pointer (a system gesture, the page scrolling away) abandons
-    // the draft rather than committing a size the operator never released on.
+    // A cancelled pointer abandons the draft rather than committing a size the
+    // operator never released on.
     onPointerCancel: () => { drag.current = null; setDraft(null); },
     onKeyDown: (e: KeyboardEvent) => {
       const step = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
@@ -519,8 +479,7 @@ function BoardCard({
         'group relative overflow-hidden text-[#f6f2ea]',
         'hover:outline-2 hover:-outline-offset-1 hover:outline-ink',
         over && 'outline-2 -outline-offset-1 outline-ink',
-        // Lifted while drafting so the overlap reads as the card on top of its
-        // neighbours rather than sunk behind them.
+        // Lifted while drafting so the overlap reads as on top of its neighbours.
         draft && 'z-20 outline-2 -outline-offset-1 outline-[var(--accent)]',
       )}
     >
@@ -542,8 +501,8 @@ function BoardCard({
           </span>
         )}
       </button>
-      {/* While drafting, the range is the only feedback that matters — print it
-          even on the short cards that normally leave it to the tooltip. */}
+      {/* While drafting, print the range even on the short cards that normally
+          leave it to the tooltip. */}
       {draft && !showRange && (
         <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-[rgba(0,0,0,0.45)] px-1 text-center font-mono text-[8.5px] tracking-[0.06em] whitespace-nowrap">
           {range}
@@ -576,11 +535,9 @@ function BoardCard({
 
 type ResizeEdge = 'top' | 'bottom';
 
-// The grab strip on a card's top or bottom edge. Kept to 7px so it still fits
-// either side of a one-hour card (22px of box at the compact unit) — the depth
-// comes from `touch-action: none`, which hands the whole gesture to the
-// pointer handlers instead of the page's scroll. Arrow keys drive the same
-// edge for anyone not dragging.
+// Kept to 7px so it still fits either side of a one-hour card (22px of box at the
+// compact unit); the depth comes from `touch-action: none`, which hands the whole
+// gesture to the pointer handlers instead of the page's scroll.
 function ResizeHandle({
   edge, label, dragging, ...rest
 }: {
@@ -596,8 +553,8 @@ function ResizeHandle({
       className={cn(
         'absolute inset-x-0 z-10 flex h-[7px] cursor-ns-resize touch-none items-center justify-center border-0 bg-transparent p-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
         edge === 'top' ? 'top-0' : 'bottom-0',
-        // A capture can carry the pointer off the card, which drops
-        // `group-hover` — the handle being dragged must not vanish under it.
+        // A capture can carry the pointer off the card, dropping `group-hover` —
+        // the handle being dragged must not vanish under it.
         dragging && 'opacity-100',
       )}
       {...rest}
@@ -607,10 +564,8 @@ function ResizeHandle({
   );
 }
 
-// One silent run as a hatched slot — a drop target, and a click target. With a
-// show armed on the shelf the click books it straight away; with nothing armed
-// it opens a picker of shows to book over those hours (the same write either
-// way, and the same write a drop performs).
+// One silent run as a hatched slot. With a show armed the click books it; with
+// nothing armed it opens a picker. Same write either way, and the same a drop makes.
 function DropSlot({
   block, shows, colorOf, armedShowId, armedName, onDropShow,
 }: {

@@ -10,16 +10,14 @@ import { getShowcaseStations } from '@/lib/stations';
 // restarting the web container with a different env value, no rebuild.
 export const dynamic = 'force-dynamic';
 
-// Per-request metadata for the root. The baseline (always emitted) pins the
-// canonical + og:url to the absolute origin — the Metadata API leaves absolute
-// strings untouched even though it drops metadataBase on this force-dynamic
-// route. Title/description/social otherwise inherit from the root layout.
+// Per-request metadata for the root. The baseline pins canonical + og:url to
+// the absolute origin, which the Metadata API leaves untouched even though it
+// drops metadataBase on this force-dynamic route.
 //
-// When the homepage is the player (not the landing broadsheet), we personalise
-// the share-card preview with the operator's station name + description read
-// live from the controller (issues #272, #1086). On landing mode, a station
-// with nothing operator-specific set, or any controller failure we fall through
-// to the generic SUB/WAVE branding so the preview never breaks.
+// In player mode the share-card preview is personalised from the controller's
+// station name + description (issues #272, #1086); landing mode, an unset
+// station or any controller failure falls through to generic SUB/WAVE branding
+// so the preview never breaks.
 export async function generateMetadata(): Promise<Metadata> {
   const base: Metadata = {
     alternates: { canonical: absoluteUrl('/') },
@@ -29,9 +27,9 @@ export async function generateMetadata(): Promise<Metadata> {
   const mode = (process.env.SUBWAVE_HOMEPAGE || 'player').toLowerCase();
   if (mode !== 'player') return base;
 
-  // allowPersonaTagline: issue #272 shipped tagline-personalised previews here,
-  // so keep them for installs that never set a station description. Setting one
-  // (admin → Station → Share description) takes precedence and stops the drift.
+  // allowPersonaTagline: issue #272 shipped tagline-personalised previews, so
+  // keep them for installs with no station description. Setting one (admin →
+  // Station → Share description) takes precedence.
   const meta = await fetchStationMeta({ allowPersonaTagline: true });
   if (!meta) return base;
   const { name, description } = meta;
@@ -54,8 +52,8 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-// Fixed app-shell layouts (both player and landing) — lock out pinch-zoom
-// so they behave like a native app on mobile. Merges with the root viewport.
+// Fixed app-shell layouts lock out pinch-zoom so they behave like a native app
+// on mobile. Merges with the root viewport.
 export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,

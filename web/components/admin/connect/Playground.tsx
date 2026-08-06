@@ -20,8 +20,7 @@ import {
 } from '../../ai-elements/stack-trace';
 import type { EndpointDoc } from './types';
 
-// Node/browser stack frames ("    at fn (file:1:2)") — the signal that an
-// error body is worth rendering as a parsed StackTrace instead of raw text.
+// Node/browser stack frames ("    at fn (file:1:2)")
 const STACK_FRAME_HINT = /\n\s+at\s/;
 
 interface Props {
@@ -36,9 +35,6 @@ interface Result {
   body: string;
 }
 
-// Response rendering, by shape: an error body carrying stack frames gets the
-// parsed StackTrace (collapsible frames, copy); JSON gets a highlighted
-// CodeBlock with copy; anything else (images, plain text) stays a raw <pre>.
 function ResultBody({ status, body }: { status: number; body: string }) {
   const failed = status === 0 || status >= 400;
   if (failed && STACK_FRAME_HINT.test(body)) {
@@ -74,7 +70,6 @@ function ResultBody({ status, body }: { status: number; body: string }) {
   return <pre className="term max-h-80 overflow-auto">{body}</pre>;
 }
 
-// Substitute :name path params into the path.
 function buildPath(path: string, pathParams: Record<string, string>, query: Record<string, string>): string {
   let out = path.replace(/:([A-Za-z0-9_]+)/g, (_, k) => encodeURIComponent(pathParams[k] || `:${k}`));
   const qs = Object.entries(query)
@@ -102,9 +97,7 @@ export default function Playground({ endpoint, apiBase, adminFetch }: Props) {
   const relPath = useMemo(() => buildPath(endpoint.path, pathParams, query), [endpoint.path, pathParams, query]);
   const hasBody = endpoint.method !== 'GET' && endpoint.method !== 'DELETE';
 
-  // Guard destructive/air-mutating calls behind an explicit confirm — this
-  // hits the LIVE broadcast, not a sandbox. The dialog's confirm calls
-  // doSend directly.
+  // Air-mutating calls hit the LIVE broadcast, not a sandbox: confirm first.
   const send = () => {
     if (endpoint.mutatesAir) {
       setConfirmOpen(true);
@@ -188,8 +181,7 @@ export default function Playground({ endpoint, apiBase, adminFetch }: Props) {
         </div>
       )}
 
-      {/* The request URL gets its own full-width line on a phone — sharing the
-          row with the Send button leaves it ~200px of scroll-only input. */}
+      {/* URL wraps to its own line on a phone; sharing the Send row leaves it ~200px. */}
       <div className="flex flex-wrap items-center gap-3">
         <Btn sm tone={endpoint.mutatesAir ? 'danger' : 'solid'} onClick={send} disabled={sending}>
           {sending ? 'Sending…' : `Send ${endpoint.method}`}

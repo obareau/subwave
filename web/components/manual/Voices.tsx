@@ -51,8 +51,8 @@ export default function Voices() {
             server, including a Chatterbox box on your own GPU (see below).
           </li>
           <li>
-            <strong>Remote</strong> is a TTS server you run yourself — a LAN box, a
-            Tailscale host, a spare GPU — that speaks a tiny Subwave-native HTTP
+            <strong>Remote</strong> is a TTS server you run yourself (a LAN box, a
+            Tailscale host, a spare GPU) that speaks a tiny Subwave-native HTTP
             contract. It's the clean way to self-host an engine like Qwen3-TTS, F5-TTS
             or CosyVoice without dressing it up as another provider (see below).
           </li>
@@ -114,7 +114,7 @@ docker compose up -d`}</CodeBlock>
           Both engines load when the sidecar starts, but each is a separate PyTorch
           model that costs memory and a first-boot weight download. If you only use one,
           name it in <code className="bs-code-inline">.env</code> and the other never
-          loads &mdash; comma-separated, defaulting to both:
+          loads. Comma-separated, defaulting to both:
         </p>
         <CodeBlock>{`TTS_HEAVY_ENGINES=pocket-tts       # PocketTTS only (no Chatterbox)
 # TTS_HEAVY_ENGINES=chatterbox     # Chatterbox only
@@ -138,7 +138,7 @@ docker compose up -d`}</CodeBlock>
         <h2>Your own TTS server.</h2>
         <p>
           The <strong>Remote</strong> engine points SUB/WAVE at a TTS server you run
-          yourself, anywhere the controller can reach over the network — a LAN box, a
+          yourself, anywhere the controller can reach over the network: a LAN box, a
           Tailscale host, a spare GPU machine. Unlike the OpenAI-compatible Cloud route
           (which speaks OpenAI&apos;s{' '}
           <code className="bs-code-inline">/v1/audio/speech</code>), Remote speaks a tiny
@@ -153,7 +153,7 @@ docker compose up -d`}</CodeBlock>
           <code className="bs-code-inline">127.0.0.1</code>). The console shows{' '}
           <strong>ready</strong> once the health check passes, and the station falls back
           to Piper whenever the URL is blank or the server is down. A persona&apos;s{' '}
-          <strong>Remote voice</strong> is free text forwarded straight to your server — a
+          <strong>Remote voice</strong> is free text forwarded straight to your server: a
           voice id, a reference-WAV filename, a VoiceDesign prompt, whatever it
           understands.
         </p>
@@ -166,13 +166,13 @@ docker compose up -d`}</CodeBlock>
             <code className="bs-code-inline">POST /speak</code> takes JSON{' '}
             <code className="bs-code-inline">{`{ "text": "…", "voice": "…" }`}</code> and
             returns the rendered audio (WAV) <em>in the response body</em>. The audio
-            travels over the wire, so no shared filesystem or volume is needed — that&apos;s
+            travels over the wire, so no shared filesystem or volume is needed. That&apos;s
             the difference from the bundled{' '}
             <code className="bs-code-inline">tts-heavy</code> sidecar, which hands back a
             path on a shared volume.
           </p>
         </div>
-        <p>That&apos;s the whole server — for example, in Flask:</p>
+        <p>That&apos;s the whole server. For example, in Flask:</p>
         <CodeBlock>{`@app.get("/health")
 def health():
     return {"ok": True}

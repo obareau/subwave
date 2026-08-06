@@ -1,19 +1,14 @@
-// Persisted listener volume (issue #783).
+// Persisted listener volume (issue #783). Mirrored into localStorage as a
+// clamped 0..1 float string; volume 0 is persisted verbatim.
 //
-// The player's volume lives as React state in usePlayer, defaulting to full.
-// Listeners expect their last-used level to survive a reload, so we mirror it
-// into localStorage on change and restore it at mount. Stored as a clamped
-// 0..1 float string; muting (volume 0) is persisted verbatim so "last used
-// volume" stays faithful.
-//
-// Reads/writes are effect-only (never during render) so there's no hydration
-// mismatch — the knob renders at the default on first paint, then snaps to the
-// stored value a tick later, same as the lite-mode toggle.
+// Reads/writes are effect-only, never during render, so there's no hydration
+// mismatch: the knob renders at the default on first paint and snaps to the
+// stored value a tick later.
 
 const STORAGE_KEY = 'subwave-volume';
 
-/** Read the stored volume (0..1), or null when nothing valid is stored so the
- *  caller can keep its own default. No-op / null on the server. */
+/** Null when nothing valid is stored, so the caller keeps its own default.
+ *  Null on the server. */
 export function loadVolumePref(): number | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -27,8 +22,7 @@ export function loadVolumePref(): number | null {
   }
 }
 
-/** Persist the volume (clamped 0..1). Failures (private mode, quota) are
- *  swallowed — playback is unaffected. */
+/** Clamped to 0..1. Storage failures are swallowed; playback is unaffected. */
 export function saveVolumePref(volume: number): void {
   if (typeof window === 'undefined') return;
   try {

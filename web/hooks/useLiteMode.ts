@@ -10,16 +10,14 @@ export interface LiteModeState {
   setLite: (on: boolean) => void;
 }
 
-/** Listener-facing low-power toggle. The `lite` class is already applied
- *  pre-paint by LITE_INIT_SCRIPT, so this hook only surfaces the current value
- *  to the UI and keeps the class + localStorage in sync when the listener
- *  flips it. */
+/** Listener-facing low-power toggle. LITE_INIT_SCRIPT already applies the `lite`
+ *  class pre-paint, so this only surfaces the value and keeps the class +
+ *  localStorage in sync when the listener flips it. */
 export function useLiteMode(): LiteModeState {
   const [lite, setLiteState] = useState(false);
 
-  // localStorage is only safe to read in an effect. The pre-paint script
-  // already set the class, so a one-tick lag before the toggle reflects the
-  // stored value is invisible (the menu starts closed).
+  // localStorage is only safe to read in an effect. The pre-paint script already
+  // set the class, so the one-tick lag here is invisible (the menu starts closed).
   useEffect(() => {
     setLiteState(loadLitePref() === true);
   }, []);

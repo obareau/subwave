@@ -1,14 +1,7 @@
 'use client';
 
-// Toggleable chip row for the multi-value music filters (#929). Selected chips
-// invert; unselected ones grey out once the cap is hit. Same visual language as
-// the library panel's energy pills.
-//
-// Part of the shows/ split - see ../ShowsPanel.tsx.
-
 import { cn } from '../../../lib/cn';
 import { FILTER_VALUES_MAX } from './types';
-
 
 // Toggleable chip row for the multi-select music filters (#929). Selected
 // chips invert; unselected ones grey out once the cap is hit. Same visual
@@ -32,8 +25,7 @@ export function ChipRow({ options, selected, onToggle, cap = FILTER_VALUES_MAX }
             disabled={atCap}
             onClick={() => onToggle(o.key)}
             className={cn(
-              // Comfortable to tap on a phone; the desktop chip keeps its
-              // original padding-driven height.
+              // Tappable on a phone; desktop keeps the padding-driven height.
               'min-h-9 border border-ink px-2 py-0.5 text-[12px] sm:min-h-0',
               on ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
               atCap && 'cursor-not-allowed opacity-40',

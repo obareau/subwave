@@ -1,5 +1,6 @@
 // Public surface for the picker's music-discovery tools. Implementation in
-// internal/tools/picker-tools.ts. Barrel so call sites keep importing from
-// `llm/tools.js` unchanged.
+// internal/tools/picker/ (one file per tool + the shared scope). Barrel so call
+// sites keep importing from `llm/tools.js` unchanged.
 
-export { buildPickerTools } from './internal/tools/picker-tools.js';
+export { buildPickerTools, pickerScope, PICKER_TOOLS } from './internal/tools/picker/index.js';
+export type { PickerScope, PickerContext, PickerToolModule } from './internal/tools/picker/index.js';

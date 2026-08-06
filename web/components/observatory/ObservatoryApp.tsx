@@ -1,9 +1,6 @@
-/* ============================================================================
-   SUB/WAVE — Library Observatory · app shell
-   Ported from the prototype's app.jsx. Full-bleed top bar + 3-column grid
-   (filter rail · constellation · stats/dossier), wired to the real library
-   via useObservatory()/useTrackDetail().
-   ============================================================================ */
+/* Library Observatory — app shell. Full-bleed top bar plus a 3-column grid
+   (filter rail, constellation, stats/dossier), wired to the real library via
+   useObservatory()/useTrackDetail(). */
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -21,8 +18,8 @@ import {
   type ObsTrack,
 } from './data';
 
-// The galaxy renderer pulls in three.js + the bloom pipeline — client-only and
-// heavy, so it's split out and never server-rendered.
+// three.js + the bloom pipeline are client-only and heavy, so the galaxy is
+// split out and never server-rendered.
 const ConstellationGalaxy = dynamic(() => import('./ConstellationGalaxy'), {
   ssr: false,
   loading: () => (
@@ -34,9 +31,8 @@ const ConstellationGalaxy = dynamic(() => import('./ConstellationGalaxy'), {
 
 type AdminFetch = (path: string, init?: RequestInit) => Promise<Response>;
 
-// Spinning vinyl disc mark, inline so it follows the theme via currentColor
-// (an <img> SVG can't read the page's light/dark tokens). Faithful to the
-// prototype's disc-mark-ink.svg: sunburst spokes + a vermilion hub.
+// Inline so it follows the theme via currentColor — an <img> SVG can't read
+// the page's light/dark tokens.
 function DiscMark() {
   const cx = 48;
   const cy = 48;
@@ -72,15 +68,13 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
   );
 }
 
-// Node-cap ladder offered in the MAP SIZE control, clamped to the server's
-// hardMax. The WebGL galaxy renderer draws the whole ladder comfortably —
-// stress-measured at 60 fps up to 500k (one-time geometry stall on load:
-// ~2 s at 200k, ~6 s at 500k).
+// Node-cap ladder for MAP SIZE, clamped to the server's hardMax. Measured at
+// 60 fps up to 500k, with a one-time geometry stall on load (~2s at 200k,
+// ~6s at 500k).
 const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 25000, 50000, 100000, 200000, 500000];
-// Display fallback for the MAP SIZE selector before the first load resolves.
-// The real default lives on the server (OBSERVATORY_MAX): with nothing stored
-// we fetch without ?max= and adopt the cap the response reports, so an
-// operator's env override actually reaches the UI.
+// Display fallback before the first load resolves. The real default lives on
+// the server (OBSERVATORY_MAX): with nothing stored we fetch without ?max= and
+// adopt the cap the response reports, so an env override reaches the UI.
 const DEFAULT_MAX = 25000;
 const MAX_STORAGE_KEY = 'subwave_obs_max';
 
@@ -95,17 +89,15 @@ const COLOR_MODES: [ColorBy, string][] = [
 ];
 const COLOR_IDS = new Set(COLOR_MODES.map(([k]) => k));
 
-// Genre chips shown before the +N MORE toggle expands the full list — a real
-// library can carry hundreds of genres, which otherwise wall off the rail.
+// A real library can carry hundreds of genres, which would wall off the rail.
 const GENRE_CHIP_CAP = 24;
 
-// A projection needs at least this many audio vectors to be worth offering —
-// mirrors MIN_VECTORS in the controller's map-projection.ts.
+// Mirrors MIN_VECTORS in the controller's map-projection.ts.
 const PROJECTION_MIN_VECTORS = 50;
 
 export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch }) {
-  // Persisted node cap (MAP SIZE control). Read once from localStorage; null
-  // means "follow the server default" — useObservatory then omits ?max=.
+  // Read once from localStorage; null means "follow the server default", and
+  // useObservatory then omits ?max=.
   const [maxNodes, setMaxNodes] = useState<number | null>(() => {
     if (typeof window === 'undefined') return null;
     const stored = Number(window.localStorage.getItem(MAX_STORAGE_KEY));
@@ -115,9 +107,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const { detail, loadingId, fetchDetail } = useTrackDetail(adminFetch);
 
   const [q, setQ] = useState('');
-  // Debounced copy of the search query — `matched` scans every node, so at
-  // large caps filtering on each keystroke makes typing lag. 150ms is under
-  // perception but coalesces a burst of keys into one scan.
+  // `matched` scans every node, so at large caps filtering per keystroke lags.
+  // 150ms is under perception but coalesces a burst of keys into one scan.
   const [qDebounced, setQDebounced] = useState('');
   useEffect(() => {
     if (q === '') {
@@ -127,8 +118,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     const id = setTimeout(() => setQDebounced(q), 150);
     return () => clearTimeout(id);
   }, [q]);
-  // Colour-by is deep-linkable (?color=); the page only mounts after admin
-  // auth hydrates, so reading the URL in the initializer never runs on SSR.
+  // Deep-linkable (?color=). The page only mounts after admin auth hydrates,
+  // so reading the URL in the initializer never runs on SSR.
   const [colorBy, setColorBy] = useState<ColorBy>(() => {
     if (typeof window === 'undefined') return 'energy';
     const c = new URLSearchParams(window.location.search).get('color') as ColorBy | null;
@@ -144,9 +135,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const [tip, setTip] = useState<TipState | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
 
-  // Fly-to requests for the galaxy camera: bumped by search picks, MIX NEXT
-  // picks and deep links — never by plain map clicks (the node is already
-  // under the cursor there).
+  // Bumped by search picks, MIX NEXT picks and deep links, never by plain map
+  // clicks — the node is already under the cursor there.
   const focusNonce = useRef(0);
   const [focusOn, setFocusOn] = useState<{ t: ObsTrack; n: number } | null>(null);
   const jumpTo = useCallback((t: ObsTrack) => {
@@ -175,7 +165,6 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
         return n;
       });
 
-  // Lazy-load the rich dossier whenever the selected node changes.
   useEffect(() => {
     fetchDetail(selected?.id ?? null);
   }, [selected, fetchDetail]);
@@ -184,8 +173,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const genreOptions = useMemo(() => (lib ? lib.genres.filter((g) => g !== '—') : []), [lib]);
   const sourceOptions = useMemo(() => (lib ? Object.keys(lib.stats.bySource || {}) : []), [lib]);
 
-  // Genre chips: top-N by population (lib.genres is already sorted), plus any
-  // selected genre that would otherwise be hidden, plus a +N MORE toggle.
+  // Top-N by population (lib.genres is pre-sorted), plus any selected genre
+  // that would otherwise be hidden.
   const visibleGenres = useMemo(() => {
     if (genresExpanded || genreOptions.length <= GENRE_CHIP_CAP) return genreOptions;
     const top = genreOptions.slice(0, GENRE_CHIP_CAP);
@@ -212,16 +201,14 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
 
   const byId = useMemo(() => new Map((lib?.tracks || []).map((t) => [t.id, t])), [lib]);
 
-  // A reload (retry button, post-projection refresh) rebuilds every ObsTrack —
-  // re-point the selection at the new object so the highlight ring and wiring
-  // don't sit on stale coordinates (or on a mock node after recovery).
+  // A reload rebuilds every ObsTrack, so re-point the selection at the new
+  // object or the highlight ring sits on stale coordinates.
   useEffect(() => {
     setSelected((cur) => (cur ? (byId.get(cur.id) ?? null) : cur));
   }, [byId]);
 
-  // Top search hits for the jump-to dropdown: title matches first, then any
-  // other field match, single pass with an early exit so a keystroke never
-  // pays more than one O(n) scan even at the 500k cap.
+  // Title matches first, then any other field. Single pass with an early exit,
+  // so a keystroke never pays more than one O(n) scan even at the 500k cap.
   const searchHits = useMemo(() => {
     const qq = qDebounced.trim().toLowerCase();
     if (!qq) return [];
@@ -238,9 +225,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     return primary.concat(secondary).slice(0, 8);
   }, [matched, qDebounced]);
 
-  // Mix-next nodes (for both the map wiring and the dossier list). Prefer the
-  // server's real KNN neighbours; fall back to spatial nearest until the detail
-  // fetch lands (or when the seed has no embedding).
+  // Prefer the server's real KNN neighbours; fall back to spatial nearest until
+  // the detail fetch lands, or when the seed has no embedding.
   const mixNodes = useMemo(() => {
     if (!selected || !lib) return [];
     if (detail && detail.track.id === selected.id && detail.mixNext.length) {
@@ -260,10 +246,9 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     setAnalysedOnly(false);
   };
 
-  // ---- deep links: ?track=<id> applied once the real library arrives --------
-  // Captured ONCE at mount: the URL-sync effect below rewrites the query string
-  // from the (initially empty) selection before the library has loaded, so by
-  // the time tracks exist the live URL no longer carries the param.
+  // ?track=<id>, captured ONCE at mount: the URL-sync effect below rewrites the
+  // query string from the initially empty selection before the library loads,
+  // so by the time tracks exist the live URL no longer carries the param.
   const initialTrack = useRef<string | null>(
     typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('track'),
   );
@@ -277,7 +262,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     if (t) jumpTo(t);
   }, [lib, byId, jumpTo]);
 
-  // …and kept in sync (replaceState — no navigation, no history spam).
+  // replaceState, so no navigation and no history spam.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const sp = new URLSearchParams(window.location.search);
@@ -292,7 +277,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     }
   }, [selected, colorBy, lib]);
 
-  // ---- Escape backs out: dossier first, then the search query ---------------
+  // Escape backs out: dossier first, then the search query.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
@@ -303,10 +288,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     return () => window.removeEventListener('keydown', onKey);
   }, [selected, q]);
 
-  // ---- sound-map projection: status + manual trigger ------------------------
   // Adopt the status that rode the bulk load, then poll the lightweight status
-  // endpoint while a run is live; when it finishes, reload the map so the new
-  // coordinates (and the entrance animation they deserve) come in.
+  // endpoint while a run is live; on finish, reload the map for the new coords.
   const [proj, setProj] = useState<MapProjectionStatus | null>(null);
   const [projBusy, setProjBusy] = useState(false);
   useEffect(() => {
@@ -345,7 +328,6 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     }
   }, [adminFetch]);
 
-  // ---- queue a track on air (the dossier's QUEUE button) ---------------------
   const queueTrack = useCallback(
     async (t: ObsTrack): Promise<{ ok: boolean; message: string }> => {
       try {
@@ -371,8 +353,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     [adminFetch],
   );
 
-  // Stable identities so the galaxy's attribute-refresh effects don't re-run
-  // on the parent re-render a hover (tip state) triggers.
+  // Stable identities, or the galaxy's attribute-refresh effects re-run on the
+  // parent re-render a hover triggers.
   const onHover = useCallback((t: ObsTrack | null, e?: React.MouseEvent) => {
     if (!t || !e) {
       setTip(null);
@@ -384,8 +366,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
 
   const total = lib?.tracks.length ?? 0;
 
-  // Cap options: the ladder up to the server's hardMax, plus the current value
-  // (which, with nothing stored, is whatever cap the server applied).
+  // The ladder up to the server's hardMax, plus the current value.
   const hardMax = lib?.hardMax ?? 50000;
   const effectiveMax = maxNodes ?? lib?.max ?? DEFAULT_MAX;
   const maxOptions = Array.from(new Set([...MAX_LADDER.filter((n) => n <= hardMax), effectiveMax])).sort(
@@ -396,7 +377,6 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
 
   return (
     <div className="observatory-root">
-      {/* top bar */}
       <header className="obs-top">
         <div className="obs-top-l">
           <Link href="/admin/library" className="obs-back">
@@ -457,8 +437,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
         </div>
       </header>
 
-      {/* load failures never blank the view (the sample map fills in) — but
-          they must not masquerade as a fresh install either */}
+      {/* A load failure never blanks the view, but must not read as a fresh
+          install either. */}
       {error && (
         <div className="obs-error" role="alert">
           <span>
@@ -472,7 +452,6 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
       )}
 
       <div className="obs-main">
-        {/* filter rail */}
         <aside className="obs-rail">
           <div className="rail-search-wrap">
             <div className="rail-search">
@@ -625,7 +604,6 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
           </div>
         </aside>
 
-        {/* stage */}
         <section className="obs-stage">
           <div className="stage-head">
             <div>
@@ -653,7 +631,6 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
           )}
         </section>
 
-        {/* side panel */}
         <aside className="obs-side">
           {lib &&
             (selected ? (

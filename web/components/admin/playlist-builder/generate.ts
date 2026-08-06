@@ -1,24 +1,10 @@
 'use client';
 
-// Generation driven as a server-side job.
-//
-// A generation legitimately runs for minutes, and Cloudflare cuts proxied
-// responses off at ~100s with an HTML error page - so the panel starts a job
-// (POST /playlists/generate/jobs) and polls it instead of holding one request
+// A generation legitimately runs for minutes and Cloudflare cuts proxied responses
+// off at ~100s with an HTML error page, so the panel starts a job
+// (POST /playlists/generate/jobs) and polls it rather than holding one request
 // open. Bodies are never parsed before checking they ARE JSON: WebKit reports
-// r.json() on that HTML page as the baffling "The string did not match the
-// expected pattern".
-//
-// Part of the playlist-builder/ split - see ../PlaylistBuilderPanel.tsx.
-
-
-// ── generation over a server-side job ────────────────────────────────────────
-// A generation legitimately runs for minutes, and Cloudflare cuts proxied
-// responses off at ~100s with an HTML error page — so the panel starts a job
-// (POST /playlists/generate/jobs) and polls it instead of holding one request
-// open. Bodies are also never parsed before checking they ARE JSON: WebKit
-// reports r.json() on that HTML page as the baffling "The string did not
-// match the expected pattern".
+// r.json() on that HTML page as "The string did not match the expected pattern".
 
 type AdminFetch = (path: string, init?: RequestInit) => Promise<Response>;
 
@@ -40,8 +26,7 @@ const GEN_POLL_MS = 2000;
 const GEN_DEADLINE_MS = 10 * 60_000;
 const GEN_POLL_MISSES = 3; // consecutive transient poll failures tolerated
 
-// Resolves with the GenerateResult payload, throws with an operator-readable
-// message otherwise.
+// Throws with an operator-readable message.
 export async function runGenerationJob(adminFetch: AdminFetch, body: unknown): Promise<any> {
   const init: RequestInit = {
     method: 'POST',

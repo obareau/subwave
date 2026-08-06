@@ -96,6 +96,9 @@ export function usePlayerActions(): PlayerActions {
 
 export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   const client = useStationClient();
+  // Feed first: usePlayer's Opus upgrade is gated on the mount the station says
+  // it actually serves (issue #1300, bug 5).
+  const feed = useStationFeed();
   const {
     audioRef,
     attachAudio,
@@ -108,8 +111,7 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
     toggleMute,
     muted,
     idleStopped,
-  } = usePlayer();
-  const feed = useStationFeed();
+  } = usePlayer({ opusEnabled: feed.opusEnabled });
 
   // Only an explicit false is offline — see PlayerAudio.offline.
   const offline = feed.streamOnline === false;
@@ -174,15 +176,15 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   // churn (a volume drag) doesn't cascade into every feed consumer.
   const {
     nowPlaying, context, dj, activeShow, listeners, streamOnline,
-    llmTokens, state, session, trackStartedAt, timezone, locale,
+    llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale,
   } = feed;
   const feedValue = useMemo<StationFeed>(
     () => ({
       nowPlaying, context, dj, activeShow, listeners, streamOnline,
-      llmTokens, state, session, trackStartedAt, timezone, locale,
+      llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale,
     }),
     [nowPlaying, context, dj, activeShow, listeners, streamOnline,
-     llmTokens, state, session, trackStartedAt, timezone, locale],
+     llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale],
   );
 
   const { latencyMs, quality } = signal;

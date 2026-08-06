@@ -1,11 +1,5 @@
 'use client';
 
-// Doctor — /admin/doctor. Runs the controller-side health assessment, offers a
-// one-click fix where a safe action exists, asks the buddy (the LLM) to review
-// the report in plain English, and copies the whole thing as GitHub-ready
-// Markdown. Mirrors DashPanel's adminFetch + act() pattern; primitives from ./ui,
-// streaming/LLM presentation from ../ai-elements (Task, Shimmer, Reasoning,
-// MessageResponse) restyled to the newsprint look at the call sites.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -18,7 +12,7 @@ import { Shimmer } from '../ai-elements/shimmer';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '../ai-elements/reasoning';
 import { MessageResponse } from '../ai-elements/message';
 
-// --- shapes (mirror controller/src/doctor.ts) ------------------------------
+// Shapes mirror controller/src/doctor.ts.
 
 type Status = 'ok' | 'warn' | 'fail' | 'skip';
 type FixId = 'refresh-playlist' | 'restart-mixer' | 'generate-jingles' | 'tag-library' | 'subsonic-reset';
@@ -48,8 +42,7 @@ interface ReviewPriority {
   severity: 'low' | 'med' | 'high';
   why: string;
   suggestedFix: string;
-  // DJ Doc may tag a priority with a one-click fix; we only render the button
-  // when that fix id actually appears in the current report's findings.
+  // Only rendered as a button when the id appears in the report's findings.
   fixId?: FixId | null;
 }
 interface DoctorReview {
@@ -60,8 +53,7 @@ interface DoctorReview {
   priorities?: ReviewPriority[];
 }
 
-// FixId → the existing admin POST endpoint that performs it. All are already
-// implemented + admin-gated and accept an empty body.
+// All are admin-gated POSTs that accept an empty body.
 const FIX_ENDPOINTS: Record<FixId, string> = {
   'refresh-playlist': '/dj/refresh-playlist',
   'restart-mixer': '/restart-mixer',
@@ -70,28 +62,22 @@ const FIX_ENDPOINTS: Record<FixId, string> = {
   'subsonic-reset': '/debug/subsonic/reset',
 };
 
-// Buddy mood reflects the worst-case verdict, so the operator reads the room at
-// a glance — calm when healthy, startled when something's broken.
 const MOOD_BY_OVERALL: Record<NonNullable<DoctorReview['overall']>, BuddyMood> = {
   healthy: 'content',
   attention: 'curious',
   critical: 'spooked',
 };
 
-// "Headquarters" = the upstream SUB/WAVE repo. Bug reports about the software
-// itself go here regardless of who runs the station, so this is intentionally
-// the project repo, not a per-station setting.
+// Deliberately the upstream project repo, not a per-station setting: bug
+// reports are about the software itself.
 const HQ_ISSUES_NEW = 'https://github.com/perminder-klair/subwave/issues/new';
-// GitHub's prefilled-issue form is a GET, so the whole report rides in the URL.
-// Past ~8KB the request 414s / silently truncates; stay well under and fall
-// back to the clipboard when the report is too big to prefill safely.
+// GitHub's prefilled-issue form is a GET, and past ~8KB the request 414s or
+// silently truncates — stay well under and fall back to the clipboard.
 const HQ_URL_LIMIT = 7000;
 
-// The controller runs its checks in this fixed order (SECTION_CHECKS in
-// controller/src/doctor.ts) and streams each section as it finishes, so names
-// not yet received are the ones still on the bench. Only the in-flight shimmer
-// rows key off this list — a drifted controller just shimmers the wrong names
-// for a few seconds; the finished report renders whatever actually arrived.
+// Mirrors SECTION_CHECKS in controller/src/doctor.ts. Only the in-flight
+// shimmer rows key off it, so drift just shimmers the wrong names for a few
+// seconds; the finished report renders whatever actually arrived.
 const EXPECTED_SECTIONS = [
   'LLM',
   'Navidrome & library',
@@ -111,7 +97,6 @@ function tallyCounts(sections: DoctorSection[]): DoctorReport['counts'] {
   return c;
 }
 
-// Parse one SSE frame ("event: …\ndata: …") into its event name + JSON payload.
 function parseSseFrame(frame: string): { event: string | null; data: unknown } {
   let event: string | null = null;
   const dataLines: string[] = [];
@@ -134,14 +119,11 @@ export default function DoctorPanel() {
   const [reviewing, setReviewing] = useState(false);
   const [busyFix, setBusyFix] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  // True until the mount hydration from /doctor/last resolves — suppresses the
-  // intro hero flashing before a cached report loads in.
+  // Suppresses the intro hero flashing before a cached report loads in.
   const [hydrating, setHydrating] = useState(true);
 
   const ready = hydrated && !needsAuth;
 
-  // Hydrate from the last cached run so navigating back to DJ Doc (or a nightly
-  // auto-run) shows the previous report immediately instead of a blank slate.
   const hydratedRef = useRef(false);
   useEffect(() => {
     if (!ready || hydratedRef.current) return;
@@ -168,9 +150,8 @@ export default function DoctorPanel() {
     };
   }, [ready, adminFetch]);
 
-  // Fix actions present in the current report, keyed by id — the source of truth
-  // for both the finding buttons' labels and whether a review priority may show
-  // its own one-click fix button (a fixId not in this map is never surfaced).
+  // Fix actions present in the current report. A fixId not in this map is never
+  // surfaced as a button.
   const fixById = useMemo(() => {
     const m = new Map<FixId, FixAction>();
     report?.sections.forEach((s) =>
@@ -181,8 +162,7 @@ export default function DoctorPanel() {
     return m;
   }, [report]);
 
-  // Sections the live run hasn't delivered yet — painted as shimmering
-  // in-flight rows under the completed Tasks so the stream visibly moves.
+  // Sections the live run hasn't delivered yet, painted as in-flight rows.
   const pendingSections =
     running && report
       ? EXPECTED_SECTIONS.filter((n) => !report.sections.some((s) => s.name === n))
@@ -205,7 +185,6 @@ export default function DoctorPanel() {
     // A fresh run invalidates the previous review (it described the old report).
     setReview(null);
     try {
-      // Stream sections as each check finishes so findings paint progressively.
       const r = await adminFetch('/doctor/stream', { headers: { Accept: 'text/event-stream' } });
       if (!r.ok || !r.body) throw new Error(`stream unavailable (${r.status})`);
       const reader = r.body.getReader();
@@ -236,8 +215,7 @@ export default function DoctorPanel() {
       }
       return final ?? (sections.length ? { t: new Date().toISOString(), sections, counts: tallyCounts(sections) } : null);
     } catch {
-      // Streaming failed (proxy, older controller, aborted body) — fall back to
-      // the single-shot endpoint so the check still works.
+      // Streaming failed (proxy, older controller, aborted body).
       try {
         return await runBatch();
       } catch (e2) {
@@ -249,9 +227,8 @@ export default function DoctorPanel() {
     }
   };
 
-  // `rep` lets a caller pass the just-fetched report directly — `run()` sets it
-  // via setState, which isn't visible in the same tick, so the "Let's go" chain
-  // hands it through rather than reading stale `report` from the closure.
+  // `rep` is passed in by the "Let's go" chain: run()'s setState isn't visible
+  // in the same tick, so reading `report` from the closure would be stale.
   const askReview = async (rep?: DoctorReport) => {
     const target = rep ?? report;
     if (!target) return;
@@ -275,8 +252,6 @@ export default function DoctorPanel() {
     }
   };
 
-  // The one-press init flow: run the full assessment, then immediately hand the
-  // fresh report to DJ Doc for his read — no separate "review" click needed.
   const letsGo = async () => {
     const rep = await run();
     if (rep) await askReview(rep);
@@ -311,15 +286,13 @@ export default function DoctorPanel() {
     }
   };
 
-  // Open a GitHub "new issue" form prefilled with the diagnostics. This only
-  // opens the form — nothing is filed until the operator hits Submit on GitHub.
+  // Only opens the form — nothing is filed until the operator submits on GitHub.
   const sendToHQ = async () => {
     if (!report) return;
     const title = `Station diagnostics — ${report.counts.fail} fail · ${report.counts.warn} warn · ${report.counts.skip} skip`;
     const body = `_Filed from DJ Doc (Admin → DJ Doc → station health)._\n\n${toMarkdown(report, review)}`;
     const full = `${HQ_ISSUES_NEW}?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
-    // Too long to ride in the URL — copy the full report and prefill a pointer
-    // so the operator just pastes it into the issue body.
+    // Too long to ride in the URL — copy it and prefill a pointer instead.
     if (full.length > HQ_URL_LIMIT) {
       try {
         await navigator.clipboard.writeText(body);
@@ -345,10 +318,6 @@ export default function DoctorPanel() {
 
   return (
     <div className="mx-auto max-w-[1100px] px-0 py-8 sm:px-7">
-      {/* Init hero — DJ Doc introduces himself and the whole run is one press.
-          The booth's-open pitch is the primary content; "Let's go" runs the
-          full assessment AND his review together. Stays up through the first
-          run so the CTA can show progress. */}
       {ready && !hydrating && !report && (
         <Card title="DJ Doc" sub="booth's open">
           <div className="flex items-start gap-4">
@@ -406,7 +375,6 @@ export default function DoctorPanel() {
         </Card>
       )}
 
-      {/* Controls — once a report exists: counts + re-run / review / copy. */}
       {report && (
         <Card
           title="DJ Doc"
@@ -452,10 +420,8 @@ export default function DoctorPanel() {
         </Card>
       )}
 
-      {/* Spotlight slot — a live "listening" indicator while DJ Doc runs the
-          report past the LLM (a 20–60s call on a local model), then his verdict.
-          The animated indicator is the primary signal the action is working: a
-          button-label change alone read as stalled on the long call. */}
+      {/* The animated indicator carries the 20–60s LLM call: a button-label
+          change alone read as stalled. */}
       {reviewing ? (
         <div role="status" aria-live="polite">
           <Card className="is-spotlight mt-6" title="DJ Doc says" sub="running the levels…">
@@ -509,8 +475,7 @@ export default function DoctorPanel() {
                 {review.priorities && review.priorities.length > 0 && (
                   <ul className="mt-4 flex flex-col gap-3">
                     {review.priorities.map((p, i) => {
-                      // Only offer the one-click button when DJ Doc's tagged fix
-                      // actually exists in this report's findings.
+                      // Only offer the button when the tagged fix exists here.
                       const fix = p.fixId ? fixById.get(p.fixId) : undefined;
                       return (
                         <li key={i} className="border-l-2 border-[color:var(--separator-strong)] pl-3">
@@ -534,8 +499,6 @@ export default function DoctorPanel() {
                               </span>
                             )}
                           </div>
-                          {/* Folded by default so the list scans tight; the why
-                              and the fix expand on demand as one markdown body. */}
                           <Reasoning defaultOpen={false} className="mt-1.5 mb-0">
                             <ReasoningTrigger className="group w-fit cursor-pointer text-[10px] font-bold tracking-[0.18em] text-muted uppercase hover:text-ink">
                               <span>The why &amp; the fix</span>
@@ -564,9 +527,6 @@ export default function DoctorPanel() {
         </Card>
       ) : null}
 
-      {/* Findings — one Card of collapsible section Tasks. Completed sections
-          land as they stream in; the ones still on the bench shimmer below so
-          the live run visibly moves through the rundown. */}
       {report && (report.sections.length > 0 || running) && (
         <Card className="mt-6" title="The rundown" sub={running ? 'running the levels…' : 'section by section'}>
           <div className="flex flex-col divide-y divide-[color:var(--separator-strong)]">
@@ -598,9 +558,8 @@ export default function DoctorPanel() {
                       >
                         <StatusPill status={f.status} />
                         <span className="font-bold">{f.label}</span>
-                        {/* Details are machine values — model ids, paths, URLs
-                            with no break opportunity. Let them wrap rather than
-                            run past the card's clipped edge on a phone. */}
+                        {/* Machine values (model ids, paths, URLs) have no break
+                            opportunity — wrap them or they run past the card edge. */}
                         {f.detail && (
                           <span className="min-w-0 font-mono text-[12px] break-words text-muted">{f.detail}</span>
                         )}
@@ -661,7 +620,6 @@ function StatusPill({ status }: { status: Status }) {
   return <Pill dot>skip</Pill>;
 }
 
-// Build a GitHub-issue-ready Markdown report from the diagnostics (+ review).
 function toMarkdown(report: DoctorReport, review: DoctorReview | null): string {
   const esc = (s: string) => s.replace(/\|/g, '\\|');
   const lines: string[] = [];

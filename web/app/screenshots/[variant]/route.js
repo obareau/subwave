@@ -1,12 +1,9 @@
 import { ImageResponse } from 'next/og';
 
-// Renders representative SUB/WAVE screenshots for the PWA install dialog.
-// These are referenced from app/manifest.js; the browser fetches them when
-// showing the "Install app" sheet on Android / desktop Chromium.
-//
-// We approximate the actual player layout (header wordmark, headline,
-// transport bar) so the preview matches what users see post-install,
-// without bundling real PNGs in /public.
+// Screenshots for the PWA install dialog, referenced from app/manifest.js and
+// fetched when the browser shows the "Install app" sheet. Approximates the real
+// player layout so the preview matches post-install, without bundling PNGs in
+// /public.
 
 export const contentType = 'image/png';
 export const dynamic = 'force-static';
@@ -48,7 +45,6 @@ export async function GET(_req, { params }) {
           position: 'relative',
         }}
       >
-        {/* Header rule */}
         <div
           style={{
             display: 'flex',
@@ -82,7 +78,6 @@ export async function GET(_req, { params }) {
           </div>
         </div>
 
-        {/* Center stage */}
         <div
           style={{
             flex: 1,
@@ -112,7 +107,6 @@ export async function GET(_req, { params }) {
           </div>
         </div>
 
-        {/* Transport bar */}
         <div
           style={{
             display: 'flex',

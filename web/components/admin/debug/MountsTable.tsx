@@ -1,9 +1,5 @@
 'use client';
 
-// Per-mount stream status - which of the MP3/Opus/FLAC/AAC outputs are up.
-//
-// Part of the debug/ split - see ../DebugPanel.tsx.
-
 import type { DebugMount, DebugMounts } from './types';
 
 function MountStatus({ m }: { m: DebugMount }) {
@@ -20,8 +16,6 @@ function MountStatus({ m }: { m: DebugMount }) {
   );
 }
 
-// Listen-mounts block folded into the Config card: per-mount config-vs-live
-// health plus the one-paste tune-in URLs.
 export function MountsTable({ mounts }: { mounts?: DebugMounts }) {
   if (!mounts) return null;
   return (
@@ -66,6 +60,4 @@ export function titleize(s: unknown): string {
   const t = String(s ?? '').replace(/[-_]/g, ' ').trim();
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : '';
 }
-
-// The DJ context snapshot, rendered as labelled prose rather than raw JSON.
 

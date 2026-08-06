@@ -1,17 +1,13 @@
-// Build-/render-time loader for the community catalog index (catalog.json)
-// published by the community repo. The public station directory
-// (/stations + /stations.json) sources its data from here instead of the old
-// local web/content/stations files, so the community station list refreshes
-// without a web redeploy.
+// Loader for the community catalog index (catalog.json). The public station
+// directory sources its data from here, so the list refreshes without a web
+// redeploy.
 //
-// Server-side only. Fetched with a 30-min ISR revalidate (matches the
-// controller's catalog TTL) and memoised per render, and it degrades to an
-// EMPTY catalog on any failure (unreachable host, non-200, bad JSON, timeout)
-// so the build/page never breaks on a network blip — same posture as the old
-// "no content dir → empty" fallback.
+// Server-side only. 30-min ISR revalidate (matches the controller's catalog TTL)
+// and memoised per render. Degrades to an EMPTY catalog on any failure, so the
+// build/page never breaks on a network blip.
 //
-// Override the source with COMMUNITY_CATALOG_URL (build env); the default is raw
-// GitHub (Fastly-fronted, ~5-min cache) — reliable and fresh, no build step.
+// COMMUNITY_CATALOG_URL overrides the source; the default is raw GitHub
+// (Fastly-fronted, ~5-min cache).
 const CATALOG_URL =
   process.env.COMMUNITY_CATALOG_URL ||
   'https://raw.githubusercontent.com/getsubwave/community/main/catalog.json';
@@ -21,9 +17,10 @@ export interface CommunityCatalog {
   personas: Record<string, unknown>[];
   shows: Record<string, unknown>[];
   stations: Record<string, unknown>[];
+  apps: Record<string, unknown>[];
 }
 
-const EMPTY: CommunityCatalog = { skills: [], personas: [], shows: [], stations: [] };
+const EMPTY: CommunityCatalog = { skills: [], personas: [], shows: [], stations: [], apps: [] };
 
 const arr = (v: unknown): Record<string, unknown>[] =>
   Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
@@ -41,6 +38,10 @@ export async function fetchCommunityCatalog(): Promise<CommunityCatalog> {
       personas: arr(data.personas),
       shows: arr(data.shows),
       stations: arr(data.stations),
+      // `apps` postdates the other four; arr() maps a missing key to [], so an
+      // older catalog is an empty directory rather than a crash, which lets the
+      // web and community repos ship in either order.
+      apps: arr(data.apps),
     };
   } catch {
     return EMPTY;

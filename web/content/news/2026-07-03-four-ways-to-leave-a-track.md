@@ -7,7 +7,7 @@ author: The SUB/WAVE desk
 excerpt: DJ mode now has four named transition moves, blend, washout, sweep, and dissolve. The DJ picks the one that fits each pair of tracks, so no two joins sound the same.
 ---
 
-A crossfade used to be a crossfade, one fixed shape for every pair of songs. DJ mode now knows four different ways to leave one track and arrive at the next, and it chooses between them by how well the two tracks fit.
+A crossfade used to be a crossfade, one fixed shape for every pair of songs. [DJ mode](/manual/dj) now knows four different ways to leave one track and arrive at the next, and it chooses between them by how well the two tracks fit.
 
 ## The four moves
 
@@ -18,7 +18,7 @@ A crossfade used to be a crossfade, one fixed shape for every pair of songs. DJ 
 
 ## How to use it
 
-There's nothing new to switch on. The moves ride on DJ mode and an analysed library, the same two things that turn on mixing in the first place:
+There's nothing new to switch on. The moves ride on DJ mode and an [analysed library](/manual/analysis), the same two things that [turn on mixing in the first place](/news/dj-mode-mixes):
 
 ```
 cd controller && npm run analyze

@@ -1,16 +1,9 @@
 'use client';
-// Searchable voice picker for the long engine voice lists — Piper .onnx files,
-// PocketTTS builtins + .wav clones, Chatterbox reference WAVs, cloud provider
-// voices. A newsprint-skinned wrapper around the vendored ai-elements
-// VoiceSelector dialog (cmdk command palette inside a Radix dialog), replacing
-// the plain <Select> those lists outgrew. Controlled exactly like the Select it
-// replaces: `value` in, `onChange(id)` out — nothing persists until the
-// surrounding form saves.
-//
-// When `preview` is set, every row gets a small play affordance
-// (VoiceSelectorPreview) that reuses the existing POST /settings/tts/preview
-// endpoint — the same one behind "Play sample" — so a voice can be auditioned
-// in-place before it's chosen. One sample plays at a time; closing the dialog
+// Searchable voice picker for the long engine voice lists, wrapping the vendored
+// ai-elements VoiceSelector (cmdk inside a Radix dialog). Controlled like the
+// <Select> it replaces: `value` in, `onChange(id)` out, nothing persists until the
+// surrounding form saves. With `preview` set every row can audition through
+// POST /settings/tts/preview; one sample plays at a time and closing the dialog
 // stops playback and revokes the object URL.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronsUpDown } from 'lucide-react';
@@ -31,11 +24,9 @@ import {
 import { fetchPreviewSample } from './previewApi';
 
 export interface VoicePickerVoice {
-  // Value handed to onChange when the row is picked (sentinels included —
-  // the call site owns any sentinel→'' mapping, exactly as with <Select>).
+  // Sentinels included — the call site owns any sentinel→'' mapping.
   id: string;
   label: string;
-  // Small uppercase note pinned to the row's right edge (e.g. "missing").
   hint?: string;
   // Voice value to audition for this row; defaults to `id`. Pass null to hide
   // the preview button (e.g. the "Custom voice id…" action row, which isn't a
@@ -44,20 +35,25 @@ export interface VoicePickerVoice {
 }
 
 export interface VoicePickerGroup {
-  // Group heading (e.g. "Built-in" vs "Custom (cloned)"). Omit for a flat list.
+  // Omit for a flat list.
   label?: string;
   voices: VoicePickerVoice[];
 }
 
-// Everything the per-row preview needs to call POST /settings/tts/preview.
 export interface VoicePickerPreviewParams {
   engine: string;
   cloudProvider?: string;
+  cloudModel?: string;
   speed?: number;
   lang?: string;
   // Persona's free-text on-air language — the server renders the sample
   // sentence in this language when it recognizes it.
   language?: string;
+  fishSettings?: {
+    temperature: number;
+    topP: number;
+    latency: 'low' | 'normal' | 'balanced';
+  };
   adminFetch: AdminAuth['adminFetch'];
 }
 
@@ -65,7 +61,6 @@ interface VoicePickerProps {
   value: string;
   onChange: (id: string) => void;
   groups: VoicePickerGroup[];
-  // Dialog heading (visible, tiny-uppercase newsprint style).
   title: string;
   // Trigger text when `value` matches no row and is empty.
   placeholder?: string;
@@ -86,22 +81,24 @@ export function VoicePicker({
 }: VoicePickerProps) {
   const [open, setOpen] = useState(false);
 
-  // In-dialog sample playback — one voice at a time.
   const [previewing, setPreviewing] = useState<PreviewPhase | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   // Monotonic token: bumping it invalidates any fetch still in flight.
   const seqRef = useRef(0);
 
   const stopPreview = useCallback(() => {
     seqRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = null; }
     setPreviewing(null);
   }, []);
 
-  // Stop playback + revoke the object URL if the picker unmounts mid-sample.
+  // Unmounting mid-sample must stop playback and revoke the object URL.
   useEffect(() => () => stopPreview(), [stopPreview]);
 
   const handleOpenChange = (o: boolean) => {
@@ -116,15 +113,29 @@ export function VoicePicker({
     stopPreview();
     setPreviewError(null);
     const seq = seqRef.current;
+    const ac = new AbortController();
+    abortRef.current = ac;
     setPreviewing({ voice: voiceValue, phase: 'loading' });
-    const res = await fetchPreviewSample(preview.adminFetch, {
-      engine: preview.engine,
-      voice: voiceValue,
-      cloudProvider: preview.cloudProvider,
-      speed: preview.speed,
-      lang: preview.lang,
-      language: preview.language,
-    });
+    let res: Awaited<ReturnType<typeof fetchPreviewSample>>;
+    try {
+      res = await fetchPreviewSample(preview.adminFetch, {
+        engine: preview.engine,
+        voice: voiceValue,
+        cloudProvider: preview.cloudProvider,
+        cloudModel: preview.cloudModel,
+        speed: preview.speed,
+        lang: preview.lang,
+        language: preview.language,
+        fishSettings: preview.fishSettings,
+      }, ac.signal);
+    } catch (e) {
+      if (ac.signal.aborted || seq !== seqRef.current) return;
+      setPreviewing(null);
+      setPreviewError(e instanceof Error ? e.message : 'Preview failed');
+      return;
+    } finally {
+      if (abortRef.current === ac) abortRef.current = null;
+    }
     // Another row (or a close) superseded this request while it was in flight.
     if (seq !== seqRef.current) return;
     if (!res.ok) { setPreviewing(null); setPreviewError(res.message); return; }
@@ -157,8 +168,6 @@ export function VoicePicker({
       open={open}
       onOpenChange={handleOpenChange}
     >
-      {/* Trigger — mirrors the newsprint SelectTrigger it replaces, with a
-          combobox affordance instead of the single chevron. */}
       <VoiceSelectorTrigger asChild>
         <button
           type="button"

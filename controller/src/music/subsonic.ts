@@ -291,9 +291,31 @@ export async function getRandomSongs({ size = 20, genre, fromYear, toYear }: { s
   return rejectArchive(r.randomSongs?.song || []);
 }
 
-export async function getSongsByGenre(genre, { count = 20 } = {}) {
-  const r = await call('getSongsByGenre', { genre, count });
+export async function getSongsByGenre(genre, { count = 20, offset = 0 } = {}) {
+  const r = await call('getSongsByGenre', { genre, count, offset });
   return rejectArchive(r.songsByGenre?.song || []);
+}
+
+// A random page of a genre. Offset-less getSongsByGenre returns the same
+// server-ordered head of the genre on every call, which made every track past
+// the first `count` unreachable by ANY picking path — on a big genre that is
+// most of it (the repeated-songs research measured one genre queried 328 times
+// returning 64 distinct songs, ever). The offset is sized from the genre's own
+// songCount (getGenres, cached 5 min); an empty deep page (stale count after a
+// rescan, or the archive/blocklist filter thinning the tail) falls back to
+// page 0, so this can only widen, never starve.
+export async function getSongsByGenreSampled(genre, { count = 20 } = {}) {
+  let offset = 0;
+  try {
+    const genres = await getGenres();
+    const norm = (s) => String(s ?? '').toLowerCase();
+    const total = Number(genres.find((g) => norm(g.value) === norm(genre))?.songCount) || 0;
+    const maxOffset = Math.max(0, total - count);
+    if (maxOffset > 0) offset = Math.floor(Math.random() * (maxOffset + 1));
+  } catch {}
+  const page = await getSongsByGenre(genre, { count, offset });
+  if (page.length || offset === 0) return page;
+  return getSongsByGenre(genre, { count });
 }
 
 // Every genre tag on a song, deduped. OpenSubsonic servers (Navidrome ≥0.54)
@@ -316,12 +338,26 @@ export function songGenres(song: { genres?: unknown; genre?: unknown } | null | 
   return out;
 }
 
+let genresCache: { genres: any[]; at: number } | null = null;
+const GENRES_TTL_MS = 5 * 60 * 1000;
+
 // All genre tags present in the library, each with { value, songCount,
 // albumCount }. Used to resolve a listener's free-text genre ("hip hop") to
 // the exact tag the library actually carries ("Hip-Hop").
+//
+// Cached 5 min because resolveGenreName is called ONCE PER VALUE, and a show
+// may now pin up to SHOW_FILTER_VALUES_MAX (15) genres — uncached, building one
+// pool meant 15 identical getGenres round trips in each of the three pool
+// builders (music/picker.ts, broadcast/scheduler.ts, broadcast/dj-agent.ts).
+// The tag set only moves when Navidrome rescans, so the staleness window costs
+// nothing but a brand-new genre being unresolvable for up to 5 minutes.
+// Failures are NOT cached — they propagate, and callers decide (see below).
 export async function getGenres() {
+  if (genresCache && Date.now() - genresCache.at < GENRES_TTL_MS) return genresCache.genres;
   const r = await call('getGenres');
-  return r.genres?.genre || [];
+  const genres = r.genres?.genre || [];
+  genresCache = { genres, at: Date.now() };
+  return genres;
 }
 
 // Fuzzy-match free text ("hip hop", "turkish") against the library's real
@@ -508,8 +544,11 @@ export async function getRecentlyAddedAlbums({ size = 20 } = {}) {
 }
 
 // Albums sorted by play count — Navidrome's scrobble-backed "favourites".
-export async function getFrequentAlbums({ size = 20 } = {}) {
-  const r = await call('getAlbumList2', { type: 'frequent', size });
+// `offset` lets callers rotate the window: the top-N list barely moves (and
+// the station's own plays feed the counts, a positive feedback loop), so an
+// offset-less read pins the same albums forever.
+export async function getFrequentAlbums({ size = 20, offset = 0 } = {}) {
+  const r = await call('getAlbumList2', { type: 'frequent', size, offset });
   return r.albumList2?.album || [];
 }
 

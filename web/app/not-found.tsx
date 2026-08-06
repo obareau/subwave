@@ -3,17 +3,10 @@ import Masthead from '@/components/landing/Masthead';
 import StationFooter from '@/components/landing/StationFooter';
 import { AnimatedLink } from '@/components/ui/animated-link';
 
-// The site-wide 404. Catches both unmatched URLs and any `notFound()` call that
-// doesn't have a closer not-found.tsx — today that's /news/[slug] for an
-// unknown dispatch slug.
-//
-// Without this file Next serves its own bare "404 | This page could not be
-// found" screen, which lands inside the root layout and so renders with none of
-// the broadsheet chrome. The root layout carries no masthead of its own (each
-// segment brings its own shell), so this page supplies the same Masthead +
-// bs-paper + StationFooter trio the news and stations shells use.
-//
-// Server component: no interactivity, so it stays out of the client bundle.
+// The site-wide 404, catching unmatched URLs and any `notFound()` without a
+// closer not-found.tsx. Without this file Next serves its own bare 404 inside
+// the root layout, which carries no masthead of its own — so this page supplies
+// the Masthead + bs-paper + StationFooter trio the other shells use.
 
 export default function NotFound() {
   return (

@@ -1,10 +1,9 @@
-// Pure client-side derivations for the admin Stats "Audience" cards. Kept
-// dependency-free and side-effect-free so they unit-test in isolation
-// (audienceStats.test.ts) — the React panel just calls them and renders.
+// Pure derivations for the admin Stats "Audience" cards. Dependency-free and
+// side-effect-free so they unit-test in isolation (audienceStats.test.ts).
 
 import { deviceLabel, type ListenerConnection } from './clientLabel';
 
-// --- hour-of-day histogram ------------------------------------------------
+// hour-of-day histogram
 
 export interface ListenerSample {
   t: string; // ISO timestamp
@@ -18,11 +17,9 @@ export interface HourBucket {
   samples: number; // how many samples landed in this hour (0 = no data)
 }
 
-// Bucket the per-minute listener series by local hour-of-day and average each
-// hour's counts — "what times of day is the station busiest?". Uses the
-// runtime's local timezone via Date#getHours (the caller labels the axis as
-// local time). Always returns all 24 hours in order; an hour with no samples
-// has avg 0 / samples 0 so the caller can render it as an empty column.
+// Buckets the per-minute listener series by local hour-of-day (Date#getHours,
+// so the caller must label the axis local time). Always returns all 24 hours in
+// order; an empty hour has avg 0 / samples 0 so it renders as an empty column.
 export function bucketSamplesByHour(samples: ListenerSample[]): HourBucket[] {
   const acc = Array.from({ length: 24 }, () => ({ total: 0, peak: 0, n: 0 }));
   for (const s of samples) {
@@ -44,7 +41,7 @@ export function bucketSamplesByHour(samples: ListenerSample[]): HourBucket[] {
   }));
 }
 
-// --- live device breakdown ------------------------------------------------
+// live device breakdown
 
 export interface DeviceGroup {
   device: string; // device/OS class from deviceLabel
@@ -53,10 +50,9 @@ export interface DeviceGroup {
   maxSeconds: number; // longest connected-for in the group
 }
 
-// Fold live listener connections into a per-device-class breakdown with
-// connected-for stats. Input is already deduped to one row per listener
-// (groupConnections on the server), so each row is one distinct listener.
-// Sorted by listener count desc, then by average connected-for desc.
+// Input is already deduped to one row per listener (groupConnections on the
+// server), so each row is one distinct listener. Sorted by listener count desc,
+// then by average connected-for desc.
 export function groupConnectionsByDevice(conns: ListenerConnection[]): DeviceGroup[] {
   const map = new Map<string, { count: number; total: number; max: number }>();
   for (const c of conns) {

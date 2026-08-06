@@ -10,9 +10,9 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability, modelTolerant, schemaHint, clipText, soulBrief, SOUL_BRIEF_MAX, renderTerminalPrompt, messageText } from '../src/llm/internal/core/pure.js';
+import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, isFishS21Model, cloudExpressionCueFamily, snapV3Stability, modelTolerant, schemaHint, clipText, soulBrief, SOUL_BRIEF_MAX, renderTerminalPrompt, messageText } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
-import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
+import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice, discoveryStepsFor, gatedMaxStepsFor, runDiscoverySteps, DISCOVERY_STEPS_MIN, DISCOVERY_STEPS_MAX } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
@@ -21,7 +21,7 @@ import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStr
 import { lengthMode, lengthPhrase } from '../src/llm/internal/prompts/system.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
 import { planSchema } from '../src/llm/internal/prompts/programme.js';
-import { resolveCloudModel } from '../src/llm/internal/speech/cloud-speech.js';
+import { modelForCloudRequest, resolveCloudModel, resolveCloudProvider, sharedCloudApiKeyForRequest } from '../src/llm/internal/speech/cloud-speech.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -520,6 +520,67 @@ async function main() {
     assert.equal(agentPlan({ provider: 'openai-compatible' }, {}, 3), 'done-tool');
     assert.equal(agentPlan({ provider: 'openai' }, null, 3), 'free-text');
     assert.equal(agentPlan({ provider: 'ollama' }, null, 0), 'free-text');
+  });
+
+  // ---- per-provider discovery budget (the tool-loop's shape) ----
+  // The commit point used to be a global COMMIT_AFTER_STEPS = 1, set by the
+  // weakest provider and applied to every model. It is a capability now. These
+  // assertions are the guard on that split: the forced-tool providers must keep
+  // the single cornered call byte-for-byte, and the derived cap must always
+  // leave EXACTLY ONE forced-`done` step whatever the budget.
+  console.log('discoveryStepsFor / gatedMaxStepsFor (loop shape):');
+  await test('forced-tool providers keep the historical single discovery call', () => {
+    // These three ignore toolChoice with several tools visible and emit
+    // schema-valid objects without exploring — the one-call corner is what
+    // holds them. Widening any of these re-opens the middle-step failure window.
+    for (const provider of ['ollama', 'openai-compatible', 'locca']) {
+      assert.equal(discoveryStepsFor({ provider }), 1, provider);
+      assert.equal(gatedMaxStepsFor({ provider }), 2, provider);
+    }
+  });
+  await test('native-strategy providers get room to seed, refine, cross-check', () => {
+    for (const provider of ['openai', 'anthropic', 'google', 'deepseek', 'openrouter', 'requesty', 'gateway']) {
+      assert.equal(discoveryStepsFor({ provider }), 3, provider);
+      assert.equal(gatedMaxStepsFor({ provider }), 4, provider);
+    }
+  });
+  await test('an unknown provider falls to the conservative floor, not the wide budget', () => {
+    // DEFAULT_CAPS declares no budget: absent must mean 1, never "unbounded".
+    assert.equal(discoveryStepsFor({ provider: 'not-a-provider' }), DISCOVERY_STEPS_MIN);
+    assert.equal(discoveryStepsFor({}), DISCOVERY_STEPS_MIN);
+    assert.equal(discoveryStepsFor(undefined), DISCOVERY_STEPS_MIN);
+  });
+  await test('the derived cap always leaves exactly one forced-done step', () => {
+    // The GLM invariant: extra `done` steps grow an "I already declined" trail
+    // and make compliance worse, so however tall discovery gets, the main run
+    // commits once and hands off to the recovery cascade.
+    for (const provider of ['ollama', 'openai', 'anthropic', 'locca', 'gateway', 'nonsense']) {
+      assert.equal(
+        gatedMaxStepsFor({ provider }) - discoveryStepsFor({ provider }), 1,
+        `${provider} must leave exactly one done step`);
+    }
+  });
+  await test('the budget is clamped, so a bad descriptor edit cannot corner or run away', () => {
+    // A zero/negative budget would force `done` at step 0 with an empty `seen`
+    // map — the model could only fabricate an id. Every real descriptor sits
+    // inside the band, so the clamp is the backstop, not the mechanism.
+    for (const provider of Object.keys({ ollama: 0, openai: 0, anthropic: 0, google: 0, deepseek: 0, openrouter: 0, requesty: 0, gateway: 0, locca: 0, 'openai-compatible': 0 })) {
+      const n = discoveryStepsFor({ provider });
+      assert.ok(n >= DISCOVERY_STEPS_MIN && n <= DISCOVERY_STEPS_MAX, `${provider} budget ${n} out of band`);
+      assert.equal(Number.isInteger(n), true, `${provider} budget must be a whole step count`);
+    }
+  });
+  await test('the per-provider budget reaches only agents that opt in', () => {
+    // The widening was designed and tested for the pick/request agents; a
+    // caller's pinned step cap can be load-bearing (the segment director's
+    // maxSteps: 2 in skills/_agent.ts was measured burning the full
+    // agentTimeoutMs when its loop silently grew). An agent that doesn't opt
+    // in must resolve the historical single step on EVERY provider — including
+    // the wide native ones and even over an operator override.
+    for (const cfg of [{ provider: 'anthropic' }, { provider: 'openai' }, { provider: 'ollama' }, { provider: 'anthropic', discoverySteps: 5 }]) {
+      assert.equal(runDiscoverySteps(cfg, false), DISCOVERY_STEPS_MIN, JSON.stringify(cfg));
+      assert.equal(runDiscoverySteps(cfg, true), discoveryStepsFor(cfg), JSON.stringify(cfg));
+    }
   });
 
   // ---- Terminal single-turn collapse (issue #1157) ----
@@ -1114,6 +1175,93 @@ async function main() {
   });
   await test('unknown persona engine string fails closed (no hint beats a spoken bracket)', () => {
     assert.equal(resolveCloudModel({ engine: 'bogus' }, { defaultEngine: 'cloud', provider: 'elevenlabs', model: 'eleven_v3' }), '');
+  });
+
+  console.log('resolveCloudProvider (provider-gated Fish cue policy):');
+  await test('explicit Fish persona resolves Fish while keeping local/unknown engines closed', () => {
+    assert.equal(
+      resolveCloudProvider(
+        { engine: 'cloud', cloudProvider: 'fish-audio' },
+        { defaultEngine: 'piper', provider: 'openai' },
+      ),
+      'fish-audio',
+    );
+    assert.equal(resolveCloudProvider({ engine: 'piper' }, { defaultEngine: 'cloud', provider: 'fish-audio' }), '');
+    assert.equal(resolveCloudProvider({ engine: 'bogus' }, { defaultEngine: 'cloud', provider: 'fish-audio' }), '');
+  });
+  await test('station-default cloud provider resolves for personas with no explicit engine', () => {
+    assert.equal(resolveCloudProvider({}, { defaultEngine: 'cloud', provider: 'fish-audio' }), 'fish-audio');
+    assert.equal(resolveCloudProvider(null, { defaultEngine: 'cloud', provider: 'fish-audio' }), 'fish-audio');
+  });
+
+  console.log('modelForCloudRequest (provider defaults + exact preview model):');
+  await test('uses a provider default when a persona changes provider without a model', () => {
+    assert.equal(
+      modelForCloudRequest('openai', 'gpt-4o-mini-tts', { provider: 'fish-audio' }),
+      's2.1-pro',
+    );
+  });
+  await test('an explicit unsaved preview model wins across provider changes', () => {
+    assert.equal(
+      modelForCloudRequest('openai', 'gpt-4o-mini-tts', {
+        provider: 'fish-audio',
+        model: 's2.1-pro-free',
+      }),
+      's2.1-pro-free',
+    );
+    assert.equal(
+      modelForCloudRequest('fish-audio', 's2.1-pro', {
+        provider: 'fish-audio',
+        model: 'custom-fish-model',
+      }),
+      'custom-fish-model',
+    );
+  });
+
+  console.log('sharedCloudApiKeyForRequest (cross-provider credential isolation):');
+  await test('keeps managed inline keys only for their globally selected provider', () => {
+    assert.equal(sharedCloudApiKeyForRequest('openai', 'openai', 'openai-key', ''), 'openai-key');
+    assert.equal(sharedCloudApiKeyForRequest('elevenlabs', 'elevenlabs', 'eleven-key', ''), 'eleven-key');
+  });
+  await test('uses a provider-scoped credential for authenticated compatibility servers', () => {
+    assert.equal(
+      sharedCloudApiKeyForRequest('openai-compatible', 'openai-compatible', 'legacy-compat-key', ''),
+      'legacy-compat-key',
+    );
+    assert.equal(
+      sharedCloudApiKeyForRequest('openai-compatible', 'fish-audio', 'managed-key', 'compat-key'),
+      'compat-key',
+    );
+    assert.equal(
+      sharedCloudApiKeyForRequest('openai-compatible', 'openai', 'openai-key', ''),
+      '',
+    );
+  });
+  await test('drops stale managed-provider inline keys and never forwards one to Fish', () => {
+    assert.equal(sharedCloudApiKeyForRequest('elevenlabs', 'openai', 'openai-key', ''), '');
+    assert.equal(sharedCloudApiKeyForRequest('openai', 'fish-audio', 'legacy-key', ''), '');
+    assert.equal(sharedCloudApiKeyForRequest('fish-audio', 'fish-audio', 'legacy-key', 'compat-key'), '');
+  });
+
+  console.log('isFishS21Model (Fish expression-cue family gate):');
+  await test('matches official S2.1 model ids and common separators', () => {
+    assert.equal(isFishS21Model('s2.1-pro'), true);
+    assert.equal(isFishS21Model('s2.1-pro-free'), true);
+    assert.equal(isFishS21Model('S2_1_CUSTOM'), true);
+    assert.equal(isFishS21Model('s2-1-pro'), true);
+  });
+  await test('rejects Fish models outside S2.1 and unrelated custom ids', () => {
+    assert.equal(isFishS21Model('s1'), false);
+    assert.equal(isFishS21Model('s2-pro'), false);
+    assert.equal(isFishS21Model('custom-voice-model'), false);
+    assert.equal(isFishS21Model(''), false);
+  });
+  await test('cue families require both the matching provider and model family', () => {
+    assert.equal(cloudExpressionCueFamily('fish-audio', 's2.1-pro'), 'fish-s21');
+    assert.equal(cloudExpressionCueFamily('elevenlabs', 'eleven_v3'), 'elevenlabs-v3');
+    assert.equal(cloudExpressionCueFamily('fish-audio', 'eleven_v3_custom'), null);
+    assert.equal(cloudExpressionCueFamily('elevenlabs', 's2.1-pro'), null);
+    assert.equal(cloudExpressionCueFamily('openai', 'eleven_v3'), null);
   });
 
   console.log('isElevenLabsV3 (model-family gate):');

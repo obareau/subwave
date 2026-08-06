@@ -1,18 +1,10 @@
 'use client';
 
-// Show definitions — /admin/shows. A show is a reusable definition (name,
-// topic, owner persona, music moods). When the scheduled hour has a show, its
-// persona goes on air, its moods (when set — empty means Any/auto) override
-// the autonomous mood, and its topic feeds the DJ.
-// An empty hour = the station runs autonomously, as it does today.
-//
-// Shows are created/edited through an in-page editor (ShowEditor, below the
-// show list) — the personas pattern: click a show to open it, edit it in place.
-// The weekly plan itself lives on its own full-screen page now — The Rundown
-// at /admin/shows/schedule (components/admin/schedule/) — which owns the
-// board, the on-air listing, and PUT /schedule. This page still loads the
-// schedule read-only for the per-show hours-a-week counts. Putting a show on
-// the air RIGHT NOW is a takeover, and that lives on the dash.
+// Show definitions. A scheduled show puts its persona on air and overrides the
+// autonomous mood (empty moods = Any/auto); an empty hour runs autonomously.
+// The weekly plan lives at /admin/shows/schedule, which owns the board and
+// PUT /schedule — this page loads the schedule read-only for the hours-a-week
+// counts. Putting a show on air right now is a takeover, and lives on the dash.
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Users, Share2 } from 'lucide-react';
@@ -36,6 +28,7 @@ import type {
   CommunityShow,
   FormState,
   Persona,
+  PlaylistIndexStatus,
   Schedule,
   SettingsResponse,
   Show,
@@ -50,40 +43,36 @@ export default function ShowsPanel() {
   const [form, setForm] = useState<FormState | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Community show catalog + install state (best-effort; null = still loading).
+  // Best-effort; null = still loading.
   const [community, setCommunity] = useState<CommunityShow[] | null>(null);
   const [communityOpen, setCommunityOpen] = useState(false);          // catalog modal open?
-  // Show definitions as cards (default) or a dense table. Per-surface pref.
   const [view, setView] = useRosterView('shows');
   const [installing, setInstalling] = useState<string | null>(null);  // community slug installing, or null
 
-  // Inline editor: `focusIdx` is the show open in the editor below the list
-  // (null = none open). Shows are edited in place — no modal, no draft copy;
-  // edits land straight on `form.shows[focusIdx]` and persist on Save show.
+  // Shows are edited in place — no modal, no draft copy; edits land straight on
+  // `form.shows[focusIdx]` and persist on Save show. null = none open.
   const [focusIdx, setFocusIdx] = useState<number | null>(null);
-  // id of a freshly-added show — the AI-draft field shows only while creating.
+  // The AI-draft field shows only while creating.
   const [creatingId, setCreatingId] = useState<string | null>(null);
-  // The editor block, scrolled into view when a show is opened (add / edit) so
-  // the operator actually sees it — it stacks below the list and would else be
-  // off-screen. The flag gates the scroll to deliberate opens (not re-renders).
   const editorRef = useRef<HTMLDivElement | null>(null);
   const scrollToEditorRef = useRef(false);
-  // Index of the show pending a delete-confirm (null = no dialog open). Both the
-  // list ✕ and the editor's Remove route through it so deletes need confirming.
+  // Both the list ✕ and the editor's Remove route through this, so deletes
+  // always need confirming.
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
-  // Theme list for the per-show override dropdown. Public endpoint, no auth
-  // needed — same source the player ThemeProvider reads.
+  // Public endpoint, no auth needed — same source the player ThemeProvider reads.
   const [themes, setThemes] = useState<ThemeOption[]>([]);
   const [skills, setSkills] = useState<SkillOption[]>([]);
   const [activeThemeId, setActiveThemeId] = useState('');
-  // Library genres for the show genre autocomplete. Admin-gated endpoint, so it
-  // runs after sign-in; failures are silent (the field still accepts free text).
+  // Admin-gated, so it runs after sign-in; failures are silent (the field still
+  // accepts free text).
   const [genres, setGenres] = useState<string[]>([]);
-  // Navidrome playlists for the per-show playlist-anchor picker. Admin-gated;
-  // failures are silent (the picker just shows no options to choose from).
+  // Admin-gated. A failure is no longer silent in the picker — see below.
   const [playlists, setPlaylists] = useState<{ id: string; name: string; songCount: number | null }[]>([]);
-  // When a show is opened (add / Edit click sets the flag), bring the editor
-  // into view. Guarded by scrollToEditorRef so unrelated re-renders don't yank.
+  // A pending or failed fetch leaves `playlists` empty too, so the editor needs
+  // to tell those apart from a genuinely empty Navidrome before it calls a show's
+  // pinned id missing (or tells the operator they have no playlists).
+  const [playlistsStatus, setPlaylistsStatus] = useState<PlaylistIndexStatus>('loading');
+  // Guarded by scrollToEditorRef so unrelated re-renders don't yank the page.
   useEffect(() => {
     if (!scrollToEditorRef.current) return;
     scrollToEditorRef.current = false;
@@ -117,9 +106,8 @@ export default function ShowsPanel() {
     })();
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch the skill catalogue once for the programme feature-segment pin.
-  // Admin endpoint, so it waits for sign-in. Failures are silent: the picker
-  // just shows "Producer's choice" with no pin options.
+  // Skill catalogue for the programme feature-segment pin. Failures are silent:
+  // the picker falls back to "Producer's choice" with no pin options.
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     let cancelled = false;
@@ -134,9 +122,8 @@ export default function ShowsPanel() {
     return () => { cancelled = true; };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch the theme list once for the per-show override dropdown. Public
-  // endpoint — runs even before sign-in. Failures are silent: the picker
-  // just shows "Station default" with no override choices.
+  // Themes for the per-show override. Public endpoint, so it runs before
+  // sign-in; on failure the picker offers only "Station default".
   useEffect(() => {
     if (!hydrated) return;
     const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
@@ -153,7 +140,6 @@ export default function ShowsPanel() {
     return () => { cancelled = true; };
   }, [hydrated]);
 
-  // Fetch library genres once for the show genre autocomplete (admin-gated).
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     let cancelled = false;
@@ -168,24 +154,35 @@ export default function ShowsPanel() {
     return () => { cancelled = true; };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch Navidrome playlists once for the show playlist-anchor picker (admin-gated).
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     let cancelled = false;
     (async () => {
+      // Every exit that isn't a well-formed list lands on 'error', including a
+      // 200 with no `results` array: the index is unknown either way, and leaving
+      // it on 'loading' would spin forever. `cancelled` is checked before each
+      // set so an unmount/re-run never reports a state for a dead effect.
       try {
         const r = await adminFetch('/dj/playlists');
-        if (!r.ok || cancelled) return;
+        if (cancelled) return;
+        if (!r.ok) { setPlaylistsStatus('error'); return; }
         const j = (await r.json()) as { results?: { id: string; name: string; songCount: number | null }[] };
-        if (Array.isArray(j.results)) setPlaylists(j.results);
-      } catch {}
+        if (cancelled) return;
+        if (Array.isArray(j.results)) {
+          setPlaylists(j.results);
+          setPlaylistsStatus('ready');
+        } else {
+          setPlaylistsStatus('error');
+        }
+      } catch {
+        if (!cancelled) setPlaylistsStatus('error');
+      }
     })();
     return () => { cancelled = true; };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch the community show catalog once for the browse-and-install modal.
-  // Best-effort like the other catalogs — any failure just leaves it empty so
-  // the Community button stays enabled and shows the empty state.
+  // Best-effort: a failure leaves the catalog empty so the Community button
+  // still opens to the empty state.
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     let cancelled = false;
@@ -207,17 +204,14 @@ export default function ShowsPanel() {
   const apiBase = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
   const personaName = (id: string): string => personas.find(p => p.id === id)?.name || '—';
 
-  // ── inline show editor ─────────────────────────────────────────────────
-  // Edits land straight on the show in form state (no draft) — same live-edit
-  // model as PersonasPanel. Trimming/cleaning happens once, at Save show.
+  // Edits land straight on the show in form state (no draft); trimming and
+  // cleaning happen once, at Save show.
   const setShow = (i: number, patch: Partial<Show>) =>
     setForm(f => f ? ({ ...f, shows: f.shows.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) }) : f);
 
-  // Open an existing show in the editor below the list, scrolling it into view.
   const focusShow = (i: number) => { scrollToEditorRef.current = true; setCreatingId(null); setFocusIdx(i); };
 
-  // Append a fresh show (persona + mood pre-filled, name blank so it reads as
-  // incomplete until named) and open it for editing.
+  // Name stays blank so the new show reads as incomplete until named.
   const addShow = () => {
     if (!form || form.shows.length >= SHOWS_MAX || personas.length === 0) return;
     const id = clientMintId();
@@ -230,7 +224,7 @@ export default function ShowsPanel() {
         shows: [...f.shows, {
           id, name: '', topic: '',
           personaId: personas[0]?.id || '', guestPersonaIds: [], banter: false, moods: [],
-          themeId: '', genres: [], eras: [], energies: [],
+          themeId: '', genres: [], eras: [], energies: [], vocals: '',
           filtersStrict: false, maxTrackSeconds: null,
           playlistIds: [], playlistStrict: false, excludedPlaylistIds: [],
           programme: false, segmentSkill: '',
@@ -247,10 +241,8 @@ export default function ShowsPanel() {
     if (!form) return;
     const target = form.shows[i];
     if (!target) return;
-    // Persist the delete immediately — on its own, not waiting for Save schedule.
-    // The server removes the show and unschedules it from the grid in one update.
-    // A 404 means it's a locally-added show never saved server-side, so the local
-    // splice below is all that's needed.
+    // Persisted immediately, not deferred to Save schedule. A 404 means a
+    // locally-added show never saved server-side, so the local splice is enough.
     try {
       const r = await adminFetch(`/shows/${encodeURIComponent(target.id)}`, { method: 'DELETE' });
       if (!r.ok && r.status !== 404) {
@@ -261,8 +253,8 @@ export default function ShowsPanel() {
       notify.err(`Delete failed: ${errorMessage(e)}`);
       return;
     }
-    // Remove locally + clear the show from the grid, preserving any unsaved edits
-    // to other shows. Splice by id (not index) since the await may have elapsed.
+    // Splice by id, not index: the await may have elapsed. Unsaved edits to
+    // other shows are preserved.
     setForm(f => {
       if (!f) return f;
       const week: Schedule = JSON.parse(JSON.stringify(f.schedule));
@@ -271,17 +263,14 @@ export default function ShowsPanel() {
           if (week[d]![h] === target.id) week[d]![h] = null;
       return { ...f, shows: f.shows.filter(sh => sh.id !== target.id), schedule: week };
     });
-    // Keep the editor focus aligned with the shifted list: close it if the open
-    // show was removed, decrement if an earlier one was.
+    // Keep editor focus aligned with the shifted list.
     setFocusIdx(cur => (cur == null ? cur : cur === i ? null : cur > i ? cur - 1 : cur));
     notify.ok(`Deleted “${target.name.trim() || 'show'}”.`);
   };
 
-  // Install a community show: the controller appends it to the persisted show
-  // list (unscheduled, owned by the active persona) and returns { shows, show }.
-  // We append the returned show to the local form — mapped through the same
-  // hydrateShow as the initial load — so any unsaved edits to other shows
-  // survive, then arm it as the paint brush and nudge the operator to schedule.
+  // The controller persists the install (unscheduled, owned by the active
+  // persona); the returned show is appended to the local form as well so
+  // unsaved edits to other shows survive.
   const install = async (slug: string) => {
     setInstalling(slug);
     try {
@@ -299,17 +288,14 @@ export default function ShowsPanel() {
     } finally { setInstalling(null); }
   };
 
-  // ── validation ───────────────────────────────────────────────────────────
   const scheduledHours = form
     ? Object.values(form.schedule).flat().filter(Boolean).length : 0;
   const countHours = (id: string): number => form
     ? Object.values(form.schedule).flat().filter(c => c === id).length : 0;
 
-  // Persist ONE show (add or edit) via POST /shows — independent of any other
-  // unsaved / half-finished show in the panel. Only requires THIS show to be
-  // valid. On success we swap the local entry for the server's normalized copy
-  // (same id — a client-minted s_ id is kept server-side), so unsaved edits to
-  // other shows survive.
+  // Persists ONE show, independent of any other half-finished show in the panel.
+  // The local entry is swapped for the server's normalized copy (same id — a
+  // client-minted s_ id is kept server-side), so other unsaved edits survive.
   const saveShow = async (s: Show): Promise<boolean> => {
     if (!showValid(s)) return false;
     setBusy(true);
@@ -331,7 +317,6 @@ export default function ShowsPanel() {
     } finally { setBusy(false); }
   };
 
-  // ── error / loading shells ───────────────────────────────────────────────
   if (err) {
     return (
       <div className="grid gap-4">
@@ -351,13 +336,12 @@ export default function ShowsPanel() {
     );
   }
 
-  // The show open in the inline editor. focusIdx can briefly point past the end
-  // after a removal — coerce an out-of-range index to "nothing open".
+  // focusIdx can briefly point past the end after a removal, so an out-of-range
+  // index coerces to "nothing open".
   const focused = focusIdx != null ? (form.shows[focusIdx] ?? null) : null;
 
   return (
     <div className="grid gap-4">
-      {/* ── WEEKLY SCHEDULE — moved to its own page (The Rundown) ────────── */}
       <section className="card">
         <div className="stack-mobile grid grid-cols-[1fr_auto] items-center gap-4 p-4">
           <div>
@@ -391,12 +375,10 @@ export default function ShowsPanel() {
         </Card>
       )}
 
-      {/* ── SHOW DEFINITIONS ─────────────────────────────────────────────── */}
       <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
         <span className="caption">show definitions · {form.shows.length}/{SHOWS_MAX} shows</span>
-        {/* Own line on a phone: on one row with the caption the cluster runs
-            out of width and the Cards/List toggle folds into two stacked
-            icons. */}
+        {/* Own line on a phone: sharing a row with the caption folds the
+            Cards/List toggle into two stacked icons. */}
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
           <span className="flex-none">
             <RosterViewToggle view={view} onChange={setView} />
@@ -458,7 +440,6 @@ export default function ShowsPanel() {
         );
       })}
 
-      {/* ── INLINE SHOW EDITOR ───────────────────────────────────────────── */}
       {focused && focusIdx != null && (
         <ShowEditor
           key={focused.id}
@@ -471,6 +452,7 @@ export default function ShowsPanel() {
           activeThemeId={activeThemeId}
           genres={genres}
           playlists={playlists}
+          playlistsStatus={playlistsStatus}
           apiBase={apiBase}
           adminFetch={adminFetch}
           minTrackSeconds={data?.values?.minTrackSeconds}
@@ -483,7 +465,6 @@ export default function ShowsPanel() {
         />
       )}
 
-      {/* ── DELETE CONFIRM ───────────────────────────────────────────────── */}
       <V3AlertDialog
         open={confirmDeleteIdx !== null}
         onOpenChange={(o) => { if (!o) setConfirmDeleteIdx(null); }}
@@ -505,7 +486,6 @@ export default function ShowsPanel() {
         }}
       />
 
-      {/* ── COMMUNITY CATALOG MODAL ──────────────────────────────────────── */}
       <Modal
         open={communityOpen}
         onOpenChange={setCommunityOpen}

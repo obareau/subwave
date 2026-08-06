@@ -36,15 +36,12 @@ export default function DebugPanel() {
     let running = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
-      // Single-flight: never start a new poll while one is in flight. A slow
-      // /debug (it can take several seconds) must not stack overlapping
-      // requests on the single-threaded controller — that pileup starved every
-      // other /api/* call and caused edge 524s.
+      // Single-flight: /debug can take seconds, and overlapping requests pile up
+      // on the single-threaded controller, starving /api/* into edge 524s.
       if (cancelled || running) return;
       running = true;
       try {
-        // Skip the fetch when paused or the tab is hidden — no point polling a
-        // backgrounded tab — but keep the loop alive so it resumes cleanly.
+        // Skip the fetch when paused or hidden, but keep the loop alive.
         if (!paused && !(typeof document !== 'undefined' && document.hidden)) {
           const r = await adminFetch('/debug');
           if (r.status === 401) {
@@ -66,13 +63,11 @@ export default function DebugPanel() {
         if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
       } finally {
         running = false;
-        // Schedule the next poll only after this one settles, so the gap is
-        // measured from completion, not from start — no overlap is possible.
+        // Gap measured from completion, not from start, so no overlap is possible.
         if (!cancelled) timer = setTimeout(tick, 2000);
       }
     };
     tick();
-    // Refresh promptly when the tab regains focus so the panel isn't stale.
     const onVisible = () => {
       if (!cancelled && !document.hidden) {
         if (timer) { clearTimeout(timer); timer = null; }
@@ -89,7 +84,6 @@ export default function DebugPanel() {
 
   return (
     <div className="grid gap-4">
-      {/* ── HEALTH STRIP ────────────────────────────────────────────────── */}
       <section className="card">
         <div className="flex flex-wrap items-center gap-4 border-b border-ink p-3.5">
           <Eyebrow className={err ? 'text-[var(--danger)]' : 'text-vermilion'}>
@@ -145,7 +139,6 @@ export default function DebugPanel() {
 
       {data && (
         <>
-          {/* ── ROW 1 — NOW PLAYING / ICECAST / DJ CONTEXT ──────────────── */}
           <div className="stack-mobile grid grid-cols-3 gap-4">
             <Card
               title="Now playing"
@@ -174,7 +167,6 @@ export default function DebugPanel() {
             </Card>
           </div>
 
-          {/* ── CONFIG + LISTEN MOUNTS ──────────────────────────── */}
           <Card title="Config" sub="redacted · listen mounts">
             <ScrollArea className="max-h-[480px]">
               <KvTable obj={data.config} />
@@ -182,7 +174,6 @@ export default function DebugPanel() {
             </ScrollArea>
           </Card>
 
-          {/* ── TTS ROUTING ────────────────────────────── */}
           {data.tts && !data.tts.error && (
             <Card
               title="TTS routing"
@@ -192,13 +183,10 @@ export default function DebugPanel() {
             </Card>
           )}
 
-          {/* ── LLM RECENT CALLS ───────────────────────────── */}
           <LlmCalls llm={data.llm} />
 
-          {/* ── SUBSONIC API CALLS ─────────────────────────── */}
           <SubsonicCalls subsonic={data.subsonic} />
 
-          {/* ── LIQUIDSOAP LOG ─────────────────────────────── */}
           <Card
             title="Liquidsoap log"
             sub="last 100 lines"
@@ -214,8 +202,6 @@ export default function DebugPanel() {
               </Label>
             }
           >
-            {/* Terminal owns scrolling + tail-follow; the Card checkbox drives
-                its autoScroll. Square corners to sit flush in the card body. */}
             <Terminal
               output={data.liquidsoapLog || '— no log —'}
               autoScroll={autoScroll}
@@ -225,7 +211,6 @@ export default function DebugPanel() {
             </Terminal>
           </Card>
 
-          {/* ── ROW 3 ───────────────────────────────────────── */}
           <div className="stack-mobile grid grid-cols-2 gap-4">
             <Card title="State dir" sub="/var/sub-wave">
               <ScrollArea className="max-h-80">
@@ -243,7 +228,6 @@ export default function DebugPanel() {
             </Card>
           </div>
 
-          {/* ── QUEUE ──────────────────────── */}
           <div className="stack-mobile grid grid-cols-[1fr_1.2fr] gap-4">
             <Card title="Queue" sub="current served request">
               {data.queue?.current ? (
@@ -276,7 +260,6 @@ export default function DebugPanel() {
             </Card>
           </div>
 
-          {/* ── DJ SESSION ─────────────── */}
           {data.session && !data.session.error && (
             <Card
               title="DJ session"
@@ -291,7 +274,6 @@ export default function DebugPanel() {
             </Card>
           )}
 
-          {/* ── DJ LOG ─────────────────────────────────────── */}
           <Card title="DJ log" sub={`${data.queue?.djLogCount} total · last 30${data.timezone ? ` · times in ${data.timezone}` : ''}`}>
             <ScrollArea className="max-h-72">
               <div className="grid gap-1">
@@ -322,8 +304,3 @@ export default function DebugPanel() {
     </div>
   );
 }
-
-// Daily token budget meter (health-strip header). The ai-elements Context
-// ring shows today's spend against the cap on hover; the Pill mirrors the
-// controller's budgetMode() tier. No modelId/cost — self-hosted models have
-// no USD price. Renders nothing unless the cap is switched on.

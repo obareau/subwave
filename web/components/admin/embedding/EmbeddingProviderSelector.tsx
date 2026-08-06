@@ -1,20 +1,15 @@
 'use client';
-// Radio-card grid for picking the library tagger's embedding provider. Mirrors
-// the LLM ProviderSelector / TTS EngineSelector card grids. The provider is an
-// explicit choice — a blank stored value defaults to (and is shown as) the DJ's
-// provider by the parent, so there is no separate "Follow LLM" card. Reuses the
-// LLM provider descriptors and status logic — embedding providers are a subset
-// of the LLM list — so the blurbs and key badges stay in lockstep with the LLM
-// tab. Tailwind-only, no inline styles (issue #50).
+// Reuses the LLM provider descriptors and status logic (embedding providers are a
+// subset of the LLM list) so blurbs and key badges stay in lockstep with the LLM tab.
+// Tailwind-only, no inline styles (issue #50).
 import { cn } from '../../../lib/cn';
 import { PROVIDER_META, providerStatus, type ProviderStatus } from '../llm/providerMeta';
 
 interface EmbeddingProviderSelectorProps {
-  // Currently selected provider id. The parent resolves a blank stored value to
-  // the DJ's provider before passing it here, so one card is always active.
+  // The parent resolves a blank stored value to the DJ's provider before passing it
+  // here, so one card is always active.
   value: string;
-  // Embedding-capable provider ids to show as cards (SettingsResponse.embedding
-  // .providers, possibly with a stale explicit choice prepended).
+  // SettingsResponse.embedding.providers, possibly with a stale explicit choice prepended.
   providerIds: string[];
   // SettingsResponse.env — which cloud key vars are present; drives the badge.
   env?: Record<string, unknown>;
@@ -52,8 +47,6 @@ export function EmbeddingProviderSelector({
   );
 }
 
-// One selectable card — kept private to this file; the chrome is copied from the
-// LLM ProviderSelector so the two grids read identically.
 function ProviderCard({
   active,
   label,
@@ -80,7 +73,6 @@ function ProviderCard({
           : 'border-ink bg-transparent hover:bg-[var(--ink-softer)]',
       )}
     >
-      {/* Title row — dot + name only, full card width. */}
       <div className="flex items-center gap-1.5">
         <span
           className={cn(
@@ -97,7 +89,6 @@ function ProviderCard({
           {label}
         </span>
       </div>
-      {/* Bottom row — blurb on the left, status badge pinned bottom-right. */}
       <div className="flex items-end justify-between gap-2">
         <span className="min-w-0 text-[9px] leading-[1.4] text-muted">{blurb}</span>
         {status.label && (

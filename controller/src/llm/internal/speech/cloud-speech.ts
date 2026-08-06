@@ -1,11 +1,12 @@
-// Cloud TTS engine — generates a voice file via the AI SDK's speech models
-// (OpenAI or ElevenLabs). Sits behind tts.js as the `cloud` engine, peer to
+// Cloud TTS engine — generates a voice file through managed providers
+// (OpenAI, ElevenLabs, or Fish Audio). Sits behind tts.js as the `cloud` engine, peer to
 // the local `piper` and `kokoro` engines.
 //
 // The AI SDK has no provider for Piper or Kokoro (they're local CLIs), so
 // this only covers cloud voices — tts.js still owns the dispatch + fallback.
 
 import { generateSpeech } from 'ai';
+import type { FetchFunction } from '@ai-sdk/provider-utils';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createElevenLabs } from '@ai-sdk/elevenlabs';
 import { writeFile, mkdir } from 'node:fs/promises';
@@ -14,7 +15,9 @@ import crypto from 'node:crypto';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { transcodeAudio, hasFfmpeg } from '../../../audio/audio-import.js';
-import { isElevenLabsV3, snapV3Stability, soulBrief } from '../core/pure.js';
+import { compatParamsBody } from '../../../settings/compat-params.js';
+import { cloudExpressionCueFamily, isElevenLabsV3, snapV3Stability, soulBrief } from '../core/pure.js';
+import { FISH_DEFAULT_MODEL, synthesizeFish } from './fish-audio.js';
 
 // Default TTS model per cloud provider. A model id is provider-specific — an
 // OpenAI id like "gpt-4o-mini-tts" is invalid against ElevenLabs and vice
@@ -25,6 +28,7 @@ import { isElevenLabsV3, snapV3Stability, soulBrief } from '../core/pure.js';
 const CLOUD_DEFAULT_MODELS: Record<string, string> = {
   openai: 'gpt-4o-mini-tts',
   elevenlabs: 'eleven_flash_v2_5',
+  'fish-audio': FISH_DEFAULT_MODEL,
 };
 
 // Pure resolution rule for the cloud TTS model a persona will be voiced by,
@@ -40,6 +44,46 @@ const CLOUD_DEFAULT_MODELS: Record<string, string> = {
 // not voiced by cloud / unresolved — callers treat that as "don't apply
 // model-specific hints". Kept pure and unit-pinned in scripts/llm-pure.test.ts
 // so the "mirror of speak()" claim is testable rather than comment-enforced.
+// Managed legacy inline keys and authenticated compatibility-server bearers
+// occupy separate slots. That provider scoping lets a compat persona keep its
+// credential when the station-wide Cloud provider differs without forwarding
+// an OpenAI/ElevenLabs secret to an arbitrary URL. Fish stays env/secrets-only.
+export function sharedCloudApiKeyForRequest(
+  provider: string,
+  globalProvider: string,
+  inlineKey: string | null | undefined,
+  compatKey: string | null | undefined,
+): string {
+  if (provider === 'fish-audio') return '';
+  if (provider === 'openai-compatible') {
+    // Dedicated provider-scoped credential; the legacy slot is accepted only
+    // when compatibility is also the globally selected provider.
+    return compatKey || (globalProvider === 'openai-compatible' ? inlineKey || '' : '');
+  }
+  return provider === globalProvider ? inlineKey || '' : '';
+}
+
+export function modelForCloudRequest(
+  globalProvider: string,
+  globalModel: string,
+  override: { provider?: string; model?: string } | null | undefined,
+): string {
+  if (override?.model) return override.model;
+  if (override?.provider && override.provider !== globalProvider) {
+    return CLOUD_DEFAULT_MODELS[override.provider] || globalModel;
+  }
+  return globalModel;
+}
+
+export function resolveCloudProvider(
+  personaTts: { engine?: string; cloudProvider?: string } | null | undefined,
+  cfg: { defaultEngine?: string; provider?: string },
+): string {
+  const explicit = personaTts?.engine === 'cloud';
+  if (!explicit && (personaTts?.engine || cfg.defaultEngine !== 'cloud')) return '';
+  return (explicit ? personaTts?.cloudProvider : '') || cfg.provider || '';
+}
+
 export function resolveCloudModel(
   personaTts: { engine?: string; cloudProvider?: string } | null | undefined,
   cfg: { defaultEngine?: string; provider?: string; model?: string },
@@ -53,6 +97,10 @@ export function resolveCloudModel(
   return cfg.model || '';
 }
 
+type CloudPersona = {
+  tts?: { engine?: string; cloudProvider?: string };
+} | null | undefined;
+
 // The model `persona` actually resolves to at speak() time, or '' when the
 // persona won't be voiced by a usable cloud engine — NOT the raw global model
 // and NOT the persona's provider alone (issue #696). On top of the pure rule
@@ -61,7 +109,7 @@ export function resolveCloudModel(
 // as words, so report no model — and therefore no hint — in that case too.
 // Callers pass this into djSystem() so the DJ prompt layer can gate a hint on
 // what will actually speak.
-export function resolveCloudModelForPersona(persona: any): string {
+export function resolveCloudModelForPersona(persona: CloudPersona): string {
   const t: any = settings.get().tts || {};
   const model = resolveCloudModel(persona?.tts, {
     defaultEngine: t.defaultEngine,
@@ -74,12 +122,47 @@ export function resolveCloudModelForPersona(persona: any): string {
   return model;
 }
 
+// Provider twin of resolveCloudModelForPersona. Prompt policy uses this to
+// extend the existing sparse-bracket-cue architecture to Fish without ever
+// hinting a fallback local engine that would read the brackets aloud.
+export function resolveCloudProviderForPersona(persona: CloudPersona): string {
+  const t: any = settings.get().tts || {};
+  const provider = resolveCloudProvider(persona?.tts, {
+    defaultEngine: t.defaultEngine,
+    provider: t.cloud?.provider,
+  });
+  if (!provider) return '';
+  const explicit = persona?.tts?.engine === 'cloud';
+  if (!isConfigured(explicit ? persona?.tts?.cloudProvider || null : null)) return '';
+  return provider;
+}
+
+// Availability-independent twin for already-generated/queued speech. A script
+// can contain tags from when its provider was healthy even if the key or Cloud
+// switch changes before airtime; fallback sanitization must preserve that
+// original expressive provenance rather than re-evaluating current readiness.
+export function requestedCloudExpressionCueFamilyForPersona(persona: CloudPersona) {
+  const t = settings.get().tts || {};
+  return cloudExpressionCueFamily(
+    resolveCloudProvider(persona?.tts, {
+      defaultEngine: t.defaultEngine,
+      provider: t.cloud?.provider,
+    }),
+    resolveCloudModel(persona?.tts, {
+      defaultEngine: t.defaultEngine,
+      provider: t.cloud?.provider,
+      model: t.cloud?.model,
+    }),
+  );
+}
+
 // Speech-rate multiplier limits per provider. A value outside the supported
 // range makes the provider API reject the request, so we clamp before calling.
 // ElevenLabs allows 0.7–1.2; OpenAI allows 0.25–4.0.
 const SPEED_RANGE: Record<string, [number, number]> = {
   elevenlabs: [0.7, 1.2],
   openai: [0.25, 4.0],
+  'fish-audio': [0.5, 2.0],
 };
 
 function clampSpeed(speed: any, provider: string) {
@@ -154,6 +237,39 @@ function cloudCfg() {
   return settings.get().tts?.cloud || {};
 }
 
+// Merge the operator's extra body fields into the outgoing /audio/speech POST
+// (issue #1317). This has to happen at the fetch layer because the AI SDK's
+// OpenAI speech model builds a CLOSED body — `{model, input, voice,
+// response_format, speed, instructions}` and nothing else. Its
+// `providerOptions.openai` escape hatch is no use either: the schema accepts
+// only `instructions` + `speed`, and in @ai-sdk/openai 4.0.11 the merge loop
+// that would copy them into the body iterates an empty object, so nothing gets
+// through at all. Rewriting the serialized body is the one hook that works
+// without forking the provider.
+//
+// Everything here degrades to a pass-through rather than throwing: a param that
+// doesn't make it costs an un-tuned render, while an exception costs the whole
+// segment and drops the show to a local fallback voice. Extras are merged LAST
+// so the operator can also correct an SDK default (e.g. `response_format`);
+// the fields SUB/WAVE owns are reserved in settings/compat-params.ts.
+function compatBodyFetch(extras: Record<string, unknown>): FetchFunction | undefined {
+  if (!Object.keys(extras).length) return undefined;
+  return async (input, init) => {
+    const body = init?.body;
+    if (typeof body !== 'string') return fetch(input, init);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return fetch(input, init);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fetch(input, init);
+    // Re-stringify rather than patching the text: the body is small, and
+    // undici recomputes Content-Length for a string body on its own.
+    return fetch(input, { ...init, body: JSON.stringify({ ...parsed, ...extras }) });
+  };
+}
+
 function speechModel(c: any) {
   if (c.provider === 'elevenlabs') {
     const provider = createElevenLabs(c.apiKey ? { apiKey: c.apiKey } : {});
@@ -167,6 +283,9 @@ function speechModel(c: any) {
       baseURL: c.baseUrl,
       apiKey: c.apiKey || 'unused',
       name: 'openai-compatible',
+      // Undefined when the operator configured no extras, which keeps the
+      // request shape byte-identical to the pre-#1317 default station.
+      fetch: compatBodyFetch(compatParamsBody(c.compatParams)),
     });
     return provider.speech(c.model);
   }
@@ -201,10 +320,14 @@ export function isConfigured(providerOverride: string | null = null) {
   if (!model) return false;
   const envKey = provider === 'elevenlabs'
     ? process.env.ELEVENLABS_API_KEY
-    : process.env.OPENAI_API_KEY;
+    : provider === 'fish-audio'
+      ? process.env.FISH_API_KEY
+      : process.env.OPENAI_API_KEY;
   // A key typed into Settings only counts for the global provider it was
   // entered against — not for a persona that overrode to a different one.
-  const settingsKey = (!providerOverride || providerOverride === c.provider)
+  // Fish is deliberately env/secrets-only: the legacy shared cloud.apiKey slot
+  // may contain an OpenAI/ElevenLabs key and must never cross providers.
+  const settingsKey = provider !== 'fish-audio' && (!providerOverride || providerOverride === c.provider)
     ? c.apiKey
     : null;
   return !!(settingsKey || envKey);
@@ -217,24 +340,25 @@ export function isConfigured(providerOverride: string | null = null) {
 // provider + voice while still sharing the global model + apiKey from Settings.
 export async function speak(
   text: string,
-  { outPath, cloudOverride = null, speedScale, language, soul }: { outPath?: string; cloudOverride?: any; speedScale?: number; language?: string; soul?: string } = {},
+  { outPath, cloudOverride = null, speedScale, language, soul, signal }: { outPath?: string; cloudOverride?: any; speedScale?: number; language?: string; soul?: string; signal?: AbortSignal } = {},
 ) {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
   const base = cloudCfg();
   const c: any = { ...base, ...(cloudOverride || {}) };
-  // A model id is provider-specific. When a persona overrode the provider away
-  // from the global Cloud engine setting, the stored model belongs to the
-  // wrong provider — swap in the new provider's default. openai-compatible
-  // has no default (server-specific), so personas overriding *to* it must
-  // share whatever the operator typed as the global model.
-  if (cloudOverride?.provider && cloudOverride.provider !== base.provider) {
-    c.model = CLOUD_DEFAULT_MODELS[cloudOverride.provider] || c.model;
-  }
+  c.apiKey = sharedCloudApiKeyForRequest(
+    c.provider,
+    base.provider,
+    base.apiKey,
+    base.compatApiKey,
+  );
+  // A model id is provider-specific. Persona provider overrides use the new
+  // provider's default; previews may explicitly override that model so the
+  // operator auditions the exact unsaved tier/custom id.
+  c.model = modelForCloudRequest(base.provider, base.model, cloudOverride);
   // openai-compatible servers always need the global baseUrl from settings —
   // persona-level overrides only carry provider+voice.
   if (c.provider === 'openai-compatible') {
     c.baseUrl = base.baseUrl;
-    c.apiKey = base.apiKey;
   }
 
   // Speech rate — the per-call speedScale (daypart energy) composes on top of
@@ -279,6 +403,24 @@ export async function speak(
     }
     : null;
 
+  // Fish has its own managed REST contract rather than an AI SDK speech model:
+  // model is a required header, voice is `reference_id`, and MP3 bytes stream
+  // directly in the response. Keep it inside the existing cloud engine so all
+  // dispatcher fallback, preview, stats, gain, and queue behavior is reused.
+  if (c.provider === 'fish-audio') {
+    return synthesizeFish({
+      apiKey: process.env.FISH_API_KEY || '',
+      model: c.model || FISH_DEFAULT_MODEL,
+      text,
+      referenceId: c.voice,
+      temperature: c.temperature,
+      topP: c.topP,
+      latency: c.latency,
+      speed,
+      outPath,
+    }, { signal });
+  }
+
   const result = await generateSpeech({
     model: speechModel(c),
     text,
@@ -294,6 +436,7 @@ export async function speak(
     // `result.audio.format` below drives the file extension regardless.
     ...(isCompat ? {} : { outputFormat: c.provider === 'elevenlabs' ? 'mp3' : 'wav' }),
     ...(elevenlabsOpts ? { providerOptions: elevenlabsOpts } : {}),
+    abortSignal: signal,
   });
 
   const audio = Buffer.from(result.audio.uint8Array);

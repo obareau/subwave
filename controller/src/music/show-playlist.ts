@@ -94,6 +94,25 @@ export async function resolveShowPlaylistPool(show: any): Promise<PlaylistPool |
 // `playlist:${id}` memo key as resolveShowPlaylistPool — it's the identical
 // getPlaylist fetch, so a playlist used as both anchor and blocklist is fetched
 // once, not twice.
+// Resolve a list of playlist ids into per-playlist member-id sets — the
+// blocklist's `playlist` rules read these (music/blocklist.ts keeps them in
+// module state so matchOf stays synchronous). Shares the `playlist:${id}` memo
+// with the anchor/excluded resolvers above, so a playlist used as anchor and
+// rule is fetched once. A failed id is simply absent from the map (stale ids
+// inert), warned once per fetch attempt.
+export async function resolvePlaylistMemberSets(ids: string[]): Promise<Map<string, Set<string>>> {
+  const out = new Map<string, Set<string>>();
+  for (const id of [...new Set(ids.filter(Boolean))]) {
+    try {
+      const songs = await memoFetch(`playlist:${id}`, () => subsonic.getPlaylist(id));
+      out.set(id, new Set((songs || []).map((t: any) => t?.id).filter(Boolean)));
+    } catch (err) {
+      console.warn(`[show-playlist] rule playlist ${id} failed to resolve: ${(err as Error)?.message}`);
+    }
+  }
+  return out;
+}
+
 export async function resolveExcludedPlaylistIds(show: any): Promise<Set<string> | null> {
   const ids = Array.isArray(show?.excludedPlaylistIds) ? show.excludedPlaylistIds.filter(Boolean) : [];
   if (!ids.length) return null;

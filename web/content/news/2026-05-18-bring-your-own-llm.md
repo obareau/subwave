@@ -14,13 +14,13 @@ Fresh installs talk to a local [Ollama](https://ollama.com) box. It needs no API
 
 ## How to switch
 
-Open admin, go to the LLM settings, and pick a provider:
+Open admin, go to the [LLM settings](/manual/llm), and pick a provider:
 
 - Ollama (local, the default)
 - Any OpenAI-compatible server (llama.cpp, vLLM, LM Studio) by pasting its base URL
 - OpenAI, Anthropic, Google, DeepSeek, OpenRouter, or the Vercel AI Gateway
 
-Drop in a model name and an API key if the provider needs one, then save. That's it. Every call the DJ makes reroutes to the new model immediately, whether that's picking the next track, writing an intro, or matching a request. No rebuild, no restart, no code change.
+Drop in a model name and an API key if the provider needs one, then save. That's it. (Running GGUF models through locca? It gets [first-class treatment of its own](/news/run-on-locca).) Every call the DJ makes reroutes to the new model immediately, whether that's picking the next track, writing an intro, or matching a request. No rebuild, no restart, no code change.
 
 ## Why it matters
 

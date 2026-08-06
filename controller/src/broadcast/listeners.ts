@@ -28,7 +28,8 @@ import { config } from '../config.js';
 import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
-let lastCount: number | null = null;        // null = unknown (not yet polled, or Icecast down)
+let lastCount: number | null = null;        // null = unknown (not yet polled, or this poll failed)
+let lastGoodCount: number | null = null;    // last count actually read from Icecast; null until the first success
 let peakSeen = 0;                            // running max of the deduped count this process run
 let consecutiveStatusFailures = 0;          // resets to 0 on every successful poll
 
@@ -58,12 +59,30 @@ let lastStatus: StreamStatus = {
 };
 
 // How many *consecutive* failed status polls before we stop trusting the last
-// known `online` and report the broadcast as offline. Below this we hold the
-// last good status so a transient stats-endpoint timeout never tears down a
-// healthy listener (issue #461); at or above it a genuinely unreachable Icecast
-// still surfaces as offline instead of being pinned "online" forever. 4 polls
-// × 15s ≈ 1 min of sustained failure.
+// reading — both the cached `online` status and the gated count below. Under
+// the limit we hold the last known values so a transient stats-endpoint timeout
+// never tears down a healthy listener (issue #461) nor releases the idle pause
+// (issue #1256); at or above it a genuinely unreachable Icecast still surfaces
+// as offline / unknown instead of being pinned forever. 4 polls ≈ 1 min of
+// sustained failure at the monitor's 15s cadence, ≈20s while the idle monitor
+// is forcing its own 5s polls — both comfortably past a single blip, and the
+// faster reading while idle is the right way round: an unobservable stream
+// should resume sooner, not later.
 const STALE_STATUS_LIMIT = 4;
+
+// Deadline on the Icecast status fetch. Raised from 1500ms once the poll became
+// single-flighted (below): the old figure was chosen when three cadences could
+// each have a request in flight at once, where a longer deadline meant a deeper
+// pile-up. Coalescing removes that objection, and 1500ms was measurably tight —
+// #1256's reporter logged hundreds of AbortErrors per empty-room hour against an
+// Icecast that direct curls never took near a second to answer, with the
+// analysis pass (which only runs when the room IS empty) the likeliest source of
+// the host pressure that reached it. Attacking the failure rate is strictly
+// better than widening STALE_STATUS_LIMIT to absorb more failures: the limit is
+// shared with the #461 offline-detection contract, which should NOT get slower.
+// Still comfortably inside the idle monitor's 5s tick, so the ~20s fail-open
+// budget while paused is unchanged.
+const STATUS_TIMEOUT_MS = 3000;
 
 // Next cached status after a status-fetch failure. Pure (no I/O) so the
 // transient-vs-sustained branching is unit-tested in isolation
@@ -85,6 +104,27 @@ export function statusAfterFailure(
   return { ...prev, listeners: { ...prev.listeners, peak } };
 }
 
+// Pure: the count the fail-open gates should act on. Same transient-vs-sustained
+// split as statusAfterFailure above, applied to the number instead of the status
+// (scripts/listeners-status.test.ts pins both).
+//   • poll succeeded: that reading, always.
+//   • transient failure (< limit): the last reading actually read from Icecast.
+//     A failed fetch is not an observation — it says nothing about the room, so
+//     the freshest real observation is strictly better information than "unknown".
+//   • sustained failure (≥ limit): null. Icecast really is unreadable, and the
+//     gates' documented fail-open kicks in.
+//   • never polled: null (lastGood is null) — honest, and unchanged from before.
+export function gatedCount(
+  raw: number | null,
+  lastGood: number | null,
+  consecutiveFailures: number,
+  limit: number,
+): number | null {
+  if (raw !== null) return raw;
+  if (consecutiveFailures >= limit) return null;
+  return lastGood;
+}
+
 // Time-series file. JSONL of {t, count} rows, one per persisted sample.
 // We persist every minute (not every 15s poll) — keeps the file at ~1440
 // rows/day, easily tail-readable, and that resolution is plenty for the
@@ -103,14 +143,39 @@ function audioParam(src: any, key: 'samplerate' | 'channels'): number | null {
   return m ? Number(m[1]) : null;
 }
 
-async function fetchCount(persistHistory = true) {
+// Coalesce overlapping polls into one in-flight run. Pure mechanism (no I/O),
+// exported so the join/settle/re-arm behaviour is unit-pinned
+// (scripts/listeners-status.test.ts).
+export function singleFlight<T>(run: () => Promise<T>): () => Promise<T> {
+  let inFlight: Promise<T> | null = null;
+  return () => {
+    inFlight ??= run().finally(() => { inFlight = null; });
+    return inFlight;
+  };
+}
+
+// The poll, single-flighted. pollCount() commits module state
+// (lastCount/lastGoodCount/consecutiveStatusFailures/lastStatus) and is driven
+// from three cadences at once — the 15s monitor interval, the idle monitor's
+// forced 5s refresh (stream-idle.ts), and POST /request's on-demand refresh().
+// The two commit points are a whole STATUS_TIMEOUT_MS apart (the failure path
+// waits out the fetch timeout), so without the guard a slow doomed poll could
+// land AFTER a younger
+// successful one and overwrite its fresh state — a phantom blip on the raw
+// readers and a "consecutive" failure count that isn't. Joining the poll
+// already in flight keeps every caller's freshness contract (the answer is at
+// most one timeout old — refresh() callers included) and stops the idle window
+// double-polling Icecast when the 5s and 15s timers collide.
+const fetchCount = singleFlight(() => pollCount(true));
+
+async function pollCount(persistHistory: boolean) {
   let online = false;
   let bitrate: number | null = null;
   let sampleRate: number | null = null;
   let channels: number | null = null;
   let rawCount = 0; // un-deduped status sum — the fallback when admin is unreachable
   try {
-    const r = await fetchWithTimeout(config.icecast.statusUrl, { timeoutMs: 1500 });
+    const r = await fetchWithTimeout(config.icecast.statusUrl, { timeoutMs: STATUS_TIMEOUT_MS });
     const ic = ((await r.json()) as any)?.icestats;
     const sources = Array.isArray(ic?.source) ? ic.source : ic?.source ? [ic.source] : [];
     // Only our two broadcast mounts count. Anything else (e.g. an /admin
@@ -149,6 +214,7 @@ async function fetchCount(persistHistory = true) {
     }
 
     lastCount = current;
+    lastGoodCount = current;
     peakSeen = Math.max(peakSeen, current);
     lastStatus = { online, listeners: { current, peak: peakSeen }, bitrate, sampleRate, channels };
     consecutiveStatusFailures = 0;
@@ -177,9 +243,32 @@ async function fetchCount(persistHistory = true) {
   return lastCount;
 }
 
-// Last known listener count — a number, or null when it couldn't be read.
+// Last known listener count — a number, or null when it couldn't be read. The
+// RAW poll result: one failed fetch shows up here as null. Reporting surfaces
+// (admin table, DJ context) want exactly that. Decision-making code does not —
+// see gatedListenerCount().
 export function getListenerCount() {
   return lastCount;
+}
+
+// The count the fail-open gates act on: the last reading actually read from
+// Icecast, held through transient poll failures and only reported unknown once
+// failures reach STALE_STATUS_LIMIT (see gatedCount above).
+//
+// This is what djCallsAllowed() and the idle monitor (stream-idle.ts) must read
+// — never the raw lastCount. Issue #1256: both gates fail OPEN on null, so with
+// the raw count a SINGLE 1.5s fetch timeout was enough to release the idle pause
+// and reopen the LLM gate. The idle monitor forces a poll every 5s while paused
+// (~120 per 10-minute pause), so a sub-1% failure rate fired inside nearly every
+// pause window: the programme paused, resumed ~28s later, and the power save was
+// inactive ~95% of the time it should have been active.
+//
+// The fail-open doctrine is unchanged — a genuinely unreachable Icecast still
+// reads null and still resumes/keeps the DJ on air. Only the definition of
+// "unreachable" tightened, from one blip to sustained failure, matching the
+// hysteresis the cached status has had since #461.
+export function gatedListenerCount(): number | null {
+  return gatedCount(lastCount, lastGoodCount, consecutiveStatusFailures, STALE_STATUS_LIMIT);
 }
 
 // Fail-closed presence check: the listener count when it is known and > 0,
@@ -187,6 +276,11 @@ export function getListenerCount() {
 // side effects (scrobbles, gated track.play webhooks) — an unknown count
 // must never fire to an empty room. Contrast djCallsAllowed() below, which
 // deliberately fails OPEN so a stats outage can't take the DJ off the air.
+//
+// Deliberately reads the RAW count, not the gated one: failing closed means a
+// blip costs at most one skipped scrobble, which is the safe direction and
+// needs no hysteresis to protect it. The two gates below fail open, which is
+// why they need it. Don't "unify" these onto one reading.
 export function presentListeners(): number | null {
   return typeof lastCount === 'number' && Number.isFinite(lastCount) && lastCount > 0
     ? lastCount
@@ -210,8 +304,23 @@ export async function refresh() {
 // monitor loop. Same status fetch + Safari dedupe as the monitor, but skips
 // the history append: the server process already persists one row per minute,
 // and a second writer would stripe duplicate rows into the sparkline JSONL.
+// Calls pollCount directly, bypassing the single-flight guard: the child has
+// no concurrent pollers to coalesce with, and joining would silently drop the
+// skip-history flag.
+//
+// Returns the GATED count, not pollCount's raw result. The quiet gate
+// (music/analyze-quiet-pure.ts) is the THIRD fail-open-on-unknown reader in the
+// codebase, and it needs the same hysteresis as the other two for the same
+// reason (#1256) — its fail-open direction is the opposite one, so a single
+// blip here starts a heavy DSP pass while somebody is listening rather than
+// releasing a pause. The child's own module state carries the hysteresis: it
+// polls once per track (or every 30s while waiting out the window), so
+// consecutive failures accumulate across calls exactly as they do in the
+// monitor loop, and the first call still reads unknown because lastGoodCount
+// is null — boot behaviour is unchanged.
 export async function probeListenerCount(): Promise<number | null> {
-  return fetchCount(false);
+  await pollCount(false);
+  return gatedListenerCount();
 }
 
 // Set by broadcast/stream-idle.ts (via setStreamIdle) while the programme is
@@ -223,14 +332,16 @@ export function setStreamIdle(v: boolean) {
   streamIdle = v;
 }
 
-export function isStreamIdle() {
-  return streamIdle;
-}
-
 // True when autonomous DJ LLM work is allowed right now. When the pause toggle
 // is off, always true. When on, allowed only if at least one listener is
 // counted — an unknown count (Icecast unreachable) is treated as occupied so a
 // stats outage can never take the DJ off the air.
+//
+// Reads gatedListenerCount(), so "unknown" means sustained failure rather than
+// one timed-out poll (#1256). This also gates POST /request, which forces a
+// fresh poll first: under a real outage that poll's failures reach the limit
+// and requests are accepted exactly as before, so only a single blip — where
+// the held reading is seconds old and accurate — now decides differently.
 //
 // An idle-paused stream blocks DJ calls regardless of the LLM toggle: the
 // voice queues aren't being pulled while the idle gate is up, so any WAV
@@ -238,13 +349,38 @@ export function isStreamIdle() {
 export function djCallsAllowed() {
   if (streamIdle) return false;
   if (!settings.get()?.llm?.pauseWhenEmpty) return true;
-  if (lastCount === null) return true;
-  return lastCount > 0;
+  const count = gatedListenerCount();
+  if (count === null) return true;
+  return count > 0;
 }
 
-export function startListenerMonitor() {
-  fetchCount();
+// How long boot waits on the first poll before giving up and starting anyway.
+// Bounds the worst case (a wedged admin endpoint costs 2s per mount on top of
+// the status fetch) — the reading is a nicety, never a boot dependency.
+//
+// Derived from STATUS_TIMEOUT_MS rather than written as a flat number: the wait
+// only buys anything if it outlasts one failing status fetch, so a deadline
+// raised past a hardcoded wait would silently give up before every slow poll
+// and hand back the "never polled" fail-open this exists to close. A cold
+// `compose up` is unaffected either way — Icecast isn't listening yet, so the
+// connection is refused immediately rather than timing out.
+const FIRST_POLL_WAIT_MS = STATUS_TIMEOUT_MS + 500;
+
+// Starts the 15s monitor loop. The returned promise settles once the FIRST poll
+// has landed (or FIRST_POLL_WAIT_MS has passed), so boot can take one reading
+// before the queue watcher is able to dispatch a pick: "never polled" and "poll
+// failed" both read as unknown, and an unknown count fails open, which used to
+// buy the DJ one free agent pick on every controller restart (#1256). Only
+// helps when Icecast is already up — on a cold `compose up` the broadcast
+// container isn't serving yet, the poll fails, and the gate fails open as
+// designed.
+export function startListenerMonitor(): Promise<void> {
+  const first = fetchCount().then(() => {}, () => {});
   setInterval(fetchCount, 15000);
+  return Promise.race([
+    first,
+    new Promise<void>(resolve => setTimeout(resolve, FIRST_POLL_WAIT_MS).unref()),
+  ]);
 }
 
 // Read the recent listener history for the admin sparkline. Returns rows

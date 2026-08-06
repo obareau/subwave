@@ -3,13 +3,10 @@
 import { useCallback, useState } from 'react';
 import { useAdminAuth } from '@/lib/adminAuth';
 
-// Shape of every wizard step in one place — easier to pass around than
-// individual setState callbacks. Each step component reads/writes via the
-// `set` updater rather than its own state, so the Review step can show the
-// whole picture without prop-drilling.
+// Every step reads and writes through the `set` updater rather than its own
+// state, so the Review step can show the whole picture without prop-drilling.
 export interface WizardData {
   navidrome: { url: string; user: string; pass: string };
-  // Connection-test result so the step can show a green check across renders.
   navidromeTest: { ok: boolean | null; msg?: string };
 
   llm: {
@@ -23,31 +20,27 @@ export interface WizardData {
 
   tts: {
     defaultEngine: 'piper' | 'kokoro' | 'cloud' | 'chatterbox' | 'pocket-tts' | 'remote';
-    // Advisory toggle — does the operator intend to run the optional
-    // tts-heavy sidecar (Chatterbox + PocketTTS)? Persisted via
-    // /onboarding/save into settings.tts.heavyEnabled. The web wizard can't
-    // start the sidecar itself; this just captures the intent and shows the
-    // copy-paste docker commands. The CLI setup writes COMPOSE_PROFILES into
-    // .env when its equivalent prompt is answered yes.
+    // Advisory only: the web wizard can't start the tts-heavy sidecar, so this
+    // captures intent (persisted to settings.tts.heavyEnabled) and shows the
+    // copy-paste docker commands. The CLI setup writes COMPOSE_PROFILES to .env.
     heavyEnabled: boolean;
-    cloud: { enabled: boolean; provider: string; apiKey: string };
+    cloud: { enabled: boolean; provider: string; apiKey: string; model: string; voice: string };
   };
 
   dj: {
     stationName: string;
     locationName: string;
-    // Weather coordinates — strings since they back text inputs; parsed +
-    // range-checked by the controller's settings.update() on save.
+    // Strings because they back text inputs; parsed and range-checked by the
+    // controller's settings.update() on save.
     lat: string;
     lng: string;
-    // IANA zone, auto-filled when a city is picked in the location step. '' =
-    // Auto (server zone), matching the admin sentinel.
+    // IANA zone. '' = Auto (server zone), matching the admin sentinel.
     timezone: string;
     frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
   };
 
-  // The wizard's "API keys" bucket — anything destined for state/secrets.env.
-  // Keyed by env-var name to match the controller's allow list.
+  // Destined for state/secrets.env, keyed by env-var name to match the
+  // controller's allow list.
   apiKeys: Record<string, string>;
 }
 
@@ -56,9 +49,8 @@ export const DEFAULT_DATA: WizardData = {
   navidromeTest: { ok: null },
   llm: {
     provider: 'ollama',
-    // Default to Ollama's hosted "cloud" model — works out of the box with
-    // a stock Ollama install (no local pull needed) and matches the model
-    // shipped in the terminal wizard's defaults.
+    // Ollama's hosted "cloud" model works with a stock install (no local pull)
+    // and matches the terminal wizard's default.
     model: 'glm-5.1:cloud',
     apiKey: '',
     baseUrl: '',
@@ -68,7 +60,7 @@ export const DEFAULT_DATA: WizardData = {
   tts: {
     defaultEngine: 'piper',
     heavyEnabled: false,
-    cloud: { enabled: false, provider: 'openai', apiKey: '' },
+    cloud: { enabled: false, provider: 'openai', apiKey: '', model: 's2.1-pro', voice: '' },
   },
   dj: {
     stationName: 'SUB/WAVE',
@@ -94,10 +86,9 @@ export const STEP_LABELS: Record<StepId, string> = {
   review: 'Review',
 };
 
-// Turn a thrown fetch failure into a human-readable pill message. AbortSignal
-// timeouts reject with a TimeoutError; everything else (connection refused,
-// DNS, CORS/TLS) is a bare "Failed to fetch" that means nothing to an operator
-// — so we point them at the real culprit: reaching the controller.
+// AbortSignal timeouts reject with a TimeoutError; everything else (connection
+// refused, DNS, CORS/TLS) is a bare "Failed to fetch" that means nothing to an
+// operator, so point them at the real culprit: reaching the controller.
 function fetchErrorMsg(err: unknown): string {
   if (err instanceof DOMException && err.name === 'TimeoutError') {
     return 'timed out — the controller did not respond';
@@ -126,15 +117,14 @@ export function useWizard() {
     });
   }, []);
 
-  // POST helpers — every wizard write goes through adminFetch so the same
-  // 401-handling that the admin shell uses applies here. Both test helpers
-  // catch their own failures into the result pill: a rejected/timed-out
-  // browser→controller fetch must surface as a red pill, never as an
+  // Every wizard write goes through adminFetch for the admin shell's
+  // 401-handling. Both test helpers catch their own failures into the result
+  // pill: a rejected or timed-out fetch must surface as a red pill, never as an
   // unhandled throw that wedges the button on "Testing…" (issue #682).
   const testNavidrome = useCallback(async () => {
-    // The browser→controller hop has no default timeout; without one a request
-    // that never gets a response leaves the button stuck forever. 15s clears
-    // the 5s server-side Subsonic probe with margin.
+    // The browser→controller hop has no default timeout, so a request that
+    // never answers wedges the button. 15s clears the 5s server-side Subsonic
+    // probe with margin.
     try {
       const r = await auth.adminFetch('/onboarding/test-navidrome', {
         method: 'POST',
@@ -154,9 +144,8 @@ export function useWizard() {
   }, [auth, data.navidrome, patch]);
 
   const testLlm = useCallback(async () => {
-    // 60s client cap sits just above the controller's 45s generateText abort,
-    // so a slow/unreachable model surfaces the server's error rather than a
-    // bare client timeout — and the button can never hang forever.
+    // 60s sits just above the controller's 45s generateText abort, so a slow
+    // model surfaces the server's error rather than a bare client timeout.
     try {
       const r = await auth.adminFetch('/onboarding/test-llm', {
         method: 'POST',
@@ -175,9 +164,8 @@ export function useWizard() {
     }
   }, [auth, data.llm, patch]);
 
-  // Probe a locca / openai-compatible server for its loaded model list so the
-  // operator can pick the model instead of typing it. Uses data.llm.baseUrl
-  // when set; otherwise the controller defaults to the locca host URL.
+  // Uses data.llm.baseUrl when set; otherwise the controller defaults to the
+  // locca host URL.
   const discoverLocca = useCallback(async () => {
     const qs = data.llm.baseUrl ? `?baseUrl=${encodeURIComponent(data.llm.baseUrl)}` : '';
     const r = await auth.adminFetch(`/settings/llm/discover${qs}`);
@@ -190,7 +178,6 @@ export function useWizard() {
   }, [auth, data.llm.baseUrl]);
 
   const save = useCallback(async () => {
-    // Stitch the apiKeys into the right env-var keys before sending.
     const apiKeys: Record<string, string> = { ...data.apiKeys };
     if (data.llm.apiKey) {
       const k =
@@ -206,8 +193,21 @@ export function useWizard() {
     if (data.tts.cloud.enabled && data.tts.cloud.apiKey) {
       const k =
         data.tts.cloud.provider === 'openai' ? 'OPENAI_API_KEY' :
-        data.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : '';
+        data.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' :
+        data.tts.cloud.provider === 'fish-audio' ? 'FISH_API_KEY' : '';
       if (k) apiKeys[k] = data.tts.cloud.apiKey;
+    }
+    if (data.tts.cloud.enabled && data.tts.cloud.provider === 'fish-audio') {
+      // The key may already come from the root environment, so only validate
+      // fields the wizard itself must persist for a usable Fish request.
+      const model = data.tts.cloud.model.trim();
+      const voice = data.tts.cloud.voice.trim();
+      if (!model || model.length > 100 || /[\r\n]/.test(model)) {
+        return { ok: false, error: 'Fish Audio model id must be 1–100 characters with no line breaks.' };
+      }
+      if (!voice || voice.length > 100 || /[\r\n]/.test(voice)) {
+        return { ok: false, error: 'Fish Audio voice reference id must be 1–100 characters with no line breaks.' };
+      }
     }
 
     const body = {
@@ -215,8 +215,8 @@ export function useWizard() {
       llm: {
         provider: data.llm.provider,
         model: data.llm.model,
-        // Cloud keys go to apiKeys (state/secrets.env). settings.json keeps
-        // only the provider/model/url; never the key.
+        // Cloud keys go to apiKeys (state/secrets.env); settings.json keeps only
+        // the provider/model/url, never the key.
         apiKey: '',
         baseUrl: data.llm.baseUrl,
         ollamaUrl: data.llm.ollamaUrl,
@@ -225,12 +225,18 @@ export function useWizard() {
         defaultEngine: data.tts.defaultEngine,
         heavyEnabled: data.tts.heavyEnabled,
         cloud: data.tts.cloud.enabled
-          ? { enabled: true, provider: data.tts.cloud.provider }
+          ? {
+            enabled: true,
+            provider: data.tts.cloud.provider,
+            ...(data.tts.cloud.provider === 'fish-audio'
+              ? { model: data.tts.cloud.model.trim(), voice: data.tts.cloud.voice.trim() }
+              : {}),
+          }
           : { enabled: false },
       },
       weather: { locationName: data.dj.locationName, lat: data.dj.lat, lng: data.dj.lng },
       station: data.dj.stationName,
-      // '' = Auto; only sent so a picked city's zone reaches settings.update().
+      // '' = Auto; sent so a picked city's zone reaches settings.update().
       timezone: data.dj.timezone,
       apiKeys,
     };

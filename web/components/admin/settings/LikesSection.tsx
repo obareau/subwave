@@ -1,7 +1,7 @@
 'use client';
 
-// Listener likes (#991) — the heart button's operator controls: on/off, the
-// Navidrome star write-back, and whether the leaderboard steers the AI DJ.
+// Listener likes (#991): on/off, the Navidrome star write-back, and whether the
+// leaderboard steers the AI DJ.
 
 import type { ChangeEvent } from 'react';
 import { Input } from '../../ui/input';
@@ -36,11 +36,13 @@ export function LikesSection({ data, form, setForm, busy, saveSettings }: Sectio
         eyebrow="likes"
         title="The heart button: listeners tag tracks they love."
         sub={<>
-          One tap on the player likes the track on air: it lands in the Dash
-          Likes card, optionally as a star in Navidrome (so it shows up in any
-          Subsonic client&apos;s Starred view), and optionally as a preference
+          One tap on the player likes the track on air: it lands in Library →
+          Tracks → Liked, optionally as a star in Navidrome (so it shows up in
+          any Subsonic client&apos;s Starred view), and optionally as a preference
           signal for the AI DJ. No listener accounts. Duplicates are folded
           per airing by a hashed connection key; the raw IP is never stored.
+          You can heart tracks yourself from any library row — your own heart
+          never expires from the DJ influence window below.
         </>}
         metrics={[
           { n: saved.enabled === false ? 'off' : 'on', l: 'heart button', accent: saved.enabled !== false },
@@ -80,8 +82,10 @@ export function LikesSection({ data, form, setForm, busy, saveSettings }: Sectio
             <div className="field-hint">
               When on, every liked track is starred in Navidrome via the Subsonic
               API: one shared &quot;station favourites&quot; list any Subsonic client can
-              see and build playlists from. Removing likes here never unstars;
-              Navidrome stays the source of truth for its own stars.
+              see and build playlists from. Clearing likes never unstars;
+              Navidrome stays the source of truth for its own stars. The one
+              exception is un-hearting your own like in the library when no
+              other likes remain — that toggles the star back off.
             </div>
           </div>
         </div>

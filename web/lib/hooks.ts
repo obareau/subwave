@@ -3,10 +3,9 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { isIOSDevice } from './platform';
 
-// SSR-safe iOS flag. Returns false on the server and the first client render
-// (so server and client markup agree and hydration stays clean), then flips to
-// the real value after mount. Components use this to branch UI that can't work
-// on iOS (e.g. the volume slider — issue #298) without a hydration mismatch.
+// SSR-safe iOS flag: false on the server and the first client render (so the
+// markup agrees and hydration stays clean), then the real value after mount.
+// Lets components branch UI that can't work on iOS (issue #298) safely.
 export function useIsIOS(): boolean {
   const [ios, setIos] = useState(false);
   useEffect(() => { setIos(isIOSDevice()); }, []);
@@ -26,8 +25,8 @@ export function useClock(): Date | null {
 export interface Analyser {
   ready: boolean;
   read: () => Uint8Array<ArrayBuffer> | null;
-  /** AudioContext sample rate in Hz — null until the graph exists. Callers
-   *  mapping bins to frequencies need it (44.1k vs 48k shifts every bin). */
+  /** Null until the graph exists. Callers mapping bins to frequencies need it:
+   *  44.1k vs 48k shifts every bin. */
   sampleRate: number | null;
 }
 
@@ -43,14 +42,12 @@ interface ElementAudioGraph {
 }
 
 // One Web Audio graph per media element, for the lifetime of the page.
-// createMediaElementSource permanently captures the element's output (a
-// second call throws, and tearing the graph down would mute playback), and
-// skins now mount and unmount visualisers against the same shared <audio>
-// element — so a later hook instance must REUSE the first one's graph. This
-// is what keeps real spectrum data flowing after a skin switch instead of
-// every subsequent visualiser falling back to the pseudo-random walk, and
-// stops each remount from leaking a fresh AudioContext on the failed
-// re-capture.
+// createMediaElementSource permanently captures the element's output (a second
+// call throws, and tearing the graph down would mute playback), and skins mount
+// and unmount visualisers against the same shared <audio>, so a later hook
+// instance must REUSE the first one's graph. Otherwise every visualiser after a
+// skin switch falls back to the pseudo-random walk, and each remount leaks a
+// fresh AudioContext on the failed re-capture.
 const ELEMENT_GRAPHS = new WeakMap<HTMLMediaElement, ElementAudioGraph>();
 
 /** Existing graph for the element, or a freshly built one. Returns null when
@@ -66,15 +63,12 @@ function getOrCreateElementGraph(audioEl: HTMLMediaElement): ElementAudioGraph |
   try {
     const source = ctx.createMediaElementSource(audioEl);
     const analyser = ctx.createAnalyser();
-    // 4096-point FFT (2048 bins). The Waveform's log-frequency sweep
-    // needs low-end resolution — at 1024 the bins were ~47 Hz wide, so
-    // the sweep's bottom octave (a dozen bars) read one bin and moved as
-    // a single block. ~12 Hz bins plus the Waveform's interpolation give
-    // every bar a distinct value; 2048 bins per paint is still trivial.
+    // 4096-point FFT (2048 bins). The Waveform's log-frequency sweep needs
+    // low-end resolution: at 1024 the bins were ~47 Hz wide, so the bottom
+    // octave read one bin and moved as a single block.
     analyser.fftSize = 4096;
-    // Light smoothing only: the old 0.78 stacked on the spans' 60 ms CSS
-    // transitions left bars trailing the beat by ~100 ms. The canvas
-    // renderer has no second smoothing layer, so this is the whole lag.
+    // Light smoothing only: 0.78 stacked on the spans' 60ms CSS transitions
+    // left bars trailing the beat by ~100ms. This is the only smoothing layer.
     analyser.smoothingTimeConstant = 0.7;
     source.connect(analyser);
     analyser.connect(ctx.destination);
@@ -82,24 +76,20 @@ function getOrCreateElementGraph(audioEl: HTMLMediaElement): ElementAudioGraph |
     ELEMENT_GRAPHS.set(audioEl, graph);
     return graph;
   } catch (err) {
-    // Capture failed (element claimed outside this hook) — don't leave an
-    // idle AudioContext behind on every attempt.
+    // Capture failed (element claimed outside this hook). Don't leave an idle
+    // AudioContext behind on every attempt.
     void ctx.close().catch(() => {});
     throw err;
   }
 }
 
-// Web Audio analyser hook — wires an AnalyserNode to the given <audio> ref
-// the first time `active` flips true, then writes per-frame frequency bytes
-// into an internal ref read via `read()`. Returns `{ ready, read, sampleRate }`.
+// Wires an AnalyserNode to the <audio> ref the first time `active` flips true.
 // If CORS or anything else blocks attachment, `ready` stays false and `read()`
-// returns null — the Waveform falls back to its pseudo-random walk.
+// returns null, and the Waveform falls back to its pseudo-random walk.
 //
 // iOS is opted out entirely: createMediaElementSource on a live MP3 stream only
-// ever yields zeros there, and merely routing the element through Web Audio
-// jeopardises lock-screen / background playback. So on iOS we never build the
-// graph — the element stays a bare <audio> and the Waveform's pseudo-random
-// fallback drives the bars (issue #298).
+// ever yields zeros there, and routing the element through Web Audio
+// jeopardises lock-screen / background playback (issue #298).
 export function useAnalyser(
   audioRef: RefObject<HTMLAudioElement | null> | null | undefined,
   active: boolean,
@@ -109,8 +99,7 @@ export function useAnalyser(
   const probedRef = useRef(false);
   const [ready, setReadyState] = useState(false);
   const [sampleRate, setSampleRate] = useState<number | null>(null);
-  // Mirror of `ready` read by the stable `read` callback below — keeping it in
-  // a ref means `read`'s identity never changes, so the caller's rAF effect
+  // In a ref so `read`'s identity never changes, and the caller's rAF effect
   // doesn't tear down and restart on every render.
   const readyRef = useRef(false);
   const setReady = useCallback((v: boolean) => {
@@ -137,10 +126,9 @@ export function useAnalyser(
         if (cancelled) return;
         setReady(true);
 
-        // Some non-iOS WebKit builds (e.g. desktop Safari on a live MP3 mount)
-        // also wire the graph up but only ever return zeros. Probe once after
-        // playback starts — if no samples land in ~600 ms, flip ready=false so
-        // the pseudo-random walk fallback takes over.
+        // Some non-iOS WebKit builds (desktop Safari on a live MP3 mount) wire
+        // the graph up but only ever return zeros. Probe once after playback
+        // starts; no samples in ~600ms means fall back.
         if (probedRef.current) return;
         onPlaying = () => {
           if (probedRef.current || cancelled) return;
@@ -165,10 +153,9 @@ export function useAnalyser(
               if (probeInterval) clearInterval(probeInterval);
               probeInterval = null;
               if (max === 0) {
-                // No usable data. Fall back to the pseudo-random walk, but
-                // DON'T disconnect — the source feeds the speakers through this
-                // graph, so tearing it down would mute playback. An idle
-                // analyser in the chain is transparent.
+                // No usable data. Fall back, but DON'T disconnect: the source
+                // feeds the speakers through this graph, so tearing it down
+                // mutes playback. An idle analyser in the chain is transparent.
                 setReady(false);
               }
             }

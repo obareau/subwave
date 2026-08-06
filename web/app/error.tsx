@@ -6,20 +6,16 @@ import Link from 'next/link';
 import Masthead from '@/components/landing/Masthead';
 import StationFooter from '@/components/landing/StationFooter';
 
-// Site-wide error boundary. Wraps every page and nested layout below the root
-// layout; a throw in the root layout itself falls through to global-error.tsx.
+// Site-wide error boundary, below the root layout; a throw in the root layout
+// itself falls through to global-error.tsx. Most failures here are data
+// failures (the public pages read the controller or the community catalog at
+// request time), so the recovery path has to actually re-fetch.
 //
-// Most failures here are data failures rather than code failures: the public
-// pages read the local controller or the community catalog at request time, and
-// a self-hosted station can perfectly well have its controller down while the
-// web container is up. So the recovery path has to actually re-fetch.
-//
-// `reset()` alone does NOT re-fetch — it only clears the error state and
-// re-renders the same children, which for a failed server fetch just reproduces
-// the error. `router.refresh()` re-runs the server render, so the pair is what
-// makes "Try again" mean something. (Next 16.2 adds `unstable_retry` which does
-// both, but this ships to self-hosted operators and we'd rather not depend on
-// an `unstable_` export that can change under them.)
+// `reset()` alone does NOT re-fetch — it clears the error state and re-renders
+// the same children, reproducing a failed server fetch. `router.refresh()`
+// re-runs the server render, so the pair is what makes "Try again" mean
+// something. Next 16.2's `unstable_retry` does both, but this ships to
+// self-hosted operators and shouldn't depend on an `unstable_` export.
 
 export default function Error({
   error,
@@ -32,10 +28,8 @@ export default function Error({
   const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
-    // Surfaces in the browser console and in the container logs when the throw
-    // happened during SSR. Server-thrown errors arrive with their message
-    // stripped in production, so `digest` is the only thing that ties this back
-    // to the controller log line.
+    // Server-thrown errors arrive with their message stripped in production, so
+    // `digest` is the only thing tying this back to the container log line.
     console.error('[subwave] route error', error.digest ?? '', error);
   }, [error]);
 

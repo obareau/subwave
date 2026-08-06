@@ -1,12 +1,10 @@
 'use client';
 
-// The deck's spectrum analyzer — the skin's one canvas element. Real
-// frequency data via the shared Web Audio analyser when available (the graph
-// is cached per <audio> element, so arriving from another skin's visualiser
-// reuses it); a pseudo-random walk when it can't attach (iOS, CORS, no Web
-// Audio); dead flat while un-tuned. Peak caps fall slowly, Winamp-style.
-// Lite mode paints one static frame instead of running the rAF loop — the
-// global CSS animation kill can't reach a canvas.
+// Real frequency data via the shared Web Audio analyser (graph cached per
+// <audio> element); a pseudo-random walk when it can't attach (iOS, CORS, no
+// Web Audio); dead flat while un-tuned. Lite mode paints one static frame
+// instead of running the rAF loop — the global CSS animation kill can't reach
+// a canvas.
 
 import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
@@ -21,7 +19,11 @@ function themeColors(): { bar: string; cap: string; idle: string } {
   const cs = getComputedStyle(document.documentElement);
   return {
     bar: cs.getPropertyValue('--ink').trim() || '#ece6dc',
-    cap: cs.getPropertyValue('--accent').trim() || '#d94b2a',
+    // Peak caps ride --accent-2 where a theme sets one, else accent.
+    cap:
+      cs.getPropertyValue('--accent-2').trim() ||
+      cs.getPropertyValue('--accent').trim() ||
+      '#d94b2a',
     idle: cs.getPropertyValue('--muted').trim() || '#8a8278',
   };
 }
@@ -35,8 +37,7 @@ export default function Analyzer({
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const { lite } = useLiteMode();
-  // Don't even attach the analyser graph in lite — the static frame below
-  // never reads it, so skip the Web Audio work entirely.
+  // The lite static frame never reads the graph, so don't attach it at all.
   const { ready, read } = useAnalyser(audioRef, active && !lite);
 
   useEffect(() => {
@@ -95,14 +96,14 @@ export default function Analyzer({
       for (let i = 0; i < BARS; i++) {
         let target: number;
         if (bins) {
-          // Log-ish sweep: give the low end more bins so kicks read.
+          // Log-ish sweep, weighted to the low end so kicks read.
           const start = Math.floor(Math.pow(i / BARS, 1.6) * (bins.length * 0.6));
           const end = Math.max(start + 1, Math.floor(Math.pow((i + 1) / BARS, 1.6) * (bins.length * 0.6)));
           let sum = 0;
           for (let b = start; b < end; b++) sum += bins[b] ?? 0;
           target = (sum / (end - start) / 255) * (1 - i / (BARS * 3));
         } else if (active) {
-          // Graph unavailable but we ARE playing — idle walk keeps it alive.
+          // Graph unavailable but playing — walk so the meter isn't frozen.
           target = Math.pow(Math.random(), 1.6) * (1 - i / (BARS * 2.2)) * 0.7;
         } else {
           target = 0.03; // un-tuned: dead flat baseline

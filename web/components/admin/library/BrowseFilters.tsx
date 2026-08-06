@@ -1,9 +1,5 @@
 'use client';
 
-// The mood / energy / genre / year / vocal filter bar over the tagged index.
-//
-// Part of the library/ split - see ../LibraryPanel.tsx.
-
 import type { ChangeEvent, ReactNode } from 'react';
 import { Fragment, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
@@ -48,8 +44,8 @@ export function BrowseFilters(p: BrowseFiltersProps) {
     { id: 'high', label: <><EnergyMeter level="high" /> High{p.energyCounts.high ? ` · ${p.energyCounts.high}` : ''}</> },
   ];
 
-  // Vocal facet rides on the acoustic analysis pass; it only ever narrows to
-  // analysed tracks (un-analysed rows have no vocal ranges to test).
+  // The vocal facet only ever narrows to analysed tracks — un-analysed rows have no
+  // vocal ranges to test.
   const vocalOpts: { id: Vocal; label: string }[] = [
     { id: 'any', label: 'Any' },
     { id: 'vocal', label: 'Vocal' },
@@ -58,7 +54,6 @@ export function BrowseFilters(p: BrowseFiltersProps) {
 
   return (
     <section className="card">
-      {/* filter results text */}
       <div className="border-b border-dashed border-separator-strong p-4">
         <InputGroup>
           <InputGroupAddon><Search /></InputGroupAddon>
@@ -70,7 +65,6 @@ export function BrowseFilters(p: BrowseFiltersProps) {
         </InputGroup>
       </div>
 
-      {/* moods */}
       <div className="border-b border-dashed border-separator-strong p-4">
         <div className="caption mb-2.5">mood</div>
         <div className="flex flex-wrap gap-1.5">
@@ -87,8 +81,6 @@ export function BrowseFilters(p: BrowseFiltersProps) {
         </div>
       </div>
 
-      {/* quick facets — the energy + vocal toggle groups sit on their own row,
-          divided from the dropdown-style refinements below. */}
       <div className="flex flex-wrap items-end gap-x-4 gap-y-4 border-b border-dashed border-separator-strong p-4">
         <div className="flex flex-col gap-2">
           <div className="caption">energy</div>
@@ -131,12 +123,8 @@ export function BrowseFilters(p: BrowseFiltersProps) {
         </div>
       </div>
 
-      {/* refine — genre, year and sort share a single row. They wrap together as
-          a group on very narrow widths, but none ever strands on its own line. */}
       <div className="flex flex-wrap items-end gap-x-4 gap-y-4 p-4">
-        {/* w-full on phones: three fixed-width dropdowns can't share a 390px
-            row, and a full-width control is a better tap target. sm: restores
-            the content-width group. */}
+        {/* w-full on phones: three fixed-width dropdowns can't share a 390px row. */}
         <div className="flex w-full flex-col gap-2 sm:w-auto">
           <Field>
             <FieldLabel htmlFor="genre">genre</FieldLabel>
@@ -184,8 +172,4 @@ export function BrowseFilters(p: BrowseFiltersProps) {
     </section>
   );
 }
-
-// ---------------------------------------------------------------------------
-// track table
-// ---------------------------------------------------------------------------
 

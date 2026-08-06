@@ -3,6 +3,9 @@
 //   POST /like        public   like the currently playing track
 //   GET  /like        public   liked-state + count for the current airing
 //   GET  /likes       admin    totals + top liked + recent activity
+//   GET  /likes/index admin    {songId: {count, operator}} for row decoration
+//   POST /likes/song/:id            admin  the operator's own heart
+//   DELETE /likes/song/:id/operator admin  un-heart (operator's record only)
 //   DELETE /likes/song/:id  admin  drop all likes for one song
 //   DELETE /likes     admin    clear the store
 //
@@ -11,11 +14,18 @@
 // Navidrome never blocks the tap. Deleting likes here does NOT unstar in
 // Navidrome: stars there are the operator's catalogue data; prune them in a
 // Subsonic client if wanted.
+//
+// The ONE exception is the operator un-heart, and only when the song has no
+// likes left at all. That is the operator toggling their own heart rather than
+// pruning listener data, and a toggle that stars on but never off is a bug.
+// The "no likes remain" guard is what keeps it safe: a star earned by twenty
+// listener likes is never discarded because the operator un-hearted.
 
 import express from 'express';
 import { queue } from '../broadcast/queue.js';
 import * as likes from '../broadcast/likes.js';
 import * as subsonic from '../music/subsonic.js';
+import * as db from '../music/library-db.js';
 import * as settings from '../settings.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { clientIp } from '../middleware/ratelimit.js';
@@ -138,6 +148,68 @@ router.get('/likes', requireAdmin, async (req, res) => {
     top: likes.topLiked({ windowDays: cfg?.windowDays ?? 30, limit: 20 }),
     recent: likes.recent(limit),
   });
+});
+
+router.get('/likes/index', requireAdmin, async (_req, res) => {
+  await likes.load();
+  res.json({ songs: likes.index() });
+});
+
+// The snapshot stored with an operator like. The admin library always posts the
+// row it already has, so the common path costs no extra I/O; the lookups are
+// the fallback for an API caller that sends only an id.
+async function resolveSnapshot(id: string, body: any) {
+  const b = body && typeof body === 'object' ? body : {};
+  if (b.title || b.artist) {
+    return { id, title: b.title, artist: b.artist, album: b.album, genre: b.genre, year: b.year, duration: b.duration };
+  }
+  try {
+    const row: any = db.getTrack(id);
+    if (row) {
+      return { id, title: row.title, artist: row.artist, album: row.album, genre: row.genre, year: row.year, duration: row.durationSec };
+    }
+  } catch { /* index unavailable — fall through to Navidrome */ }
+  try {
+    const song: any = await subsonic.getSong(id);
+    if (song) return { ...song, id };
+  } catch { /* Navidrome down — a bare snapshot still records the like */ }
+  return { id, title: 'unknown' };
+}
+
+router.post('/likes/song/:id', requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+  if (!id) return res.status(400).json({ error: 'A song id is required' });
+  try {
+    const track = await resolveSnapshot(id, req.body);
+    const result = await likes.operatorLike(track);
+    if (!result.ok) return res.status(400).json({ error: 'A song id is required' });
+    if (result.added && settings.get()?.likes?.starInNavidrome) {
+      subsonic.star(id).catch((err) =>
+        console.error(`[likes] Navidrome star failed for ${id}:`, err.message),
+      );
+    }
+    res.json({ ok: true, songId: id, operator: true, added: result.added, count: result.count });
+  } catch (err: any) {
+    console.error('[likes] operator like failed:', err.message);
+    res.status(500).json({ error: 'Could not record the like' });
+  }
+});
+
+router.delete('/likes/song/:id/operator', requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+  try {
+    const result = await likes.operatorUnlike(id);
+    // Only when the operator's heart was the LAST like standing — see header.
+    if (result.removed && result.count === 0 && settings.get()?.likes?.starInNavidrome) {
+      subsonic.unstar(id).catch((err) =>
+        console.error(`[likes] Navidrome unstar failed for ${id}:`, err.message),
+      );
+    }
+    res.json({ ok: true, songId: id, operator: false, removed: result.removed, count: result.count });
+  } catch (err: any) {
+    console.error('[likes] operator unlike failed:', err.message);
+    res.status(500).json({ error: 'Could not remove the like' });
+  }
 });
 
 router.delete('/likes/song/:id', requireAdmin, async (req, res) => {

@@ -1,15 +1,8 @@
 'use client';
 
-/* Admin Connect page — the API discovery surface. Four tabs:
-   - Endpoints: the curated HTTP API, each with an inline playground.
-   - MCP: the subwave-mcp tool set + copy-ready client setup.
-   - Integrations: stream URLs, now-playing feeds, and Home Assistant /
-     Music Assistant recipes.
-   - Webhooks: outbound event POSTs (the push direction).
-
-   All of it renders from GET /connect/catalog (controller/src/routes/connect.ts),
-   which carries the manifest plus the live station origin + per-mount enabled
-   state, so URLs shown here are the real, copy-ready absolute URLs. */
+/* Renders from GET /connect/catalog (controller/src/routes/connect.ts), which carries
+   the manifest plus the live station origin + per-mount enabled state, so every URL
+   shown here is a real, copy-ready absolute URL. */
 
 import { useCallback, useEffect, useState } from 'react';
 import { useAdminAuth } from '../../../lib/adminAuth';
@@ -41,8 +34,7 @@ export default function ConnectPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>('endpoints');
 
-  // Deep-link: /admin/connect?tab=mcp opens that tab directly (mirrors
-  // /admin/settings?section=…).
+  // Deep-link: /admin/connect?tab=mcp opens that tab directly
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const t = new URLSearchParams(window.location.search).get('tab');
@@ -127,7 +119,6 @@ export default function ConnectPanel() {
             Download OpenAPI
           </Btn>
         </div>
-        {/* Shared editorial section-tabs, edge-to-edge along the card's foot. */}
         <SectionTabs tabs={TABS} value={tab} onChange={selectTab} label="Connect sections" />
       </section>
 

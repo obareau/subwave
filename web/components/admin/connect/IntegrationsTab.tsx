@@ -27,8 +27,6 @@ export default function IntegrationsTab({ catalog }: Props) {
   const mp3 = `${origin}/stream.mp3`;
   const nowPlaying = `${apiBase}/now-playing`;
 
-  // Home Assistant REST sensor + a play_media script, origin substituted so
-  // it's paste-ready.
   const haYaml = [
     '# configuration.yaml',
     'rest:',

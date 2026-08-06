@@ -12,7 +12,7 @@ Your DJ can only play a track once it knows that track's mood and energy. Workin
 
 ![The rebuilt Library page: a headline reading how much of the library the DJ knows, a mood-and-energy progress bar with the tagged count under it, a line of acoustic-analysis coverage, a Start tagging button, and a list of recently added tracks showing their mood tags](/screenshots/admin-library.webp)
 
-The old page had two control strips that both talked about tagging, and neither said why it mattered. Now there's one panel. It opens with a plain line, "Your DJ knows 92% of your library", and under that sits the count of tagged tracks, how many still need it, and one button to close the gap. Every row shows its moods and energy as small tags, so you can see what tagging actually produces. Browse filters by mood, energy, genre, and year.
+The old page had two control strips that both talked about tagging, and neither said why it mattered. Now there's one panel. It opens with a plain line, "Your DJ knows 92% of your library", and under that sits the count of tagged tracks, how many still need it, and one button to close the gap. Every row shows its moods and energy as small tags, so you can see what tagging actually produces. Browse filters by mood, energy, genre, and year. The [acoustic analysis](/manual/analysis) coverage sits on the same panel.
 
 ## How to use it
 
@@ -23,3 +23,5 @@ Changed your embedding model lately? Open "Maintenance and re-scan" in the same 
 ## Why it helps
 
 Tagging is what lets the DJ reach for the right track instead of playing at random. The state of it is now in front of you: what's done, what's left, and a button for the rest. And a model swap no longer paints you into a corner, since you re-embed from the same place.
+
+Two shortcuts worth knowing: already tagged your library in AudioMuse-AI? [The importer](/news/import-from-audiomuse) carries that work across. And once tagging is done, the [Library Observatory](/news/see-the-shape-of-your-library) turns the whole thing into one picture.

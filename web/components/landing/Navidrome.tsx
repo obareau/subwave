@@ -16,7 +16,7 @@ const COMPATIBLE = [
 
 export default function Navidrome() {
   return (
-    <EditorialReveal className="bs-navidrome bs-section">
+    <EditorialReveal className="bs-navidrome bs-section bs-section--tight">
       <div className="bs-navidrome-grid">
         <div className="bs-navidrome-copy">
           <p className="bs-eyebrow">WORKS WITH YOUR LIBRARY</p>

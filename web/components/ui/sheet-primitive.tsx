@@ -6,11 +6,9 @@ import { X } from "lucide-react"
 
 import { cn } from "@/lib/cn"
 
-/* Standard shadcn Sheet primitives — vendored under this name (not `sheet.tsx`)
-   because `ui/sheet.tsx` is a custom single-export drawer used across the
-   player + admin panels. These primitives exist solely for the admin
-   Sidebar's mobile drawer (components/ui/sidebar.tsx). Newsprint-tuned:
-   ink overlay wash, sharp corners, ink hairline edge. */
+/* Standard shadcn Sheet primitives, vendored under this name rather than
+   `sheet.tsx` because ui/sheet.tsx is a custom single-export drawer. These exist
+   solely for the admin Sidebar's mobile drawer. Newsprint-tuned. */
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />

@@ -4,19 +4,15 @@ import type { ReactNode } from 'react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { cn } from '../../lib/cn';
 
-/* V3 AlertDialog — sharp, ink-bordered confirmation modal. Controlled: pass
-   `open` + `onOpenChange`. `onConfirm` fires when the operator accepts; the
-   dialog closes itself either way. `danger` paints the confirm button red for
-   destructive actions (skip track, restart mixer, delete jingle).
+/* V3 AlertDialog — sharp, ink-bordered confirmation modal. The dialog closes
+   itself whether or not `onConfirm` fires.
 
-   Enter/exit are CSS animations keyed on Radix's `data-state` (the shadcn
-   approach) — `.v3-alert-overlay` / `.v3-alert-content` in globals.css fade +
-   zoom in on open and out on close. Radix's Presence waits for the close
-   animation to finish before unmounting, so it's smooth in BOTH directions
-   without motion/asChild (which `AlertDialog.Content` doesn't compose with).
-   The overlay carries a soft backdrop blur. Centering stays on the Tailwind
-   `-translate-*` utilities (the CSS `translate` property in v4) so the keyframe's
-   `transform: scale()` composes with it and the box zooms from its own centre. */
+   Enter/exit are CSS animations keyed on Radix's `data-state`, not motion:
+   `AlertDialog.Content` doesn't compose with motion/asChild, and Radix's
+   Presence already waits for the close animation before unmounting. Centering
+   stays on the Tailwind `-translate-*` utilities (the CSS `translate` property
+   in v4) so the keyframe's `transform: scale()` composes with it and the box
+   zooms from its own centre. */
 export interface V3AlertDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;

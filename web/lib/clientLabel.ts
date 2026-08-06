@@ -1,7 +1,6 @@
-// Shared listener-connection helpers for the admin views that read Icecast's
-// per-connection admin feed (GET /listeners/connections): the Dash live table
-// and the Stats "connected now" device breakdown. Extracted from DashPanel so
-// both surfaces label devices and format durations identically.
+// Listener-connection helpers for the admin views reading Icecast's
+// per-connection feed (GET /listeners/connections), so the Dash live table and
+// the Stats device breakdown label devices and format durations identically.
 
 export interface ListenerConnection {
   ip: string;
@@ -13,8 +12,7 @@ export interface ListenerConnection {
   connections?: number;
 }
 
-// connectedSeconds → short human string. Listeners rarely sit for days, so
-// hours is the coarsest unit we bother with.
+// Hours is the coarsest unit; listeners rarely sit for days.
 export function fmtConnected(s: number): string {
   if (!Number.isFinite(s) || s < 0) return '—';
   if (s < 60) return `${Math.round(s)}s`;
@@ -24,8 +22,7 @@ export function fmtConnected(s: number): string {
   return `${h}h ${m % 60}m`;
 }
 
-// A dedicated media player (Sonos, VLC, …), or '' if the UA isn't one. Checked
-// before the browser/device families because players embed "Mozilla"
+// Checked before the browser/device families: players embed "Mozilla"
 // boilerplate that would otherwise misclassify them as a browser.
 function playerLabel(u: string): string {
   if (u.includes('sonos')) return 'Sonos';
@@ -53,8 +50,7 @@ function deviceToken(u: string): string {
               : '';
 }
 
-// Browser family token, or '' if unrecognised. `edg` (Edge) is checked before
-// `chrome` because Edge's UA carries both tokens.
+// `edg` (Edge) is checked before `chrome` because Edge's UA carries both.
 function browserToken(u: string): string {
   return u.includes('firefox')
     ? 'Firefox'
@@ -67,24 +63,21 @@ function browserToken(u: string): string {
           : '';
 }
 
-// Collapse a raw user-agent into a short "Device · App" label for the live
-// connections table. Best-effort and deliberately shallow — the full UA stays
-// in the title attribute.
+// Best-effort and deliberately shallow; the full UA stays in the title attribute.
 export function clientLabel(ua: string): string {
   if (!ua) return 'unknown';
   const u = ua.toLowerCase();
   const player = playerLabel(u);
   if (player) return player;
   const label = [deviceToken(u), browserToken(u)].filter(Boolean).join(' · ');
-  // Nothing recognised — show the first token of the raw UA rather than a
-  // useless "unknown" (helps with hardware radios / odd clients).
+  // Show the first token of the raw UA rather than a useless "unknown", which
+  // helps with hardware radios and odd clients.
   return label || ua.split(/[\s/]/)[0] || 'unknown';
 }
 
-// Device / OS class only (iPhone, Mac, Sonos, …) for the aggregate device
-// breakdown. Players report as themselves; an unrecognised UA collapses to
-// 'Other' so the breakdown stays low-cardinality rather than fragmenting on raw
-// tokens (which the per-row clientLabel keeps, but an aggregate must not).
+// Device / OS class only, for the aggregate breakdown. An unrecognised UA
+// collapses to 'Other' so the breakdown stays low-cardinality instead of
+// fragmenting on raw tokens the way per-row clientLabel does.
 export function deviceLabel(ua: string): string {
   if (!ua) return 'Other';
   const u = ua.toLowerCase();

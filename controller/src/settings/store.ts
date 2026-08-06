@@ -83,7 +83,10 @@ export function getRedacted() {
     }
   }
   if (clone.llm?.fallback) clone.llm.fallback.apiKey = s.llm?.fallback?.apiKey ? 'set' : '';
-  if (clone.tts?.cloud) clone.tts.cloud.apiKey = s.tts?.cloud?.apiKey ? 'set' : '';
+  if (clone.tts?.cloud) {
+    clone.tts.cloud.apiKey = s.tts?.cloud?.apiKey ? 'set' : '';
+    clone.tts.cloud.compatApiKey = s.tts?.cloud?.compatApiKey ? 'set' : '';
+  }
   if (clone.search) clone.search.apiKey = s.search?.apiKey ? 'set' : '';
   if (clone.embedding) clone.embedding.apiKey = s.embedding?.apiKey ? 'set' : '';
   if (Array.isArray(clone.webhooks)) {

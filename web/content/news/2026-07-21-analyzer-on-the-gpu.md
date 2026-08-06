@@ -6,7 +6,7 @@ author: The SUB/WAVE desk
 excerpt: A new CUDA analyzer image runs sounds-like and vocal analysis on an NVIDIA card, and a quiet-times switch pauses library scans while anyone is tuned in.
 ---
 
-This one came straight from a listener request. Deep analysis, the sounds-like fingerprint and the vocal detection, chews through a big library one track at a time on the CPU. If that CPU is also running your local LLM and your voices, the scan and the station end up fighting over the same cores. Two fixes shipped together.
+This one came straight from a listener request. [Deep analysis](/manual/analysis), the sounds-like fingerprint and the vocal detection, chews through a big library one track at a time on the CPU. If that CPU is also running your local LLM and your voices, the scan and the station end up fighting over the same cores. Two fixes shipped together.
 
 ## What's new
 
@@ -26,8 +26,10 @@ The overlay swaps the analyzer to the CUDA image and hands it the GPU. The host 
 
 ## Analyse at quiet times
 
-Open the Library page in admin. Next to the sounds-like and vocal controls there is a new row, Quiet times. Enable it and set the idle window, ten minutes by default. A running pass pauses between tracks the moment someone tunes in and shows "Waiting for quiet". Once the room has been empty long enough, it picks up where it left off. It applies to manual runs too, so turn it off if you want a scan right now regardless.
+Open the [Library page](/news/your-dj-knows-your-library) in admin. Next to the sounds-like and vocal controls there is a new row, Quiet times. Enable it and set the idle window, ten minutes by default. A running pass pauses between tracks the moment someone tunes in and shows "Waiting for quiet". Once the room has been empty long enough, it picks up where it left off. It applies to manual runs too, so turn it off if you want a scan right now regardless.
 
 ## Why it helps
 
-A big collection gets its fingerprints without a week of pegged cores, and the scan never steals cycles from the broadcast. Turn on quiet times, kick off a full rescan, and the station does the homework in its own gaps.
+A big collection gets its fingerprints without a week of pegged cores, and the scan never steals cycles from the broadcast. Turn on quiet times, kick off a full rescan, and the station does the homework in its own gaps. It is the same trade [Chatterbox made a month ago](/news/chatterbox-on-the-gpu), this time for the analysis side.
+
+*Update: running the all-in-one image instead of the compose stack? It got [the same CUDA path](/news/one-click-on-the-gpu) a few days later.*

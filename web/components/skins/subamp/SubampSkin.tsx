@@ -1,12 +1,7 @@
 'use client';
 
-// Subamp — a compact modular player: deck, booth and log stacked like it's
-// 1998. Compact · nostalgic · busy. Design ref: Skins Canvas 2a.
-//
-// The tune-in gate is inline, not an overlay: the deck loads un-tuned with a
-// flat analyzer, --:-- digits and a marquee scrolling PRESS ▶ TO TUNE IN;
-// only ▶ is lit accent. One click starts the stream and the analyzer jumps.
-// Double-click a titlebar to roll its window up.
+// The tune-in gate is inline, not an overlay: the deck loads un-tuned and the
+// ▶ click is the browser's audio-unblock gesture.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
@@ -24,6 +19,8 @@ import {
 } from '@/components/player/PlayerCore';
 import { useTuneInGate } from '@/components/player/useTuneInGate';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
+import { useCoverColors } from '@/hooks/useCoverColors';
+import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { useElapsed } from '@/hooks/useElapsed';
 import { useClock } from '@/lib/hooks';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
@@ -42,19 +39,13 @@ import {
 import { useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
-/* LCD re-latch. A 1998 player doesn't crossfade — the readout blinks twice and
-   the new value is simply there. Opacity only, no transform, and no exit: the
-   old reading isn't leaving, it's being overwritten.
-
-   Because it IS opacity-only, MotionConfig's reducedMotion="user" won't touch
-   it (that setting drops transforms and deliberately preserves opacity), so a
-   listener who asked for less motion would still get a strobe. This is the one
-   skin that has to check useReducedMotion() for itself. */
+/* Opacity only, no transform, no exit. Because it IS opacity-only,
+   MotionConfig's reducedMotion="user" won't touch it (that setting drops
+   transforms and deliberately preserves opacity), so this is the one skin that
+   has to check useReducedMotion() for itself. */
 const LATCH = { opacity: [1, 0.25, 1, 0.4, 1] };
 const LATCH_TRANSITION = { duration: 0.18, times: [0, 0.2, 0.45, 0.7, 1] };
 const STEADY = { opacity: 1 };
-/* The cover is a bitmap, not a photograph fading into another — swap it fast
-   enough that it reads as the panel repainting rather than a dissolve. */
 const ART_FLASH = {
   initial: { opacity: 0 },
   animate: { opacity: 1 },
@@ -81,15 +72,13 @@ function Grip() {
   );
 }
 
-/** A Subamp window: dotted-grip titlebar, faux buttons, roll-up on
- *  double-click (or the ▁ button). */
 function Window({ title, children, className }: { title: ReactNode; children: ReactNode; className?: string }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className={cn('border border-soft-border bg-bg', className)}>
+    <div className={cn('bg-bg', styles.plate, className)}>
       <div
         onDoubleClick={() => setOpen(o => !o)}
-        className="flex shrink-0 items-center gap-2.5 border-b border-soft-border bg-[var(--field)] px-2.5 py-1 select-none"
+        className={cn('flex shrink-0 items-center gap-2.5 px-2.5 py-1 select-none', styles.titlebar)}
       >
         <Grip />
         <span className="truncate text-[9px] font-bold tracking-[0.24em] uppercase">{title}</span>
@@ -98,11 +87,11 @@ function Window({ title, children, className }: { title: ReactNode; children: Re
           type="button"
           onClick={() => setOpen(o => !o)}
           aria-label={open ? 'Roll window up' : 'Roll window down'}
-          className="v3-focus cursor-pointer border border-soft-border bg-transparent px-1 text-[9px] leading-tight text-muted hover:text-ink"
+          className="v3-focus cursor-pointer border border-[var(--line)] bg-transparent px-1 text-[9px] leading-tight text-muted hover:text-ink"
         >
           {open ? '▁' : '▆'}
         </button>
-        <span className="border border-soft-border px-1 text-[9px] leading-tight text-muted opacity-60" aria-hidden="true">✕</span>
+        <span className="border border-[var(--line)] px-1 text-[9px] leading-tight text-muted opacity-60" aria-hidden="true">✕</span>
       </div>
       {open && children}
     </div>
@@ -133,7 +122,13 @@ export default function SubampSkin(_props: SkinProps) {
   const adjustVolume = useVolumeNudge();
   const like = useTrackLike();
 
-  // Request line (station log window).
+  // Null art resolves the tint to transparent, so off-air/no-art degrades to
+  // the plain desk.
+  const coverSrc = nowPlaying?.subsonic_id ? client.coverUrl(nowPlaying.subsonic_id) : null;
+  const coverColors = useCoverColors(coverSrc);
+  const deskRef = useRef<HTMLDivElement | null>(null);
+  useDynamicStyle(deskRef, { '--sw-amp-tint': coverColors.vibrant });
+
   const slip = useRequestSlip({
     sent: 'request received — the DJ is on it.',
     refused: 'request refused.',
@@ -150,7 +145,7 @@ export default function SubampSkin(_props: SkinProps) {
     r: () => reqInputRef.current?.focus(),
   });
 
-  // Marquee copy — keyed so a track change restarts the scroll from the left.
+  // Keyed so a track change restarts the scroll from the left.
   const marqueeText = offline
     ? `OFF AIR ▪ ${stationName} ▪ THE STREAM WILL BE BACK ▪▸ `
     : showTuneIn
@@ -181,11 +176,15 @@ export default function SubampSkin(_props: SkinProps) {
   return (
     <div className={cn('absolute inset-0 overflow-hidden font-mono text-ink lg:overflow-y-auto', styles.shell)}>
       <div
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_70%_at_50%_42%,color-mix(in_oklab,var(--accent)_5%,transparent),transparent)]"
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_70%_at_50%_42%,color-mix(in_oklab,var(--accent)_12%,transparent),transparent)]"
+        aria-hidden="true"
+      />
+      <div
+        ref={deskRef}
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_60%_at_50%_38%,color-mix(in_oklab,var(--sw-amp-tint,transparent)_18%,transparent),transparent)]"
         aria-hidden="true"
       />
 
-      {/* corner readouts */}
       <div className="absolute top-7 left-9 hidden text-[10px] tracking-[0.24em] text-muted uppercase lg:block">
         {stationName} — {showName ? `${showName} with ${djName}` : `with ${djName}`}
       </div>
@@ -197,7 +196,6 @@ export default function SubampSkin(_props: SkinProps) {
         <ThemeSwitcher />
       </div>
       <div className="relative mx-auto flex h-full w-full max-w-[580px] flex-col gap-2 px-3 pt-9 pb-3 lg:h-auto lg:min-h-full lg:justify-center lg:py-14">
-        {/* ── deck ─────────────────────────────────────────── */}
         <Window title={<>SUBAMP ▪ LIVE BROADCAST DECK</>} className="flex-none">
           <div className="flex flex-col gap-3 px-4 py-3.5">
             <div className="flex items-stretch gap-3.5">
@@ -207,10 +205,10 @@ export default function SubampSkin(_props: SkinProps) {
                   {nowPlaying?.duration && !showTuneIn && !offline ? `/ ${fmtTime(nowPlaying.duration)} · ` : ''}LIVE ONLY
                 </div>
               </div>
-              <div className="h-16 min-w-0 flex-1 border border-soft-border px-2 py-1.5">
+              <div className="h-16 min-w-0 flex-1 border border-[var(--line)] px-2 py-1.5">
                 <Analyzer audioRef={audioRef} active={playing} />
               </div>
-              <div className="relative hidden h-16 w-16 flex-none self-center border border-soft-border sm:block">
+              <div className="relative hidden h-16 w-16 flex-none self-center border border-[var(--line)] sm:block">
                 {nowPlaying?.subsonic_id && !offline ? (
                   <AnimatePresence mode="popLayout" initial={false}>
                     <m.img
@@ -227,14 +225,13 @@ export default function SubampSkin(_props: SkinProps) {
               </div>
             </div>
 
-            {/* marquee plate — keyed on the copy so the whole plate remounts and
-                re-latches; the inner key stays because it's what restarts the
-                CSS scroll from the left if this wrapper ever loses its own. */}
+            {/* Keyed on the copy so the plate remounts and re-latches; the
+                inner key is what restarts the CSS scroll from the left. */}
             <m.div
               key={marqueeText}
               animate={latch}
               transition={LATCH_TRANSITION}
-              className="overflow-hidden border border-soft-border bg-[var(--field)] px-0 py-1.5"
+              className="overflow-hidden border border-[var(--line)] bg-[var(--field)] px-0 py-1.5"
             >
               <div key={marqueeText} className={styles.marqueeTrack}>
                 <span className="px-2.5 text-[12px] tracking-[0.12em]">{marqueeText}</span>
@@ -244,7 +241,7 @@ export default function SubampSkin(_props: SkinProps) {
 
             <div className="flex flex-wrap items-center gap-2">
               {meta.facts.map(f => (
-                <span key={f} className="border border-soft-border px-1.5 py-0.5 text-[10px] tracking-[0.1em]">{f}</span>
+                <span key={f} className="border border-[var(--line)] px-1.5 py-0.5 text-[10px] tracking-[0.1em]">{f}</span>
               ))}
               {meta.moods.map(m => (
                 <span key={m} className="border border-[var(--accent)] px-1.5 py-0.5 text-[10px] tracking-[0.1em] text-[var(--accent)] uppercase">{m}</span>
@@ -258,7 +255,6 @@ export default function SubampSkin(_props: SkinProps) {
               </span>
             </div>
 
-            {/* transport */}
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -339,12 +335,9 @@ export default function SubampSkin(_props: SkinProps) {
           </div>
         </Window>
 
-        {/* ── booth ────────────────────────────────────────── */}
         <Window title={<>BOOTH FEED ▪ {djName.toUpperCase()}</>} className="flex min-h-0 flex-1 flex-col lg:block lg:flex-none">
-          {/* stick-to-bottom booth tail — the live view holds the newest DJ
-              line at the bottom (same ai-elements Conversation as the admin
-              dash Booth log). Needs a definite height for the scroll region,
-              hence lg:h-[240px] rather than a content-driven max-height. */}
+          {/* Needs a definite height for the scroll region, hence lg:h-[240px]
+              rather than a content-driven max-height. */}
           <Conversation className={cn('min-h-0 flex-1 lg:h-[240px]', styles.screen)}>
             <ConversationContent className="flex flex-col gap-2 px-4 py-3">
               {booth.length === 0 && (
@@ -370,14 +363,11 @@ export default function SubampSkin(_props: SkinProps) {
           </Conversation>
         </Window>
 
-        {/* ── station log ──────────────────────────────────── */}
         <Window
           title={<>STATION LOG{listenerCount != null ? ` ▪ ${listenerCount} LISTENING` : ''}</>}
           className="flex min-h-0 flex-1 flex-col lg:block lg:flex-none"
         >
-          {/* stick-to-bottom log tail — pins the view to the ▶ now-playing /
-              queued lines at the bottom (ai-elements Conversation, like the
-              booth above). Definite height so the scroll region resolves. */}
+          {/* Definite height so the scroll region resolves, as above. */}
           <Conversation className={cn('min-h-0 flex-1 lg:h-[200px]', styles.screen)}>
             <ConversationContent className="flex flex-col gap-1.5 py-2.5 pr-5 pl-4">
               {history.map((h, i) => (
@@ -410,9 +400,8 @@ export default function SubampSkin(_props: SkinProps) {
             <ConversationScrollButton className="bottom-2 size-7 rounded-none border-soft-border bg-[var(--field)] text-ink hover:bg-[var(--overlay)]" />
           </Conversation>
 
-          {/* request line — pinned below the scrolling log */}
           <form
-            className="mx-4 mb-3 flex shrink-0 items-baseline gap-2.5 border-t border-soft-border pt-2"
+            className="mx-4 mb-3 flex shrink-0 items-baseline gap-2.5 border-t border-[var(--line)] pt-2"
             onSubmit={e => { e.preventDefault(); void slip.send(); }}
           >
               <span className="flex-none text-[10px] tracking-[0.14em] text-muted select-none">DEAR DJ —</span>
@@ -434,7 +423,7 @@ export default function SubampSkin(_props: SkinProps) {
                     value={slip.text}
                     onChange={e => slip.setText(e.target.value)}
                     placeholder="something with a 303 in it…"
-                    className="v3-focus min-w-0 flex-1 border-0 border-b border-soft-border bg-transparent pb-0.5 font-mono text-[11px] text-ink italic outline-none placeholder:text-muted"
+                    className="v3-focus min-w-0 flex-1 border-0 border-b border-[var(--line)] bg-transparent pb-0.5 font-mono text-[11px] text-ink italic outline-none placeholder:text-muted"
                   />
                   <button
                     type="submit"

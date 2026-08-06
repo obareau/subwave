@@ -3,22 +3,15 @@
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/cn';
 
-/* Shared empty state for the admin console — the "there is nothing here yet"
-   panel. Newsprint editorial treatment: an optional bordered icon, a Fraunces
-   display-italic headline, a quiet mono caption, and an optional call to
-   action. Replaces the ~dozen bare lowercase strings ("no calls yet",
-   "nothing here yet") each panel used to render, and the siloed imaging
-   EmptyState (which now delegates here). Copy is caller-supplied so panels can
-   carry a light SUB/WAVE voice where it fits. */
+/* Shared "nothing here yet" panel for the admin console. Copy is
+   caller-supplied so panels can carry a light SUB/WAVE voice where it fits. */
 export interface EmptyStateProps {
-  /** A lucide icon (or any node); sits in a bordered square above the title. */
+  /** Sits in a bordered square above the title. */
   icon?: ReactNode;
   title?: ReactNode;
-  /** Short guidance under the title — what to do to fill this space. */
   description?: ReactNode;
-  /** A primary action (usually a <Btn>) rendered under the description. */
   action?: ReactNode;
-  /** Tighter vertical padding for inline/nested empties (e.g. inside a modal). */
+  /** Tighter vertical padding for inline/nested empties. */
   compact?: boolean;
   className?: string;
 }

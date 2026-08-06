@@ -74,6 +74,27 @@ test('enabled, engine up, lean image (capable=false) → pending-heavy', () => {
 test('pending-heavy wins even with existing coverage (engine downgraded to lean)', () => {
   assert.equal(dimensionStatus(inputs({ capable: false, count: 5, percent: 20 })), 'pending-heavy');
 });
+test('capable=false WITH a load error → load-failed, not pending-heavy', () => {
+  // The image HAS the model and it didn't load. Same `capable: false` as a lean
+  // build, opposite advice — telling someone already on the heavy image to
+  // switch to the heavy image is what left #1300 bug 3 unexplained.
+  assert.equal(
+    dimensionStatus(inputs({ capable: false, loadError: 'weights download failed' })),
+    'load-failed',
+  );
+});
+test('load-failed wins over existing coverage too', () => {
+  // Same reasoning as pending-heavy above: a dimension that can no longer
+  // progress says so, even with numbers already on the meter.
+  assert.equal(
+    dimensionStatus(inputs({ capable: false, loadError: 'boom', count: 5, percent: 20 })),
+    'load-failed',
+  );
+});
+test('a load error on a CAPABLE backend changes nothing', () => {
+  // Defensive: the error only means anything alongside capable === false.
+  assert.equal(dimensionStatus(inputs({ capable: true, loadError: 'stale' })), 'ready');
+});
 test('still probing (analysisAvailable=null) does NOT jump to pending-engine', () => {
   assert.equal(dimensionStatus(inputs({ analysisAvailable: null })), 'ready');
 });
@@ -108,8 +129,10 @@ test('backfillable for ready / partial / incapable / off (off = just-enabled, pr
   const yes: DimensionStatus[] = ['ready', 'partial', 'incapable', 'off'];
   for (const s of yes) assert.equal(isBackfillable(s), true, `${s} should be backfillable`);
 });
-test('NOT backfillable for pending-heavy / pending-engine / complete', () => {
-  const no: DimensionStatus[] = ['pending-heavy', 'pending-engine', 'complete'];
+test('NOT backfillable for pending-heavy / load-failed / pending-engine / complete', () => {
+  // load-failed joins them: the run would analyse every track for a guaranteed
+  // no-op, which is the churn the whole fix exists to stop.
+  const no: DimensionStatus[] = ['pending-heavy', 'load-failed', 'pending-engine', 'complete'];
   for (const s of no) assert.equal(isBackfillable(s), false, `${s} should not be backfillable`);
 });
 

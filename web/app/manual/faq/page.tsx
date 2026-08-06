@@ -9,9 +9,9 @@ export const metadata = pageMeta({
   path: '/manual/faq',
 });
 
-// FAQPage structured data — mirrors the Q&A rendered by <Faq />. Kept in sync
-// by hand; answers are plain-text summaries of the prose on the page, which is
-// what Google's FAQ rich result expects.
+// FAQPage structured data mirroring the Q&A rendered by <Faq />, kept in sync by
+// hand. Answers must be plain-text summaries — that's what Google's FAQ rich
+// result expects.
 const FAQ = [
   {
     q: 'What happens when no one is listening?',

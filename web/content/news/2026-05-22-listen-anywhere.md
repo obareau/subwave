@@ -10,7 +10,7 @@ Under the hood SUB/WAVE broadcasts a normal Icecast stream. Nothing proprietary.
 
 ## The easy way
 
-Open the player in any browser and press play. On a phone you can install it as an app with "Add to Home Screen," and it behaves like a native player, with controls on your lock screen, your headphones, and CarPlay or Android Auto.
+Open the [player](/listen) in any browser and press play. On a phone you can install it as an app with "Add to Home Screen," and it behaves like a native player, with controls on your lock screen, your headphones, and CarPlay or Android Auto.
 
 ## Everywhere else
 
@@ -19,6 +19,8 @@ Want it on the good speakers? Point any of these at the stream URL:
 - Sonos and other networked speakers
 - A car receiver or an old hardware internet radio
 - VLC, or any desktop audio player that opens a URL
+
+The exact URLs, with per-device walkthroughs, are in the manual's [Listen With](/manual/clients) page. And the community has built players of its own, desktop apps, terminal clients, even a Raspberry Pi desk radio: browse them at [/apps](/apps).
 
 The station serves two versions of the same broadcast. Modern browsers and players get Opus, which sounds great at about half the bandwidth. Everything else gets MP3, the universal fallback that Sonos, car stereos, and older devices all understand. The web player sniffs your browser and picks the better one for you.
 

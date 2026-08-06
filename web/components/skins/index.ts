@@ -1,12 +1,9 @@
 'use client';
 
-// The skin registry — every player face this build ships. Adding a skin is
-// one entry here plus a directory under components/skins/<id>/; community
-// submissions follow the same shape (see types.ts for the contract).
-//
-// Components are wrapped in next/dynamic so only the active skin's chunk is
-// fetched; SSR stays on (the server renders the resolved skin into the
-// initial HTML, so first paint doesn't wait on a client roundtrip).
+// Adding a skin is one entry here plus a directory under components/skins/<id>/
+// (contract in types.ts). Components are wrapped in next/dynamic so only the
+// active skin's chunk is fetched; SSR stays on, so first paint doesn't wait on
+// a client roundtrip.
 
 import dynamic from 'next/dynamic';
 import { DEFAULT_SKIN_ID, canonicalSkinId } from '@/lib/skin';
@@ -64,9 +61,8 @@ export const SKINS: SkinManifest[] = [
 ];
 
 // Id facts (default id, legacy aliases) live in lib/skin.ts so the server
-// layout's SKIN_INIT_SCRIPT derives from the same data without importing
-// this registry's next/dynamic wrappers. Re-exported for component-side
-// consumers (admin settings, the shell).
+// layout's SKIN_INIT_SCRIPT derives from the same data without importing this
+// registry's next/dynamic wrappers.
 export { DEFAULT_SKIN_ID };
 
 export function isKnownSkin(id: string | null | undefined): id is string {
@@ -95,8 +91,8 @@ export const SKIN_COMPONENTS: Record<string, SkinComponent> = Object.fromEntries
 );
 
 /** Concretely-typed last-resort fallback for indexed lookups (the registry is
- *  a string-keyed record, so TS can't prove a hit). Points at the same module
- *  as the classic entry — the bundler dedupes the chunk. */
+ *  a string-keyed record, so TS can't prove a hit). The bundler dedupes this
+ *  against the classic entry's chunk. */
 export const DEFAULT_SKIN_COMPONENT: SkinComponent = dynamic(
   () => import('./classic/ClassicSkin'),
 ) as SkinComponent;

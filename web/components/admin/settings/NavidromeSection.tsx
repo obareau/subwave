@@ -9,11 +9,9 @@ import { Btn, Card } from '../ui';
 import { cn } from '../../../lib/cn';
 import { SectionHeader, SaveBar, type SettingsData } from './shared';
 
-// Music source — view, test, and change the Navidrome connection from the
-// admin panel instead of re-running the onboarding wizard. Unlike the other
-// sections this one does NOT ride the shared FormState / saveSettings pair:
-// Navidrome creds live in state/setup-config.json (the wizard's overlay), not
-// settings.json, so the section keeps local state and talks to its own
+// Unlike the other sections this one does NOT ride the shared FormState /
+// saveSettings pair: Navidrome creds live in state/setup-config.json (the wizard's
+// overlay), not settings.json, so it keeps local state and talks to its own
 // /settings/navidrome endpoints.
 interface NavidromeSectionProps {
   data: SettingsData;
@@ -37,10 +35,10 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
   const allEnv = env.url && env.user && env.pass;
   const passSet = !!nv?.passSet;
 
-  // Env-managed fields are omitted from every request body — the server
-  // rejects them anyway (env always wins on boot), and for test it falls back
-  // to the live value, which IS the env value. Blank pass is omitted too:
-  // server-side blank-pass semantics are "keep the one on file".
+  // Env-managed fields are omitted from every request body: the server rejects them
+  // anyway (env always wins on boot), and test falls back to the live value, which
+  // IS the env value. A blank pass is omitted too — server-side that means "keep
+  // the one on file".
   const body = () => {
     const b: Record<string, string> = {};
     if (!env.url) b.url = url.trim();

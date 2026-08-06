@@ -1,10 +1,6 @@
-/* ============================================================================
-   SUB/WAVE — Library Observatory · hover tooltip
-   The floating node read-out shown on hover. Shared by the full admin app
-   (ObservatoryApp) and the public landing-page showcase (ObservatoryShowcase)
-   so both render an identical card. Pure presentational — the parent owns the
-   hover state and feeds {track, x, y}.
-   ============================================================================ */
+/* Floating node read-out, shared by ObservatoryApp and ObservatoryShowcase so
+   both render an identical card. Presentational only: the parent owns the
+   hover state and feeds {track, x, y}. */
 'use client';
 
 import type { ObsTrack } from './data';
