@@ -43,6 +43,13 @@ import * as doctor from '../doctor.js';
 // including the dedicated exploration slot, and a longer coast loop is itself
 // variety (~2.5h of audio per refresh instead of ~2h).
 const TARGET_POOL = 40;
+// ⚠️ Cible RELEVÉE pour les seuls shows en playlist stricte. Sans ça, monter
+// SHOW_PLAYLIST_STRICT_WEIGHT ne sert à RIEN : createPoolBuilder coupe sur
+// `pool.length >= targetPool`, donc la cible plafonne avant le poids. C'est la
+// même arithmétique que le bug amont corrigé en #1339 (poids 32 > cible 30).
+// Les autres shows gardent 40 : leurs sources somment à ~58 et un vivier plus
+// large y changerait l'équilibre voulu en amont.
+const TARGET_POOL_STRICT = 120;
 const MOOD_WEIGHT = 12;          // up to this many mood-tagged tracks per pool
 const PLAYLIST_WEIGHT = 6;       // mood-matched Navidrome playlists
 const EXPLORE_WEIGHT = 8;        // reserved library-wide random / unaired slot
@@ -59,7 +66,11 @@ const SHOW_GENRE_STRICT_WEIGHT = 32; // strict: this source carries most of the 
 // A show anchored to Navidrome playlist(s): the union becomes the dominant
 // fallback source (soft) or — after the strict end-filter — the whole pool.
 const SHOW_PLAYLIST_WEIGHT = 18;        // dedicated show-playlist source (soft)
-const SHOW_PLAYLIST_STRICT_WEIGHT = 32; // strict: this source carries the pool
+// ⚠️ Divergence locale (2026-08-08, mesurée) : 32 plafonnait le vivier de
+// Scories à 32 morceaux sur 357 disponibles — « show-playlist=32 » dans le log
+// est exactement cette constante, donc c'est elle qui mordait, pas la
+// disponibilité. 80 ≈ la moitié d'un show de 4 h en un seul tirage.
+const SHOW_PLAYLIST_STRICT_WEIGHT = 80; // strict: this source carries the pool
 const SHOW_NARROW_FACTOR = 0.5;      // shrink mood/playlist/recent/etc. for shows
 // In-flight Navidrome queries when the show-genre source fans out across a
 // multi-genre show (up to SHOW_FILTER_VALUES_MAX values x 2 fetches each).
@@ -189,7 +200,7 @@ async function refreshAutoPlaylistInner() {
   const builder = createPoolBuilder({
     recentIds,
     recentKeys,
-    targetPool: TARGET_POOL,
+    targetPool: strictPlaylist ? TARGET_POOL_STRICT : TARGET_POOL,
     maxPerArtist: AUTO_MAX_PER_ARTIST,
   });
   const pool = builder.pool;
