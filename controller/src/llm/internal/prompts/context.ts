@@ -191,7 +191,12 @@ export function buildContextLines(
       : `Listeners tuned in right now: ${n}.`);
   }
   if (on('cat') && context?.cat?.justChanged) {
-    lines.push(`Studio note: ${context.cat.name}, the studio's small cat, just ${context.cat.inside ? 'wandered back in' : 'slipped back out'}. Nobody has ever settled whether it's a real animal, a small robot, a synthetic creature, or just a projection — it behaves like a cat either way, so don't resolve the question, just notice it if it feels natural. Don't force a mention every time you see this line; most segments should ignore it entirely.`);
+    // ⚠️ L'apparence est FIXE et doit l'être : sans elle les DJ improvisaient
+    // chacun leur chat — c'est le problème même que l'état persistant a résolu
+    // pour le dedans/dehors, et la description physique manquait encore.
+    // Noir, poil semi-long, un collier à médaille. Sa NATURE, elle, reste
+    // délibérément non tranchée.
+    lines.push(`Studio note: ${context.cat.name}, the studio's cat — black, semi-longhaired, green-eyed, with a small tag on his collar — just ${context.cat.inside ? 'wandered back in' : 'slipped back out'}. Keep those details consistent; they are fixed. Nobody has ever settled whether he's a real animal, a small robot, a synthetic creature, or just a projection — he behaves like a cat either way, so don't resolve the question, just notice it if it feels natural. Don't force a mention every time you see this line; most segments should ignore it entirely.`);
   }
   if (recentTracks && recentTracks.length) {
     const list = recentTracks.slice(0, 5).map((t: any) => `"${t.title}" by ${t.artist || 'unknown'}`).join('; ');
