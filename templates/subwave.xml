@@ -7,16 +7,13 @@
   <Shell>bash</Shell>
   <Privileged>false</Privileged>
 
-  <!-- Lets the in-container controller reach an Ollama (or Navidrome) running
-       on the Unraid host itself via http://host.docker.internal:PORT on the
-       default bridge network. Harmless when those services live elsewhere.
+  <!-- Lets the controller reach an Ollama or Navidrome running on the Unraid
+       host itself, via http://host.docker.internal:PORT.
 
-       GPU acoustic analysis (optional): the nvidia runtime flag is deliberately
-       NOT in here. It's a hard failure on a box without the Nvidia Driver
-       plugin, and most Unraid boxes don't have a card, so it stays an opt-in the
-       operator adds by hand alongside repointing Repository at the CUDA image.
-       The full swap is stepped through in docs/unraid.md; see also the NVIDIA_*
-       variables below, which are inert until that runtime is enabled. -->
+       The nvidia runtime flag is deliberately NOT here: it hard-fails on a box
+       with no Nvidia Driver plugin, and most Unraid boxes have no card. GPU
+       analysis stays opt-in, added by hand alongside the CUDA image —
+       docs/unraid.md walks the swap. -->
   <ExtraParams>--add-host host.docker.internal:host-gateway</ExtraParams>
 
   <Icon>https://raw.githubusercontent.com/perminder-klair/subwave/main/app/assets/icon.png</Icon>
@@ -65,25 +62,17 @@
   <License>MIT</License>
   <MinVer>6.12</MinVer>
 
-  <!-- Reuse the screenshots already maintained in the main repo. -->
   <Screenshot>https://raw.githubusercontent.com/perminder-klair/subwave/main/web/public/screenshots/listen.webp</Screenshot>
   <Screenshot>https://raw.githubusercontent.com/perminder-klair/subwave/main/web/public/screenshots/observatory.webp</Screenshot>
   <Screenshot>https://raw.githubusercontent.com/perminder-klair/subwave/main/web/public/screenshots/admin-dash.webp</Screenshot>
 
-  <!-- ports / paths / variables (v2 Config entries) -->
-
-  <!-- Host port mapped to Caddy's :80. The web UI, /api and /stream.mp3 are all
-       served from this single port. -->
   <Config Name="WebUI Port" Target="80" Default="7700" Mode="tcp"
           Description="Host port for the SUB/WAVE web UI + audio stream."
           Type="Port" Display="always" Required="true" Mask="false">7700</Config>
 
-  <!-- Persistent state. Keep this on the array/pool, NOT the flash drive —
-       it grows (hourly archives, library cache, rendered voices). Prefer a
-       direct pool path (/mnt/cache/...) over /mnt/user/...: the library cache
-       is a SQLite database, and /mnt/user routes through Unraid's shfs/FUSE
-       layer, which SQLite's WAL mode is documented not to work well over
-       (slow queries, checkpoint stalls — issue #786). -->
+  <!-- The pool-path advice in the Description is issue #786: /mnt/user routes
+       through Unraid's shfs/FUSE layer, which SQLite's WAL mode is documented
+       not to work well over (slow queries, checkpoint stalls). -->
   <Config Name="Appdata" Target="/var/sub-wave" Default="/mnt/user/appdata/subwave" Mode="rw"
           Description="Persistent state: settings, library cache, rendered voices, hourly archives. If your appdata share lives on a pool, prefer the direct pool path (e.g. /mnt/cache/appdata/subwave) over /mnt/user/... — the library cache is a SQLite database and performs poorly through Unraid's FUSE layer."
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/subwave</Config>
@@ -104,14 +93,10 @@
           Description="Timezone — keeps scheduled shows and hourly-archive timestamps on local time."
           Type="Variable" Display="advanced" Required="false" Mask="false">Europe/London</Config>
 
-  <!-- GPU acoustic analysis (optional, NVIDIA only). These three are inert on a
-       normal CPU install: left empty they change nothing, and the analyzer keeps
-       running on CPU. They only bite once you ALSO switch Repository to
-       ghcr.io/perminder-klair/subwave-aio-cuda:latest and add the nvidia runtime
-       flag to Extra Parameters (Advanced View). Needs the Unraid Nvidia Driver
-       plugin; docs/unraid.md walks the whole swap. If the card ends up not
-       visible the analyze worker logs a warning and falls back to CPU rather
-       than failing. -->
+  <!-- GPU acoustic analysis (optional, NVIDIA only). Inert on a CPU install;
+       these three only bite once Repository points at the CUDA image and the
+       nvidia runtime flag is in Extra Parameters (see the top of this file). If
+       the card ends up not visible the analyze worker warns and stays on CPU. -->
   <Config Name="NVIDIA_VISIBLE_DEVICES" Target="NVIDIA_VISIBLE_DEVICES" Default=""
           Description="GPU analysis only: the GPU UUID from Unraid's Nvidia Driver plugin (or 'all'). Leave EMPTY unless you are running the subwave-aio-cuda image with --runtime=nvidia in Extra Parameters."
           Type="Variable" Display="advanced" Required="false" Mask="false"/>

@@ -56,6 +56,28 @@ export interface FormState {
   djHouseRules: string;
 }
 
+// The react-hook-form shape: just the two field arrays (personas, djPrompts).
+// `activePersonaId`/`activeDjPromptId`/`djHouseRules` stay plain useState in
+// PersonasPanel — they aren't array rows and the controller's own patch
+// registry validates them as their own top-level settings keys, not as part
+// of the personas/djPrompts arrays.
+//
+// This is a TYPE-ONLY shape, not derived from `z.input<typeof personaSchema>`
+// / `z.input<typeof djPromptSchema>`: every leaf of those schemas is a
+// `z.unknown().transform()` (the schema doubles as the server's load-repair
+// target), so its z.input types every field `unknown` and no nested path
+// (`personas.0.tts.engine`) would type-check as a FieldPath. Persona/
+// DjPromptPreset are the shape the schema's own `.transform()` actually
+// produces and the shape this editor already edits — casting the real
+// `form.control` to `Control<PersonasFormValues>` is a type-only statement,
+// same technique Task 3 established for festivalsSchema/moodsSchema (the
+// runtime object is identical; only what TypeScript is allowed to believe
+// changes).
+export interface PersonasFormValues {
+  personas: Persona[];
+  djPrompts: DjPromptPreset[];
+}
+
 export interface SkillCatalogEntry {
   name: string;
   label?: string;

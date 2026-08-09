@@ -43,6 +43,12 @@ import { STATE_DIR } from '../config.js';
 import { queue, registerSkillKinds } from '../broadcast/queue.js';
 import { buildStationServices } from '../llm/internal/tools/station-services.js';
 import { parseConfigFields, type SkillConfigField } from './config-fields.js';
+import {
+  SKILL_SLUG_RE,
+  SKILL_TAG_RE,
+  TAGS_PER_SKILL_LIMIT,
+  normalizeSkillTags,
+} from '../schemas/skill.js';
 
 // Shipped built-in TEMPLATE store, resolved relative to this module so it works
 // under both dev (tsx on bind-mounted src) and prod (tsx on the COPYd src). This
@@ -54,13 +60,13 @@ export const BUILTINS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), 'bu
 // (re-exported below) delegate to community/registry.ts; every route + admin-UI
 // consumer is unchanged.
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
-const SLUG_RE_INNER = /^[a-z0-9][a-z0-9-]{0,48}$/;
 
 // Custom-skill slug: lowercase, starts alphanumeric, then alphanumeric/hyphen,
 // ≤49 chars. Anchored, so it can't contain '/', '.', or whitespace — the routes
-// rely on that to keep a slug from escaping state/skills/. Exported so the admin
-// create route validates against the exact pattern the loader enforces.
-export const SLUG_RE = SLUG_RE_INNER;
+// rely on that to keep a slug from escaping state/skills/. Now homed in the
+// shared skill schema (mirrored into the admin UI) and re-exported here under
+// its historical name, so every call site is unchanged.
+export const SLUG_RE = SKILL_SLUG_RE;
 
 // Kinds the queue reserves for its own voice channels — a custom skill may not
 // shadow these (seeded kinds are added below, once discovered).
@@ -129,21 +135,11 @@ function parseContextFields(raw: string | undefined): string[] | undefined {
 
 // Freeform organisation tags (`tags: late-night, factual`) — operator vocabulary
 // for filtering the admin skill list. Lowercase slugs, deduped, capped; invalid
-// entries are dropped (lenient, like every other frontmatter field). Exported so
-// the admin routes normalise form input with the exact rules the loader applies.
-export const TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
-export const TAGS_PER_SKILL_LIMIT = 8;
-export function parseTags(raw: unknown): string[] {
-  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
-  const out: string[] = [];
-  for (const item of list) {
-    const tag = String(item ?? '').trim().toLowerCase();
-    if (!TAG_RE.test(tag) || out.includes(tag)) continue;
-    out.push(tag);
-    if (out.length >= TAGS_PER_SKILL_LIMIT) break;
-  }
-  return out;
-}
+// entries are dropped (lenient, like every other frontmatter field). The rules
+// and the lenient parse both live in the shared skill schema now, beside the
+// strict form-side `skillTagsSchema` that refuses what this one drops.
+export { SKILL_TAG_RE as TAG_RE, TAGS_PER_SKILL_LIMIT };
+export const parseTags = normalizeSkillTags;
 
 // A shipped built-in template, read on demand by the seeder / reset route /
 // admin "defaults" payload. The template FILES are never kept resident.

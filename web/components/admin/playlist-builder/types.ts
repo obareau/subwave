@@ -2,16 +2,19 @@
 
 // Shapes, vocab and the small formatters the playlist builder shares.
 
+import { SHOW_ENERGY } from '@/lib/schemas.generated';
 
 export const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
 
-// Mirrors SHOW_MOODS in controller/src/settings.ts (stable vocab).
-export const MOODS = [
-  'energetic', 'calm', 'reflective', 'celebratory', 'romantic', 'spiritual',
-  'focus', 'workout', 'driving', 'cooking', 'rainy', 'sunny', 'night', 'morning',
-  'evening', 'festival', 'cultural',
-];
-export const ENERGIES = ['low', 'medium', 'high'];
+// There is deliberately NO mood list here: moods are operator-editable
+// (/admin/moods), so a hand-copied vocabulary was wrong twice over — a custom
+// mood was unpickable in the builder and a deleted mood was still offered. The
+// panel reads the live names off /settings (tts.moods) instead.
+//
+// Energy IS a fixed vocabulary, and its one home is the show schema — read out
+// of the flat mirror rather than re-declared (a mirrored module may not import
+// another one, but this file isn't mirrored; it just must not carry a copy).
+export const ENERGIES: readonly string[] = SHOW_ENERGY;
 export type ArcShape = 'flat' | 'build' | 'peak-then-cool' | 'wind-down';
 export const ARCS: { id: ArcShape; label: string; hint: string }[] = [
   { id: 'flat', label: 'Steady', hint: 'even energy throughout' },

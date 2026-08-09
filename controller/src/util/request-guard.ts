@@ -3,6 +3,7 @@
 // broadcast/dj-agent.ts, pinned by scripts/request-guard.test.ts. The echo
 // guard is the load-bearing layer: it is language-agnostic and catches any
 // "read this on air" phrasing the opener regexes miss.
+import { REQUEST_NAME_MAX } from '../schemas/request.js';
 
 // "Read this verbatim" directive family. The payload always trails the
 // directive, so cutting at the earliest match keeps the musical intent
@@ -114,9 +115,12 @@ export function echoesRequest(
 // keeping every ordinary name (Latin, Cyrillic, Arabic, Indic, CJK, ...).
 const NAME_DISALLOWED = /[^\p{sc=Latin}\p{sc=Cyrillic}\p{sc=Greek}\p{sc=Arabic}\p{sc=Hebrew}\p{sc=Devanagari}\p{sc=Gurmukhi}\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Hangul}\p{sc=Thai}\p{Nd}\s\-_.']/gu;
 
-// The screen-name cap. Lives here, next to the only code that applies it —
-// middleware/ratelimit.ts used to export a REQUEST_NAME_MAX nobody read.
-const NAME_MAX = 40;
+// The screen-name cap — an alias of the shared schema's figure, which the
+// route boundary and the player's request boxes both enforce as a refusal.
+// The slice below stays as this module's belt: cleanRequesterName is a repair
+// path by design ('anon', not a 400), and callers that never crossed the
+// route boundary still get a bounded name.
+const NAME_MAX = REQUEST_NAME_MAX;
 
 export function cleanRequesterName(raw: string | null | undefined, reserved: string[] = []): string {
   const cleaned = String(raw ?? '')

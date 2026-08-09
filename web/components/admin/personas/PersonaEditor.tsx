@@ -1,8 +1,10 @@
 'use client';
-// Full-screen editor for the focused persona. Binds the index-taking mutators down
-// to the focused persona so the cards stay index-agnostic.
+// Full-screen editor for the focused persona. `control`+`index` thread straight
+// down to the cards that bind real fields; `persona` stays as a read-only live
+// snapshot for display-only reads (title, share link, on-air/default pills).
 import type { RefObject } from 'react';
-import type { Persona, PersonaTts, SettingsResponse, SkillCatalogEntry } from './types';
+import type { Control } from 'react-hook-form';
+import type { Persona, PersonasFormValues, SettingsResponse, SkillCatalogEntry } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { Eyebrow, Pill } from '../ui';
 import { cn } from '../../../lib/cn';
@@ -17,6 +19,7 @@ import { PersonaSkillsCard } from './PersonaSkillsCard';
 interface PersonaEditorProps {
   persona: Persona;
   index: number;
+  control: Control<PersonasFormValues>;
   personaCount: number;
   activePersonaId: string;
   onAirPersonaId: string;
@@ -31,9 +34,9 @@ interface PersonaEditorProps {
   open: boolean;
   isNew: boolean;
   onClose: () => void;
-  setPersona: (i: number, patch: Partial<Persona>) => void;
-  setPersonaTts: (i: number, patch: Partial<PersonaTts>) => void;
-  setPersonaSkills: (i: number, skills: string[]) => void;
+  // The one remaining multi-field bulk patch (the AI-draft "apply") — every
+  // keystroke field is bound straight to `control` instead.
+  onUpdate: (i: number, patch: Partial<Persona>) => void;
   onUploadAvatar: (id: string, file: File) => void;
   onGenerateAvatar: (id: string) => void;
   onClearAvatar: (id: string) => void;
@@ -49,15 +52,13 @@ interface PersonaEditorProps {
 }
 
 export function PersonaEditor({
-  persona, index, personaCount, activePersonaId, onAirPersonaId, data, adminFetch, avatarTick, uploadingId,
+  persona, index, control, personaCount, activePersonaId, onAirPersonaId, data, adminFetch, avatarTick, uploadingId,
   defaultEngine, cloudIssueText, skillCatalog, editorRef, open, isNew, onClose,
-  setPersona, setPersonaTts, setPersonaSkills,
+  onUpdate,
   onUploadAvatar, onGenerateAvatar, onClearAvatar, onSetActive, onRemove,
   canSave, focusedOk, allPersonasOk, promptOk, busy, onSave, onDiscard,
 }: PersonaEditorProps) {
-  const update = (patch: Partial<Persona>) => setPersona(index, patch);
-  const updateTts = (patch: Partial<PersonaTts>) => setPersonaTts(index, patch);
-  const setSkills = (skills: string[]) => setPersonaSkills(index, skills);
+  const update = (patch: Partial<Persona>) => onUpdate(index, patch);
 
   // Opens the prefilled add-persona Issue Form on GitHub. Only the portable fields
   // travel — voice and avatar stay station-side.
@@ -157,28 +158,31 @@ export function PersonaEditor({
       <div ref={editorRef} className="grid">
         <PersonaIdentityCard
           persona={persona}
+          index={index}
+          control={control}
           isNew={isNew}
           adminFetch={adminFetch}
           avatarTick={avatarTick}
           uploading={uploadingId === persona.id}
-          update={update}
+          onUpdate={update}
           onPickAvatar={(file) => onUploadAvatar(persona.id, file)}
           onGenerateAvatar={() => onGenerateAvatar(persona.id)}
           onClearAvatar={() => onClearAvatar(persona.id)}
         />
 
-        <PersonaBehaviorCard persona={persona} update={update} />
+        <PersonaBehaviorCard index={index} control={control} />
 
         <PersonaVoiceCard
           persona={persona}
+          index={index}
+          control={control}
           data={data}
           defaultEngine={defaultEngine}
           cloudIssueText={cloudIssueText}
           adminFetch={adminFetch}
-          updateTts={updateTts}
         />
 
-        <PersonaSkillsCard persona={persona} skillCatalog={skillCatalog} setSkills={setSkills} />
+        <PersonaSkillsCard index={index} control={control} skillCatalog={skillCatalog} />
       </div>
     </EditorDialog>
   );

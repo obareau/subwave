@@ -1,13 +1,7 @@
-// `subwave self-update` — re-runs the install script to fetch the latest
-// release binary in place. Equivalent to:
-//
-//   curl -fsSL https://cli.getsubwave.com | sh -s -- --dir <current install dir>
-//
-// We re-exec the installer instead of duplicating its logic here so the
-// download / arch-detect / sudo-fallback path stays in exactly one place.
-// The installer overwrites the binary atomically (mv after chmod), so the
-// running process keeps executing — only the next invocation picks up the
-// new code.
+// `subwave self-update` — re-execs the install script rather than duplicating
+// it, keeping download / arch-detect / sudo-fallback in one place. The installer
+// swaps the binary atomically, so this process runs on to completion and only
+// the next invocation is the new code.
 
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
@@ -21,10 +15,8 @@ const INSTALLER_URL = process.env.SUBWAVE_INSTALLER_URL ?? 'https://cli.getsubwa
 export async function runSelfUpdateCommand(args: { version?: string } = {}): Promise<void> {
   banner('self-update');
 
-  // Resolve where this binary lives. process.execPath is the running
-  // executable; for a bun-compiled standalone, that's the subwave binary
-  // itself. For tsx-loaded dev runs, it's the node interpreter — we treat
-  // that as "you're a contributor, just `git pull` instead."
+  // For a bun-compiled standalone, execPath IS the subwave binary. Under tsx
+  // it's the node interpreter, which means a contributor who wants `git pull`.
   const exe = process.execPath;
   if (exe.endsWith('/node') || exe.endsWith('/bun') || exe.endsWith('/tsx')) {
     err('Refusing to self-update a non-standalone CLI.');
@@ -33,10 +25,8 @@ export async function runSelfUpdateCommand(args: { version?: string } = {}): Pro
     process.exit(2);
   }
 
-  // Where to put the new binary. The installer's default is /usr/local/bin;
-  // we override with the dir of the current executable so an `~/.local/bin`
-  // install stays put. realpathSync resolves symlinks so a symlinked binary
-  // (e.g. via Homebrew) doesn't end up in two places.
+  // Override the installer's /usr/local/bin default so an ~/.local/bin install
+  // stays put; realpathSync keeps a symlinked binary from landing in two places.
   let installDir: string;
   try {
     installDir = dirname(realpathSync(exe));
@@ -50,10 +40,8 @@ export async function runSelfUpdateCommand(args: { version?: string } = {}): Pro
   muted(`source:  ${INSTALLER_URL}`);
   console.log();
 
-  // Pipe curl through sh with --dir set to the resolved install dir. We
-  // shell out to bash -c so the pipe lives inside a single shell process,
-  // which is the only way --dir gets passed to the install script (sh -s
-  // forwards everything after `--` to the script).
+  // bash -c keeps the pipe inside one shell process, which is the only way
+  // `sh -s -- --dir` reaches the install script.
   const versionArg = args.version ? ` --version ${shellEscape(args.version)}` : '';
   const cmd = `set -e; curl -fsSL ${shellEscape(INSTALLER_URL)} | sh -s -- --dir ${shellEscape(installDir)}${versionArg}`;
   await new Promise<void>((resolveP) => {
@@ -71,9 +59,8 @@ export async function runSelfUpdateCommand(args: { version?: string } = {}): Pro
   await pauseForEnter();
 }
 
-// Single-quote the argument and escape any single quotes inside it. Safe
-// against arbitrary content because every character either gets through
-// verbatim (inside the single quotes) or as a quoted escape sequence.
+// Safe against arbitrary content: every character either passes verbatim inside
+// the single quotes or comes through as a quoted escape.
 function shellEscape(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }

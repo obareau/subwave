@@ -12,6 +12,8 @@ import { isConfigured } from '../audio/elevenlabs.js';
 import { queue } from '../broadcast/queue.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { audioUpload } from '../middleware/upload.js';
+import { validateBody } from '../middleware/validate.js';
+import { bedCreateSchema, imagingImportSchema } from '../schemas/imaging.js';
 import { audioContentType } from '../audio/audio-import.js';
 
 export const router = express.Router();
@@ -31,20 +33,10 @@ router.get('/beds', requireAdmin, async (req, res) => {
 
 // Generate a bed from a text prompt via the ElevenLabs Music API. Mirrors
 // POST /sfx; validation → 400, generation failure → 500.
-router.post('/beds', requireAdmin, async (req, res) => {
-  const name = (req.body?.name || '').trim();
-  const description = (req.body?.description || '').trim();
-  const prompt = (req.body?.prompt || '').trim();
-  const durationSec = req.body?.durationSec;
-  if (!name) return res.status(400).json({ error: 'name is required' });
-  if (!prompt) return res.status(400).json({ error: 'prompt is required' });
-  if (prompt.length > 500) return res.status(400).json({ error: 'prompt too long (max 500)' });
-  if (durationSec != null && durationSec !== '') {
-    const d = Number(durationSec);
-    if (!Number.isFinite(d) || d <= 0) return res.status(400).json({ error: 'durationSec must be a positive number' });
-    if (d < beds.MIN_DURATION_SEC) return res.status(400).json({ error: `durationSec must be at least ${beds.MIN_DURATION_SEC}s` });
-    if (d > BED_GEN_MAX_SEC) return res.status(400).json({ error: `durationSec is capped at ${BED_GEN_MAX_SEC}s` });
-  }
+router.post('/beds', requireAdmin, validateBody(bedCreateSchema), async (req, res) => {
+  const { name, description, prompt, durationSec } = req.body as {
+    name: string; description: string; prompt: string; durationSec?: number;
+  };
   try {
     const created = await beds.create({ name, description, prompt, durationSec });
     queue.log('scheduler', `New bed generated: "${created.name}" (${Math.round(created.durationSec)}s)`);
@@ -57,12 +49,12 @@ router.post('/beds', requireAdmin, async (req, res) => {
 // Import an operator-supplied audio file as a bed (multipart `file`, `name`,
 // optional `description`). The length gate lives in beds.importAudio — a bed
 // that can't outlast a script is rejected there with a real reason.
-router.post('/beds/upload', requireAdmin, audioUpload('file'), async (req, res) => {
+// validateBody AFTER audioUpload — multer parses the multipart body, the
+// middleware replaces req.body only, req.file rides through untouched.
+router.post('/beds/upload', requireAdmin, audioUpload('file'), validateBody(imagingImportSchema), async (req, res) => {
   const file = req.file;
-  const name = (req.body?.name || '').trim();
-  const description = (req.body?.description || '').trim();
+  const { name, description } = req.body as { name: string; description: string };
   if (!file) return res.status(400).json({ error: 'file is required' });
-  if (!name) return res.status(400).json({ error: 'name is required' });
   try {
     const created = await beds.importAudio(file.buffer, {
       name,

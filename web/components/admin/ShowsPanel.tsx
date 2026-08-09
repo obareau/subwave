@@ -5,11 +5,24 @@
 // The weekly plan lives at /admin/shows/schedule, which owns the board and
 // PUT /schedule — this page loads the schedule read-only for the hours-a-week
 // counts. Putting a show on air right now is a takeover, and lives on the dash.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { z } from 'zod';
+import {
+  useFieldArray,
+  type Control,
+  type FieldErrors,
+  type UseFormGetValues,
+  type UseFormReset,
+  type UseFormSetValue,
+  type UseFormTrigger,
+  type UseFormWatch,
+} from 'react-hook-form';
 import { Users, Share2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
+import { useZodForm, applyServerFieldErrors } from '@/lib/form';
+import { showSchema, type ShowSchemaContext } from '@/lib/schemas.generated';
 import { Button } from '../ui/button';
 import { Card, Btn, Pill, Eyebrow, Metric } from './ui';
 import RosterViewToggle from './RosterViewToggle';
@@ -23,24 +36,35 @@ import { useRosterView } from '../../lib/adminView';
 import { showSubmitUrl } from '../../lib/repo';
 import { ShowDefRow } from './shows/ShowDefRow';
 import { ShowEditor } from './shows/ShowEditor';
-import { clientMintId, emptyWeek, hydrateShow, showPayload, showRow, showValid } from './shows/lib';
+import { clientMintId, emptyWeek, hydrateShow, showContext, showPayload, showRow } from './shows/lib';
 import type {
   CommunityShow,
-  FormState,
   Persona,
   PlaylistIndexStatus,
   Schedule,
   SettingsResponse,
   Show,
+  ShowsFormValues,
   SkillOption,
   ThemeOption,
 } from './shows/types';
 import { SHOWS_MAX } from './shows/types';
 
+// The RHF resolver. `showSchema` is a FACTORY — unlike every other schema in
+// this migration it cannot be validated against itself, so the object built
+// here is re-created whenever `showCtx` changes identity (below) rather than
+// once at module scope. `schedule` is deliberately NOT part of this shape:
+// this panel loads it read-only for the hours-a-week counts and never saves
+// it (the weekly grid + PUT /schedule live on the separate Rundown page), so
+// it stays a plain useState alongside the form instead of a validated field.
+function showsFormSchema(ctx: ShowSchemaContext) {
+  return z.object({ shows: z.array(showSchema(ctx)) });
+}
+
 export default function ShowsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [data, setData] = useState<SettingsResponse | null>(null);
-  const [form, setForm] = useState<FormState | null>(null);
+  const [schedule, setSchedule] = useState<Schedule>(emptyWeek());
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Best-effort; null = still loading.
@@ -50,7 +74,7 @@ export default function ShowsPanel() {
   const [installing, setInstalling] = useState<string | null>(null);  // community slug installing, or null
 
   // Shows are edited in place — no modal, no draft copy; edits land straight on
-  // `form.shows[focusIdx]` and persist on Save show. null = none open.
+  // the RHF field array and persist on Save show. null = none open.
   const [focusIdx, setFocusIdx] = useState<number | null>(null);
   // The AI-draft field shows only while creating.
   const [creatingId, setCreatingId] = useState<string | null>(null);
@@ -89,6 +113,76 @@ export default function ShowsPanel() {
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); return null; }
   };
 
+  // Memoised because showCtx depends on them and `x || []` is a fresh array
+  // every render — which would rebuild the context, and with it re-run the
+  // resolver's schema construction, on each one.
+  const personas: Persona[] = useMemo(() => data?.values?.personas || [], [data?.values?.personas]);
+  const moods: string[] = useMemo(() => data?.tts?.moods || [], [data?.tts?.moods]);
+  // The four inputs the shared show schema needs. Built once here so the row
+  // badges, the Save gate and the editor all judge a show the same way — and
+  // the same way the controller will. `themes` loads from a SEPARATE public
+  // fetch (below) that can resolve after `data` (personas/moods) already has —
+  // exactly the "context changes asynchronously" case the ctx-triggered
+  // revalidation effect further down exists to handle.
+  const showCtx = useMemo(
+    () => showContext({
+      personas, moods,
+      themeIds: themes.map(t => t.id),
+      minTrackSeconds: data?.values?.minTrackSeconds ?? null,
+    }),
+    [personas, moods, themes, data?.values?.minTrackSeconds],
+  );
+  // A NEW z.object() every time showCtx changes identity — showSchema(ctx) is
+  // documented as a heavyweight factory that returns a fresh schema per call,
+  // so this must stay memoised on ctx identity rather than rebuilt every
+  // render (Step 2 of the task brief).
+  const formSchema = useMemo(() => showsFormSchema(showCtx), [showCtx]);
+
+  const form = useZodForm(formSchema, { shows: [] });
+  // Every field in showSchema's output is reached through at least one
+  // z.preprocess/z.unknown() pipeline (the outer legacy-field migration alone
+  // wraps the whole object), so z.input<> types the whole thing `unknown` and
+  // no nested path (`shows.0.personaId`) would type-check as a FieldPath.
+  // Type-only cast — same runtime object, same technique Task 3/9 established.
+  const control = form.control as unknown as Control<ShowsFormValues>;
+  const setValue = form.setValue as unknown as UseFormSetValue<ShowsFormValues>;
+  const getValues = form.getValues as unknown as UseFormGetValues<ShowsFormValues>;
+  const watch = form.watch as unknown as UseFormWatch<ShowsFormValues>;
+  const resetForm = form.reset as unknown as UseFormReset<ShowsFormValues>;
+  const trigger = form.trigger as unknown as UseFormTrigger<ShowsFormValues>;
+
+  // `keyName: '_rhfKey'` is load-bearing — shows carry their own `id`, and
+  // RHF's default keyName ('id') would clobber it. `fields` itself is unused:
+  // every render below reads live values via `watch('shows')`, matching
+  // PersonasPanel's convention (personas/djPrompts).
+  const { append: appendShowField, remove: removeShowField } =
+    useFieldArray({ control, name: 'shows', keyName: '_rhfKey' });
+
+  // useZodForm takes the schema at first render, and `showCtx` genuinely DOES
+  // change after mount — `data` (personas/moods) and `themes` resolve from two
+  // separate fetches that can land in either order, and even a single load
+  // races itself: `resetForm({shows})` below runs synchronously in the same
+  // callback as `setData(j)`, before React has re-rendered with the fresh
+  // `showCtx` that `setData` will produce, so a `trigger()` called right there
+  // would still see the STALE (empty-context) resolver.
+  //
+  // The fix is this effect, not a remount: react-hook-form's own `useForm`
+  // writes `control._options = props` unconditionally on every render (read
+  // directly from node_modules/react-hook-form/dist/index.cjs.js — the
+  // assignment sits in the function body, not gated behind a ref or a
+  // useEffect), so by the time THIS effect runs (after the render that
+  // produced the new showCtx/resolver has committed), `form.trigger()` is
+  // guaranteed to read the CURRENT resolver, not one captured at mount.
+  // Confirmed empirically too, by sabotage — see shows() in verify-forms.py:
+  // deleting this effect reproduces a real bug (every already-valid show
+  // reads as "incomplete" immediately after load, because the very first
+  // trigger() a naive version would fire runs before personas/moods exist),
+  // and restoring it fixes it, with no remount anywhere in the diff.
+  useEffect(() => {
+    void form.trigger();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCtx]);
+
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     (async () => {
@@ -100,11 +194,18 @@ export default function ShowsPanel() {
           const day = (sched as Record<number, (string | null)[] | undefined>)[d];
           if (Array.isArray(day)) for (let h = 0; h < 24; h++) week[d]![h] = day[h] ?? null;
         }
+        setSchedule(week);
         const shows: Show[] = (j.values.shows || []).map(hydrateShow);
-        setForm({ shows, schedule: week });
+        resetForm({ shows });
+        // No explicit trigger() here — the ctx-effect above fires on this
+        // same render (personas/moods just changed identity too, since they
+        // derive from the SAME `data` this callback just set), and it runs
+        // AFTER shows are populated, so it validates the right rows against
+        // the right context in one pass. See that effect's comment.
       }
     })();
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, needsAuth]);
 
   // Skill catalogue for the programme feature-segment pin. Failures are silent:
   // the picker falls back to "Producer's choice" with no pin options.
@@ -123,7 +224,9 @@ export default function ShowsPanel() {
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Themes for the per-show override. Public endpoint, so it runs before
-  // sign-in; on failure the picker offers only "Station default".
+  // sign-in; on failure the picker offers only "Station default". Resolves
+  // independently of `data` — the async race the ctx-revalidation effect
+  // above exists to cover.
   useEffect(() => {
     if (!hydrated) return;
     const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
@@ -199,38 +302,41 @@ export default function ShowsPanel() {
     return () => { cancelled = true; };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const personas: Persona[] = data?.values?.personas || [];
-  const moods: string[] = data?.tts?.moods || [];
   const apiBase = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
   const personaName = (id: string): string => personas.find(p => p.id === id)?.name || '—';
 
-  // Edits land straight on the show in form state (no draft); trimming and
-  // cleaning happen once, at Save show.
-  const setShow = (i: number, patch: Partial<Show>) =>
-    setForm(f => f ? ({ ...f, shows: f.shows.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) }) : f);
-
   const focusShow = (i: number) => { scrollToEditorRef.current = true; setCreatingId(null); setFocusIdx(i); };
+
+  // The one remaining multi-field bulk patch — the AI-draft "apply" hands back
+  // several fields at once. Every keystroke field is bound straight to
+  // `control` elsewhere, so this is its only caller (mirrors PersonasPanel's
+  // applyPersonaPatch).
+  const applyShowPatch = (i: number, patch: Partial<Show>) => {
+    const current = getValues(`shows.${i}`);
+    if (!current) return;
+    setValue(`shows.${i}`, { ...current, ...patch }, { shouldDirty: true, shouldValidate: true });
+  };
 
   // Name stays blank so the new show reads as incomplete until named.
   const addShow = () => {
-    if (!form || form.shows.length >= SHOWS_MAX || personas.length === 0) return;
+    const current = getValues('shows');
+    if (current.length >= SHOWS_MAX || personas.length === 0) return;
     const id = clientMintId();
-    const newIdx = form.shows.length;
-    setForm(f => {
-      if (!f) return f;
-      if (f.shows.length >= SHOWS_MAX) return f;
-      return {
-        ...f,
-        shows: [...f.shows, {
-          id, name: '', topic: '',
-          personaId: personas[0]?.id || '', guestPersonaIds: [], banter: false, moods: [],
-          themeId: '', genres: [], eras: [], energies: [], vocals: '',
-          filtersStrict: false, maxTrackSeconds: null,
-          playlistIds: [], playlistStrict: false, excludedPlaylistIds: [],
-          programme: false, segmentSkill: '',
-        }],
-      };
+    const newIdx = current.length;
+    appendShowField({
+      id, name: '', topic: '',
+      personaId: personas[0]?.id || '', guestPersonaIds: [], banter: false, moods: [],
+      themeId: '', genres: [], eras: [], energies: [], vocals: '',
+      filtersStrict: false, maxTrackSeconds: null,
+      playlistIds: [], playlistStrict: false, excludedPlaylistIds: [],
+      programme: false, segmentSkill: '',
     });
+    // RHF only populates formState.errors for a field once IT has been
+    // touched — a freshly-appended row's empty `name` correctly disables the
+    // roster's isValid-derived reading, but without an explicit trigger() the
+    // "incomplete" badge would stay silent about why until the operator
+    // happens to touch a field (Task 9's precedent).
+    void form.trigger();
     scrollToEditorRef.current = true;
     setCreatingId(id);
     setFocusIdx(newIdx);
@@ -238,8 +344,8 @@ export default function ShowsPanel() {
   };
 
   const removeShow = async (i: number) => {
-    if (!form) return;
-    const target = form.shows[i];
+    const current = getValues('shows');
+    const target = current[i];
     if (!target) return;
     // Persisted immediately, not deferred to Save schedule. A 404 means a
     // locally-added show never saved server-side, so the local splice is enough.
@@ -253,15 +359,17 @@ export default function ShowsPanel() {
       notify.err(`Delete failed: ${errorMessage(e)}`);
       return;
     }
-    // Splice by id, not index: the await may have elapsed. Unsaved edits to
-    // other shows are preserved.
-    setForm(f => {
-      if (!f) return f;
-      const week: Schedule = JSON.parse(JSON.stringify(f.schedule));
+    // Splice by id, resolved at call time — the await may have elapsed and
+    // other rows may have shifted. Unsaved edits to other shows are preserved.
+    const latest = getValues('shows');
+    const idx = latest.findIndex(sh => sh.id === target.id);
+    if (idx !== -1) removeShowField(idx);
+    setSchedule(prev => {
+      const week: Schedule = JSON.parse(JSON.stringify(prev));
       for (let d = 0; d < 7; d++)
         for (let h = 0; h < 24; h++)
           if (week[d]![h] === target.id) week[d]![h] = null;
-      return { ...f, shows: f.shows.filter(sh => sh.id !== target.id), schedule: week };
+      return week;
     });
     // Keep editor focus aligned with the shifted list.
     setFocusIdx(cur => (cur == null ? cur : cur === i ? null : cur > i ? cur - 1 : cur));
@@ -279,7 +387,8 @@ export default function ShowsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       const added = j.show ? hydrateShow(j.show) : null;
       if (added) {
-        setForm(f => f ? { ...f, shows: [...f.shows, added] } : f);
+        appendShowField(added);
+        void form.trigger(); // see addShow's comment
       }
       const host = added?.personaId ? personaName(added.personaId) : 'your active DJ';
       notify.ok(`Installed “${added?.name || slug}” — added unscheduled with ${host} as host. Assign a persona/guests, then schedule it on the Rundown.`);
@@ -288,16 +397,15 @@ export default function ShowsPanel() {
     } finally { setInstalling(null); }
   };
 
-  const scheduledHours = form
-    ? Object.values(form.schedule).flat().filter(Boolean).length : 0;
-  const countHours = (id: string): number => form
-    ? Object.values(form.schedule).flat().filter(c => c === id).length : 0;
+  const scheduledHours = Object.values(schedule).flat().filter(Boolean).length;
+  const countHours = (id: string): number => Object.values(schedule).flat().filter(c => c === id).length;
 
-  // Persists ONE show, independent of any other half-finished show in the panel.
-  // The local entry is swapped for the server's normalized copy (same id — a
-  // client-minted s_ id is kept server-side), so other unsaved edits survive.
-  const saveShow = async (s: Show): Promise<boolean> => {
-    if (!showValid(s)) return false;
+  // Persists ONE show, independent of any other half-finished show in the
+  // panel — gated on THIS row's own errors, not form.formState.isValid (which
+  // would require every OTHER open-but-unsaved show to be valid too).
+  const saveShow = async (index: number): Promise<boolean> => {
+    const s = getValues(`shows.${index}`);
+    if (!s || form.formState.errors.shows?.[index]) return false;
     setBusy(true);
     try {
       const r = await adminFetch('/shows', {
@@ -305,10 +413,26 @@ export default function ShowsPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ show: showPayload(s) }),
       });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; show?: Partial<Show> | null };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = (await r.json().catch(() => ({}))) as {
+        error?: string; show?: Partial<Show> | null; fieldErrors?: Record<string, string>;
+      };
+      if (!r.ok) {
+        // The route validates the body under the key `show` (POST /shows
+        // sends ONE show, not the whole array), so a server-only refusal
+        // comes back keyed `show.<field>` — remapped onto this row's own
+        // field-array path before landing it, the same idea webhooks/
+        // personas use for their own dotted-path fieldErrors.
+        if (j.fieldErrors) {
+          const remapped: Record<string, string> = {};
+          for (const [k, v] of Object.entries(j.fieldErrors)) {
+            remapped[k.replace(/^show\./, `shows.${index}.`)] = v;
+          }
+          applyServerFieldErrors(form, remapped);
+        }
+        throw new Error(j.error || `failed (${r.status})`);
+      }
       const saved = j.show ? hydrateShow(j.show) : null;
-      if (saved) setForm(f => f ? { ...f, shows: f.shows.map(x => (x.id === s.id ? saved : x)) } : f);
+      if (saved) setValue(`shows.${index}`, saved, { shouldDirty: true, shouldValidate: true });
       notify.ok('Show saved.');
       return true;
     } catch (e) {
@@ -326,7 +450,7 @@ export default function ShowsPanel() {
       </div>
     );
   }
-  if (!form) {
+  if (!data) {
     return (
       <div className="grid gap-4">
         <Card title="Shows" sub="definitions">
@@ -336,9 +460,16 @@ export default function ShowsPanel() {
     );
   }
 
+  const shows = watch('shows');
   // focusIdx can briefly point past the end after a removal, so an out-of-range
   // index coerces to "nothing open".
-  const focused = focusIdx != null ? (form.shows[focusIdx] ?? null) : null;
+  const focused = focusIdx != null ? (shows[focusIdx] ?? null) : null;
+  // form.formState.errors is typed off the schema's z.input (`unknown` for
+  // most of Show's fields, per showsFormSchema's own factory shape), so this
+  // is a type-only cast onto the shape the resolver's parse actually produces
+  // — same technique as the `control`/`setValue`/etc. casts above.
+  const focusedErrors = (focusIdx != null ? form.formState.errors.shows?.[focusIdx] : undefined) as
+    FieldErrors<Show> | undefined;
 
   return (
     <div className="grid gap-4">
@@ -376,7 +507,7 @@ export default function ShowsPanel() {
       )}
 
       <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
-        <span className="caption">show definitions · {form.shows.length}/{SHOWS_MAX} shows</span>
+        <span className="caption">show definitions · {shows.length}/{SHOWS_MAX} shows</span>
         {/* Own line on a phone: sharing a row with the caption folds the
             Cards/List toggle into two stacked icons. */}
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
@@ -398,28 +529,28 @@ export default function ShowsPanel() {
             tone="accent"
             className="min-h-9 sm:min-h-0"
             onClick={addShow}
-            disabled={form.shows.length >= SHOWS_MAX || personas.length === 0}
+            disabled={shows.length >= SHOWS_MAX || personas.length === 0}
           >
             + Add show
           </Btn>
         </div>
       </div>
-      {form.shows.length === 0 && (
+      {shows.length === 0 && (
         <EmptyState
           title="No shows scheduled"
           description="Add one to start programming the week."
         />
       )}
 
-      {view === 'list' && form.shows.length > 0 && (
+      {view === 'list' && shows.length > 0 && (
         <ShowsTable
-          rows={form.shows.map((s, i) => showRow(s, i, personas, apiBase, countHours(s.id)))}
+          rows={shows.map((s, i) => showRow(s, i, personas, apiBase, countHours(s.id), !form.formState.errors.shows?.[i]))}
           onEdit={r => focusShow(r.index)}
         />
       )}
 
-      {view === 'cards' && form.shows.map((s, i) => {
-        const ok = showValid(s);
+      {view === 'cards' && shows.map((s, i) => {
+        const ok = !form.formState.errors.shows?.[i];
         const hrs = countHours(s.id);
         const host = personas.find(p => p.id === s.personaId) ?? null;
         const guests = (s.guestPersonaIds || [])
@@ -444,6 +575,10 @@ export default function ShowsPanel() {
         <ShowEditor
           key={focused.id}
           show={focused}
+          index={focusIdx}
+          control={control}
+          trigger={trigger}
+          errors={focusedErrors}
           editorRef={editorRef}
           personas={personas}
           moods={moods}
@@ -458,8 +593,9 @@ export default function ShowsPanel() {
           minTrackSeconds={data?.values?.minTrackSeconds}
           busy={busy}
           isNew={focused.id === creatingId}
-          update={(patch) => setShow(focusIdx, patch)}
-          onSave={async () => { if (focused && await saveShow(focused)) setFocusIdx(null); }}
+          valid={!focusedErrors}
+          onApplyDraft={(patch) => applyShowPatch(focusIdx, patch)}
+          onSave={async () => { if (await saveShow(focusIdx)) setFocusIdx(null); }}
           onClose={() => setFocusIdx(null)}
           onRemove={() => setConfirmDeleteIdx(focusIdx)}
         />
@@ -472,7 +608,7 @@ export default function ShowsPanel() {
         description={
           <>
             Remove{' '}
-            <b>{confirmDeleteIdx !== null ? (form.shows[confirmDeleteIdx]?.name.trim() || 'this show') : 'this show'}</b>
+            <b>{confirmDeleteIdx !== null ? (shows[confirmDeleteIdx]?.name.trim() || 'this show') : 'this show'}</b>
             ? This deletes it right away and clears it from any scheduled hours.
             You don&apos;t need to Save schedule.
           </>
@@ -520,7 +656,7 @@ export default function ShowsPanel() {
             community.map(c => {
               // Shows can't be installed twice — the controller 409s on a name
               // clash — so flag ones already in your list instead of a button.
-              const inShows = form.shows.some(
+              const inShows = shows.some(
                 s => s.name.trim().toLowerCase() === c.name.trim().toLowerCase(),
               );
               const tags = [...c.moods, ...c.genres, ...c.energies].slice(0, 6);
@@ -577,8 +713,8 @@ export default function ShowsPanel() {
                         tone="accent"
                         className="min-h-9 sm:min-h-0"
                         onClick={() => install(c.slug)}
-                        disabled={installing === c.slug || form.shows.length >= SHOWS_MAX}
-                        title={form.shows.length >= SHOWS_MAX ? 'The show list is full' : undefined}
+                        disabled={installing === c.slug || shows.length >= SHOWS_MAX}
+                        title={shows.length >= SHOWS_MAX ? 'The show list is full' : undefined}
                       >
                         {installing === c.slug ? 'Installing…' : 'Install'}
                       </Btn>
@@ -597,4 +733,3 @@ export default function ShowsPanel() {
     </div>
   );
 }
-

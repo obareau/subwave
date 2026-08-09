@@ -161,12 +161,20 @@ export default function LibraryPlaylistsTab({
   const saveEdit = async (pl: PlaylistSummary) => {
     const name = editName.trim();
     if (!name) return;
+    // Send only what actually changed. PATCH validates `name` against
+    // PLAYLIST_NAME_MAX, and a playlist imported from elsewhere can already
+    // carry a longer one — echoing it back unchanged just to flip `public`
+    // would 400 and leave that playlist's visibility permanently uneditable.
+    const patch: { name?: string; public?: boolean } = {};
+    if (name !== pl.name) patch.name = name;
+    if (editPublic !== pl.public) patch.public = editPublic;
+    if (!patch.name && patch.public === undefined) { setEditId(null); return; }
     setBusy(true);
     try {
       const r = await adminFetch(`/playlists/${encodeURIComponent(pl.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, public: editPublic }),
+        body: JSON.stringify(patch),
       });
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `update failed (${r.status})`);

@@ -26,14 +26,14 @@ import { STATE_DIR } from './config.js';
 import { writeFileAtomic } from './util/atomic-file.js';
 import { DEFAULT_THEME_ID, isValidThemeId, listThemes } from './themes.js';
 import { isValidTimezone, setStationTimezone } from './time.js';
+// The bitrate vocabularies are no longer read here — the archive/stream
+// schemas own them (#1348). They stay in the re-export block below, which
+// forwards straight from vocab.js, so the public surface is unchanged.
 import {
-  AAC_BITRATES,
   CHATTERBOX_VOICE_RE,
   DEFAULT_DJ_PROMPT_TEMPLATE,
   DJ_HOUSE_RULES_MAX,
   DJ_PROMPT_LIMIT,
-  DJ_PROMPT_TEXT_MAX,
-  DJ_PROMPT_TEXT_MIN,
   DjPromptEntry,
   FESTIVAL_DEFAULTS,
   KOKORO_LANGS,
@@ -43,8 +43,6 @@ import {
   LOUDNESS_SOURCES,
   LoudnessSource,
   MOOD_PERIODS,
-  MP3_BITRATES,
-  OPUS_BITRATES,
   PERIOD_MOOD_DEFAULTS,
   POCKET_TTS_VOICE_RE,
   SEARCH_PROVIDERS,
@@ -87,6 +85,8 @@ import {
   rawMaxTrackSec,
 } from './settings/defaults.js';
 import { validateCompatParams } from './settings/compat-params.js';
+import { parseSettingsPatchKey } from './settings/patch-registry.js';
+import { maxTrackSecondsValueSchema } from './schemas/settings.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
@@ -102,15 +102,11 @@ import {
 import {
   assertNoOrphanMoods,
   validateDjPromptsStrict,
-  validateFestivalsStrict,
-  validateMoodScheduleStrict,
-  validateMoodsStrict,
   validatePersonasStrict,
   validateScheduleOverrideStrict,
   validateScheduleStrict,
   validateShowsStrict,
   validateTtsBlock,
-  validateWeatherMoodsStrict,
   validateWebhooksStrict,
 } from './settings/validate.js';
 import {
@@ -197,6 +193,11 @@ export {
 export {
   assertNoOrphanMoods,
   validateDjPromptsStrict,
+  // The mood family delegates to schemas/settings.ts now (#1348); update() calls
+  // the registry directly, so these are re-exported straight from the source
+  // module for the callers that still take the validator API — backup import,
+  // onboarding, and scripts/moods.test.ts.
+  validateFestivalsStrict,
   validateMoodScheduleStrict,
   validateMoodsStrict,
   validatePersonasStrict,
@@ -1025,41 +1026,32 @@ export async function update(patch) {
   const next = JSON.parse(JSON.stringify(cur));
   let restart = false;
 
+  // On the shared schema (#1348) — see settings/patch-registry.ts. The schema
+  // says what the value may BE; whether applying it costs a mixer restart stays
+  // here, because that is a property of the transition, not of the value.
   if ('jingleRatio' in patch) {
-    const v = parseInt(patch.jingleRatio, 10);
-    if (!Number.isFinite(v) || v < BOUNDS.jingleRatio.min || v > BOUNDS.jingleRatio.max) {
-      throw new Error(
-        `jingleRatio must be int in [${BOUNDS.jingleRatio.min}, ${BOUNDS.jingleRatio.max}]`,
-      );
-    }
+    const v = parseSettingsPatchKey<number>('jingleRatio', patch.jingleRatio);
     if (v !== cur.jingleRatio) {
       next.jingleRatio = v;
       restart = true;
     }
   }
   if ('crossfadeDuration' in patch) {
-    const v = parseFloat(patch.crossfadeDuration);
-    if (
-      !Number.isFinite(v) ||
-      v < BOUNDS.crossfadeDuration.min ||
-      v > BOUNDS.crossfadeDuration.max
-    ) {
-      throw new Error(
-        `crossfadeDuration must be number in [${BOUNDS.crossfadeDuration.min}, ${BOUNDS.crossfadeDuration.max}]`,
-      );
-    }
+    const v = parseSettingsPatchKey<number>('crossfadeDuration', patch.crossfadeDuration);
     if (v !== cur.crossfadeDuration) {
       next.crossfadeDuration = v;
       restart = true;
     }
   }
   if ('maxTrackSeconds' in patch || 'maxTrackMinutes' in patch) {
-    const v = parseInt(rawMaxTrackSec(patch) as string, 10);
-    if (!Number.isFinite(v) || v < BOUNDS.maxTrackSeconds.min || v > BOUNDS.maxTrackSeconds.max) {
-      throw new Error(
-        `maxTrackSeconds must be int in [${BOUNDS.maxTrackSeconds.min}, ${BOUNDS.maxTrackSeconds.max}]`,
-      );
-    }
+    // The bound lives once, in the shared schema — this applies it to the
+    // RESOLVED value (seconds, or the legacy minutes alias × 60), which is the
+    // figure the precedence rule actually selected.
+    const parsedCap = maxTrackSecondsValueSchema(BOUNDS.maxTrackSeconds).safeParse(
+      rawMaxTrackSec(patch),
+    );
+    if (!parsedCap.success) throw new Error(parsedCap.error.issues[0].message);
+    const v = parsedCap.data;
     // Non-zero caps must clear the crossfade-relative floor (0 = unlimited stays
     // allowed): the track crossfades out starting crossfadeDuration before the
     // cap, so a shorter cap is degenerate / leaves no solo airtime. Uses next's
@@ -1075,99 +1067,43 @@ export async function update(patch) {
     next.maxTrackSeconds = v;
   }
   if ('archive' in patch) {
-    const a = patch.archive || {};
-    if (a.enabled !== undefined) {
-      const v = !!a.enabled;
-      if (v !== cur.archive.enabled) {
-        next.archive.enabled = v;
-        restart = true;
-      }
+    const a = parseSettingsPatchKey<{
+      enabled?: boolean;
+      bitrate?: number;
+      retentionDays?: number;
+    }>('archive', patch.archive);
+    if (a.enabled !== undefined && a.enabled !== cur.archive.enabled) {
+      next.archive.enabled = a.enabled;
+      restart = true;
     }
-    if (a.bitrate !== undefined) {
-      const v = parseInt(a.bitrate, 10);
-      if (!Number.isFinite(v) || !MP3_BITRATE_SET.has(v)) {
-        throw new Error(
-          `archive.bitrate must be one of: ${MP3_BITRATES.join(', ')}`,
-        );
-      }
-      if (v !== cur.archive.bitrate) {
-        next.archive.bitrate = v;
-        restart = true;
-      }
+    if (a.bitrate !== undefined && a.bitrate !== cur.archive.bitrate) {
+      next.archive.bitrate = a.bitrate;
+      restart = true;
     }
     if (a.retentionDays !== undefined) {
-      const v = parseInt(a.retentionDays, 10);
-      if (!Number.isInteger(v) || v < 0 || v > 3650) {
-        throw new Error('archive.retentionDays must be 0 (keep forever) or 1–3650 days');
-      }
       // Enforced controller-side (scheduler cleanup), no Liquidsoap file or
       // restart involved.
-      next.archive.retentionDays = v;
+      next.archive.retentionDays = a.retentionDays;
     }
   }
   if ('stream' in patch) {
-    const st = patch.stream || {};
-    if (st.opusEnabled !== undefined) {
-      const v = !!st.opusEnabled;
-      if (v !== cur.stream.opusEnabled) {
-        next.stream.opusEnabled = v;
-        restart = true;
-      }
-    }
-    if (st.opusBitrate !== undefined) {
-      const v = parseInt(st.opusBitrate, 10);
-      if (!Number.isFinite(v) || !OPUS_BITRATE_SET.has(v)) {
-        throw new Error(
-          `stream.opusBitrate must be one of: ${OPUS_BITRATES.join(', ')}`,
-        );
-      }
-      if (v !== cur.stream.opusBitrate) {
-        next.stream.opusBitrate = v;
-        restart = true;
-      }
-    }
-    if (st.flacEnabled !== undefined) {
-      const v = !!st.flacEnabled;
-      if (v !== cur.stream.flacEnabled) {
-        next.stream.flacEnabled = v;
-        restart = true;
-      }
-    }
-    if (st.oggIcyMetadata !== undefined) {
-      const v = !!st.oggIcyMetadata;
-      if (v !== cur.stream.oggIcyMetadata) {
-        next.stream.oggIcyMetadata = v;
-        restart = true;
-      }
-    }
-    if (st.aacEnabled !== undefined) {
-      const v = !!st.aacEnabled;
-      if (v !== cur.stream.aacEnabled) {
-        next.stream.aacEnabled = v;
-        restart = true;
-      }
-    }
-    if (st.aacBitrate !== undefined) {
-      const v = parseInt(st.aacBitrate, 10);
-      if (!Number.isFinite(v) || !AAC_BITRATE_SET.has(v)) {
-        throw new Error(
-          `stream.aacBitrate must be one of: ${AAC_BITRATES.join(', ')}`,
-        );
-      }
-      if (v !== cur.stream.aacBitrate) {
-        next.stream.aacBitrate = v;
-        restart = true;
-      }
-    }
-    if (st.bitrate !== undefined) {
-      const v = parseInt(st.bitrate, 10);
-      if (!Number.isFinite(v) || !MP3_BITRATE_SET.has(v)) {
-        throw new Error(
-          `stream.bitrate must be one of: ${MP3_BITRATES.join(', ')}`,
-        );
-      }
-      if (v !== cur.stream.bitrate) {
-        next.stream.bitrate = v;
+    const st = parseSettingsPatchKey<Record<string, number | boolean | undefined>>(
+      'stream',
+      patch.stream,
+    );
+    // Every encoder field restarts the mixer, and only on a real change against
+    // `cur` — the schema validated the value, this decides the transition cost.
+    for (const k of [
+      'opusEnabled',
+      'opusBitrate',
+      'flacEnabled',
+      'oggIcyMetadata',
+      'aacEnabled',
+      'aacBitrate',
+      'bitrate',
+    ] as const) {
+      if (st[k] !== undefined && st[k] !== (cur.stream as Record<string, unknown>)[k]) {
+        (next.stream as Record<string, unknown>)[k] = st[k];
         restart = true;
       }
     }
@@ -1183,126 +1119,73 @@ export async function update(patch) {
     // share a container and the entrypoint `wait -n`s on both — the telnet
     // restart shuts liquidsoap down, the container bounces, and the entrypoint
     // re-renders the template on the way back up.
-    if (st.bufferSeconds !== undefined) {
-      const v = Number(st.bufferSeconds);
-      if (!Number.isFinite(v) || v < 0 || v > 60) {
-        throw new Error('stream.bufferSeconds must be a number between 0 and 60');
-      }
-      const rounded = Math.round(v);
-      if (rounded !== cur.stream.bufferSeconds) {
-        next.stream.bufferSeconds = rounded;
-        restart = true;
-      }
+    // NOTE cur.stream.bufferSeconds is `undefined` on any cold-loaded process —
+    // load()'s stream block never composes it (the documented "three edits"
+    // trap). That makes this comparison always true, so a bufferSeconds patch
+    // always restarts. Preserved deliberately: fixing load() would turn an
+    // unconditional restart into a conditional one, which is a behaviour change
+    // and belongs in its own PR.
+    if (st.bufferSeconds !== undefined && st.bufferSeconds !== cur.stream.bufferSeconds) {
+      next.stream.bufferSeconds = st.bufferSeconds as number;
+      restart = true;
     }
     // Idle pause is enforced controller-side over telnet (broadcast/
     // stream-idle.ts) — no Liquidsoap boot file, no mixer restart. Turning it
     // off mid-idle is handled by the monitor's next tick, which resumes the
     // programme.
     if (st.idleWhenEmpty !== undefined) {
-      next.stream.idleWhenEmpty = !!st.idleWhenEmpty;
+      next.stream.idleWhenEmpty = st.idleWhenEmpty as boolean;
     }
     if (st.idleAfterMinutes !== undefined) {
-      const v = parseInt(st.idleAfterMinutes, 10);
-      if (!Number.isInteger(v) || v < 1 || v > 1440) {
-        throw new Error('stream.idleAfterMinutes must be an integer between 1 and 1440');
-      }
-      next.stream.idleAfterMinutes = v;
+      next.stream.idleAfterMinutes = st.idleAfterMinutes as number;
     }
   }
   if ('loudness' in patch) {
     // Read live by queue.applyLoudnessGain when each track is annotated — no
     // Liquidsoap file, no restart. Applies from the next queued track.
-    const lo = patch.loudness || {};
-    if (lo.targetLufs !== undefined) {
-      const v = parseFloat(lo.targetLufs);
-      const b = BOUNDS.loudnessTargetLufs;
-      if (!Number.isFinite(v) || v < b.min || v > b.max) {
-        throw new Error(`loudness.targetLufs must be number in [${b.min}, ${b.max}]`);
-      }
-      next.loudness.targetLufs = v;
-    }
-    if (lo.maxBoostDb !== undefined) {
-      const v = parseFloat(lo.maxBoostDb);
-      const b = BOUNDS.loudnessMaxBoostDb;
-      if (!Number.isFinite(v) || v < b.min || v > b.max) {
-        throw new Error(`loudness.maxBoostDb must be number in [${b.min}, ${b.max}]`);
-      }
-      next.loudness.maxBoostDb = v;
-    }
-    if (lo.source !== undefined) {
-      if (!LOUDNESS_SOURCES.includes(lo.source)) {
-        throw new Error(`loudness.source must be one of: ${LOUDNESS_SOURCES.join(', ')}`);
-      }
-      next.loudness.source = lo.source;
+    const lo = parseSettingsPatchKey<Record<string, unknown>>('loudness', patch.loudness);
+    for (const k of ['targetLufs', 'maxBoostDb', 'source'] as const) {
+      if (lo[k] !== undefined) (next.loudness as Record<string, unknown>)[k] = lo[k];
     }
   }
   if ('weather' in patch) {
-    const w = patch.weather || {};
-    if (w.lat !== undefined) {
-      const v = parseFloat(w.lat);
-      if (!Number.isFinite(v) || v < -90 || v > 90) throw new Error('weather.lat out of range');
-      next.weather.lat = v;
-    }
-    if (w.lng !== undefined) {
-      const v = parseFloat(w.lng);
-      if (!Number.isFinite(v) || v < -180 || v > 180) throw new Error('weather.lng out of range');
-      next.weather.lng = v;
-    }
-    if (typeof w.locationName === 'string' && w.locationName.trim()) {
-      next.weather.locationName = w.locationName.trim().slice(0, 80);
-    }
-    // Deliberately NOT the guard above: locationName ignores empty strings so
-    // the weather label can never be blanked, but blanking onAirLocation is
-    // exactly how an operator resets to the locationName fallback. Accept ''.
-    if (typeof w.onAirLocation === 'string') {
-      next.weather.onAirLocation = w.onAirLocation.trim().slice(0, 80);
-    }
-    if (w.units !== undefined) {
-      if (w.units !== 'metric' && w.units !== 'imperial') {
-        throw new Error("weather.units must be 'metric' or 'imperial'");
-      }
-      next.weather.units = w.units;
+    const w = parseSettingsPatchKey<Record<string, unknown>>('weather', patch.weather);
+    // locationName / onAirLocation come back `undefined` when the schema
+    // decided to IGNORE the value (non-string, or blank for locationName) —
+    // the same silent drop the typeof guards did here.
+    for (const k of ['lat', 'lng', 'locationName', 'onAirLocation', 'units'] as const) {
+      if (w[k] !== undefined) (next.weather as Record<string, unknown>)[k] = w[k];
     }
   }
   if ('station' in patch) {
-    const v = String(patch.station ?? '').trim();
-    if (v.length > 80) throw new Error('station name must be 80 chars or fewer');
-    const resolved = v === '' ? DEFAULTS.station : v;
+    // The schema resolves '' to the product default; the restart decision is
+    // still a comparison against `cur` and stays here.
+    const resolved = parseSettingsPatchKey<string>('station', patch.station);
     if (resolved !== cur.station) {
       restart = true;
     }
     next.station = resolved;
   }
   if ('stationDescription' in patch) {
-    const v = String(patch.stationDescription ?? '').trim();
-    if (v.length > 200) {
-      throw new Error('station description must be 200 chars or fewer');
-    }
     // No `restart` — this never reaches the DJ prompt or a liquidsoap_*.txt
     // file; it is read per-request by the web app's generateMetadata().
-    next.stationDescription = v;
+    next.stationDescription = parseSettingsPatchKey<string>(
+      'stationDescription',
+      patch.stationDescription,
+    );
   }
   if ('timezone' in patch) {
-    const v = String(patch.timezone ?? '').trim();
-    // '' = back to Auto (container TZ). Anything else must be a zone ICU
-    // knows — aliases like Europe/Kiev validate, not just canonical names.
-    if (v !== '' && !isValidTimezone(v)) {
-      throw new Error(`invalid timezone "${v}" — use an IANA name like Europe/Athens`);
-    }
-    next.timezone = v;
+    // '' = back to Auto (container TZ). setStationTimezone() below pushes the
+    // accepted value into time.ts's module state — that stays here.
+    next.timezone = parseSettingsPatchKey<string>('timezone', patch.timezone);
   }
   if ('locale' in patch) {
-    const v = String(patch.locale ?? '').trim();
-    if (v !== 'en-GB' && v !== 'en-US') {
-      throw new Error("locale must be 'en-GB' or 'en-US'");
-    }
-    next.locale = v;
+    next.locale = parseSettingsPatchKey<string>('locale', patch.locale);
   }
   if ('theme' in patch) {
-    const t = patch.theme || {};
+    const t = parseSettingsPatchKey<{ active?: string }>('theme', patch.theme);
     if (t.active !== undefined) {
-      const v = String(t.active ?? '').trim();
-      if (!v) throw new Error('theme.active must be a theme id');
+      const v = t.active;
       // A stale active theme (a retired built-in renamed in 58c3782b, or a
       // custom theme that isn't on disk) falls back to the built-in default
       // rather than failing the save — same tolerance as shows[].themeId above
@@ -1320,17 +1203,23 @@ export async function update(patch) {
   // mood. The in-use removal guard (assertNoOrphanMoods) runs after shows are
   // validated below, so a same-patch show edit is seen.
   if ('moods' in patch) {
-    next.moods = validateMoodsStrict(patch.moods);
+    next.moods = parseSettingsPatchKey('moods', patch.moods);
   }
+  // The EFFECTIVE vocabulary — the same-patch one when `moods` rides along.
+  // Captured ONCE so the maps, festivals and shows below all judge against the
+  // same list; re-deriving per branch is a latent divergence.
   const moodNames = (next.moods || []).map((m: any) => m.name);
+  // The mood family needs only the vocabulary; `showIds: null` says this branch
+  // is not in a position to check roster membership — shows are validated below.
+  const moodCtx = { moodNames, showIds: null };
   if ('moodSchedule' in patch) {
-    next.moodSchedule = validateMoodScheduleStrict(patch.moodSchedule, moodNames);
+    next.moodSchedule = parseSettingsPatchKey('moodSchedule', patch.moodSchedule, moodCtx);
   }
   if ('weatherMoods' in patch) {
-    next.weatherMoods = validateWeatherMoodsStrict(patch.weatherMoods, moodNames);
+    next.weatherMoods = parseSettingsPatchKey('weatherMoods', patch.weatherMoods, moodCtx);
   }
   if ('festivals' in patch) {
-    next.festivals = validateFestivalsStrict(patch.festivals, moodNames);
+    next.festivals = parseSettingsPatchKey('festivals', patch.festivals, moodCtx);
   }
   // Prompt-template library. `djPrompts` replaces the whole library;
   // `activeDjPromptId` switches which entry renders ('' = built-in default).
@@ -1341,21 +1230,18 @@ export async function update(patch) {
     next.djPrompts = validateDjPromptsStrict(patch.djPrompts);
   }
   if ('activeDjPromptId' in patch) {
-    next.activeDjPromptId = String(patch.activeDjPromptId ?? '').trim();
+    next.activeDjPromptId = parseSettingsPatchKey<string>(
+      'activeDjPromptId',
+      patch.activeDjPromptId,
+    );
   }
   if ('djPrompt' in patch) {
-    const v = String(patch.djPrompt ?? '').trim();
+    // The length + placeholder rules come from the shared schema; what stays
+    // here is the MAPPING onto the library, which reads and writes next.djPrompts.
+    const v = parseSettingsPatchKey<string>('djPrompt', patch.djPrompt);
     if (v === '') {
       next.activeDjPromptId = '';
     } else {
-      if (v.length < DJ_PROMPT_TEXT_MIN || v.length > DJ_PROMPT_TEXT_MAX) {
-        throw new Error(
-          `djPrompt must be empty (use the default) or ${DJ_PROMPT_TEXT_MIN}-${DJ_PROMPT_TEXT_MAX} chars`,
-        );
-      }
-      if (!v.includes('{name}')) {
-        throw new Error('djPrompt must contain the {name} placeholder');
-      }
       let entry = next.djPrompts.find((p: DjPromptEntry) => p.text === v);
       if (!entry) {
         if (next.djPrompts.length >= DJ_PROMPT_LIMIT) {
@@ -1387,11 +1273,7 @@ export async function update(patch) {
   // pick/request/segment agents), which the djPrompt template never reaches
   // (issue #1182). Empty = off, so there's no minimum length.
   if ('djHouseRules' in patch) {
-    const v = String(patch.djHouseRules ?? '').trim();
-    if (v.length > DJ_HOUSE_RULES_MAX) {
-      throw new Error(`djHouseRules must be at most ${DJ_HOUSE_RULES_MAX} chars`);
-    }
-    next.djHouseRules = v;
+    next.djHouseRules = parseSettingsPatchKey<string>('djHouseRules', patch.djHouseRules);
   }
   if ('personas' in patch) {
     next.personas = validatePersonasStrict(patch.personas);
@@ -1740,28 +1622,16 @@ export async function update(patch) {
     }
   }
   if ('search' in patch) {
-    const sr = patch.search || {};
-    if (sr.provider !== undefined) {
-      if (!SEARCH_PROVIDERS.includes(sr.provider)) {
-        throw new Error(`search.provider must be one of: ${SEARCH_PROVIDERS.join(', ')}`);
-      }
-      next.search.provider = sr.provider;
-    }
+    const sr = parseSettingsPatchKey<Record<string, unknown>>('search', patch.search);
+    if (sr.provider !== undefined) next.search.provider = sr.provider as string;
+    if (sr.baseUrl !== undefined) next.search.baseUrl = sr.baseUrl as string;
     // 'set' is the redaction sentinel from getRedacted() — ignore it so a
-    // round-tripped form doesn't overwrite the real key.
-    if (sr.apiKey !== undefined && sr.apiKey !== 'set') {
-      const v = String(sr.apiKey);
-      if (v.length > 200) throw new Error('search.apiKey must be 0-200 chars');
-      next.search.apiKey = v;
-    }
-    if (sr.baseUrl !== undefined) {
-      if (typeof sr.baseUrl !== 'string') throw new Error('search.baseUrl must be a string');
-      const trimmed = sr.baseUrl.trim();
-      if (trimmed.length > 500) throw new Error('search.baseUrl too long');
-      if (trimmed && !/^https?:\/\//i.test(trimmed)) {
-        throw new Error('search.baseUrl must start with http:// or https://');
-      }
-      next.search.baseUrl = trimmed;
+    // round-tripped form doesn't overwrite the real key. Tested against the RAW
+    // patch value, not the parsed one: the sentinel means "leave the stored
+    // value alone", which is an instruction to the applier rather than a value
+    // a schema could return.
+    if (sr.apiKey !== undefined && (patch.search as Record<string, unknown>)?.apiKey !== 'set') {
+      next.search.apiKey = sr.apiKey as string;
     }
   }
   if ('embedding' in patch) {
@@ -1934,122 +1804,86 @@ export async function update(patch) {
     }
   }
   if ('audio' in patch) {
-    const au = patch.audio || {};
-    if (au.embeddings !== undefined) {
-      next.audio.embeddings = !!au.embeddings;
-    }
-    if (au.vocalActivity !== undefined) {
-      next.audio.vocalActivity = !!au.vocalActivity;
-    }
-    if (au.stemCache !== undefined) {
-      next.audio.stemCache = !!au.stemCache;
-    }
-    if (au.stemCacheGb !== undefined) {
-      // Throw rather than silently ignore, matching analyzeQuietMinutes below.
-      // Swallowing an out-of-range value meant the admin UI showed a saved
-      // budget the sweep was never using.
-      // Ceiling raised 500 → 1000 (#1257): at the measured ~13 MB/track a
-      // 500 GB budget stops short of a ~50k-track library.
-      const gb = Number(au.stemCacheGb);
-      if (!Number.isFinite(gb) || gb < 1 || gb > 1000) {
-        throw new Error('audio.stemCacheGb must be between 1 and 1000');
-      }
-      next.audio.stemCacheGb = gb;
-    }
-    if (au.analyzeQuietOnly !== undefined) {
-      next.audio.analyzeQuietOnly = !!au.analyzeQuietOnly;
-    }
-    if (au.analyzeQuietMinutes !== undefined) {
-      const v = Math.floor(Number(au.analyzeQuietMinutes));
-      if (!Number.isFinite(v) || v < 1 || v > 120) {
-        throw new Error('audio.analyzeQuietMinutes must be between 1 and 120');
-      }
-      next.audio.analyzeQuietMinutes = v;
+    // stemCacheGb throws rather than silently ignoring, matching
+    // analyzeQuietMinutes: swallowing an out-of-range value meant the admin UI
+    // showed a saved budget the sweep was never using. Ceiling raised
+    // 500 → 1000 (#1257) — at the measured ~13 MB/track a 500 GB budget stops
+    // short of a ~50k-track library.
+    const au = parseSettingsPatchKey<Record<string, unknown>>('audio', patch.audio);
+    for (const k of [
+      'embeddings',
+      'vocalActivity',
+      'stemCache',
+      'stemCacheGb',
+      'analyzeQuietOnly',
+      'analyzeQuietMinutes',
+    ] as const) {
+      if (au[k] !== undefined) (next.audio as Record<string, unknown>)[k] = au[k];
     }
   }
   if ('transitions' in patch) {
-    const tr = patch.transitions || {};
-    if (tr.pairDrain !== undefined) {
-      next.transitions.pairDrain = !!tr.pairDrain;
-    }
-    if (tr.stemBlends !== undefined) {
-      next.transitions.stemBlends = !!tr.stemBlends;
+    const tr = parseSettingsPatchKey<Record<string, unknown>>('transitions', patch.transitions);
+    for (const k of ['pairDrain', 'stemBlends'] as const) {
+      if (tr[k] !== undefined) (next.transitions as Record<string, unknown>)[k] = tr[k];
     }
   }
+  // On the shared schema (#1348). The block schemas keep the branches' own
+  // leniency — a non-object block is an empty patch, an absent field is left
+  // alone — so this stays a plain "apply what was sent".
   if ('sfx' in patch) {
-    const sx = patch.sfx || {};
+    const sx = parseSettingsPatchKey<{ enabled?: boolean }>('sfx', patch.sfx);
     if (sx.enabled !== undefined) {
-      next.sfx.enabled = !!sx.enabled;
+      next.sfx.enabled = sx.enabled;
     }
   }
   if ('beds' in patch) {
-    const bd = patch.beds || {};
+    const bd = parseSettingsPatchKey<{
+      enabled?: boolean;
+      thresholdSec?: number;
+      crossSec?: number;
+    }>('beds', patch.beds);
     if (bd.enabled !== undefined) {
-      next.beds.enabled = !!bd.enabled;
+      next.beds.enabled = bd.enabled;
     }
     if (bd.thresholdSec !== undefined) {
-      const v = parseFloat(bd.thresholdSec);
-      if (!Number.isFinite(v) || v < BOUNDS.bedsThresholdSec.min || v > BOUNDS.bedsThresholdSec.max) {
-        throw new Error(
-          `beds.thresholdSec must be number in [${BOUNDS.bedsThresholdSec.min}, ${BOUNDS.bedsThresholdSec.max}]`,
-        );
-      }
-      next.beds.thresholdSec = v;
+      next.beds.thresholdSec = bd.thresholdSec;
     }
     if (bd.crossSec !== undefined) {
-      const v = parseFloat(bd.crossSec);
-      if (!Number.isFinite(v) || v < BOUNDS.bedsCrossSec.min || v > BOUNDS.bedsCrossSec.max) {
-        throw new Error(
-          `beds.crossSec must be number in [${BOUNDS.bedsCrossSec.min}, ${BOUNDS.bedsCrossSec.max}]`,
-        );
-      }
-      next.beds.crossSec = v;
+      next.beds.crossSec = bd.crossSec;
     }
   }
   if ('ui' in patch) {
-    const ui = patch.ui || {};
-    if (ui.boothBuddy !== undefined) {
-      next.ui.boothBuddy = !!ui.boothBuddy;
-    }
-    if (ui.skin !== undefined) {
-      // Slug only — the web registry resolves it and falls back on unknowns,
-      // so an invalid value is dropped rather than erroring the whole patch.
-      const slug = String(ui.skin).trim().toLowerCase();
-      if (/^[a-z0-9][a-z0-9-]{0,31}$/.test(slug)) {
-        next.ui.skin = slug;
-      }
-    }
-    if (ui.tuneInOverlay !== undefined) {
-      next.ui.tuneInOverlay = !!ui.tuneInOverlay;
+    // `skin` is slug-only — the web registry resolves it and falls back on
+    // unknowns, so an invalid value is DROPPED rather than erroring the whole
+    // patch. The schema returns undefined for that case, which this skips.
+    const ui = parseSettingsPatchKey<Record<string, unknown>>('ui', patch.ui);
+    for (const k of ['boothBuddy', 'skin', 'tuneInOverlay'] as const) {
+      if (ui[k] !== undefined) (next.ui as Record<string, unknown>)[k] = ui[k];
     }
   }
   if ('privacy' in patch) {
-    const pv = patch.privacy || {};
+    // Field rules on the shared schema; the lock-needs-a-password invariant
+    // below is NOT one of them — it reads the MERGED state, so a lock turned on
+    // by this patch can be satisfied by a password that was already stored.
+    const pv = parseSettingsPatchKey<Record<string, unknown>>('privacy', patch.privacy);
+    const rawPv = (patch.privacy || {}) as Record<string, unknown>;
     if (pv.privatePlayer !== undefined) {
-      next.privacy.privatePlayer = !!pv.privatePlayer;
+      next.privacy.privatePlayer = pv.privatePlayer as boolean;
     }
     // Disclosure toggle, not a lock: it is deliberately outside the
     // "a lock needs a password" invariant below, needs no mixer restart, and
     // applies live on the next public read.
     if (pv.publishPersonaSouls !== undefined) {
-      next.privacy.publishPersonaSouls = !!pv.publishPersonaSouls;
+      next.privacy.publishPersonaSouls = pv.publishPersonaSouls as boolean;
     }
     // 'set' is the redaction sentinel from getRedacted() — ignore it so a
-    // round-tripped form doesn't overwrite the stored secret.
-    if (pv.password !== undefined && pv.password !== 'set') {
-      const v = String(pv.password ?? '').trim();
-      if (v.length > 128) {
-        throw new Error('privacy.password must be 0-128 chars');
-      }
-      // The password travels in basic-auth userinfo and ?auth= query strings;
-      // whitespace/control chars only cause client-side grief there.
-      if (/[\s]/.test(v)) {
-        throw new Error('privacy.password must not contain whitespace');
-      }
-      next.privacy.password = v;
+    // round-tripped form doesn't overwrite the stored secret. Compared against
+    // the RAW value: ' set ' is NOT the sentinel and is stored as a password.
+    if (pv.password !== undefined && rawPv.password !== 'set') {
+      next.privacy.password = pv.password as string;
     }
     if (pv.listenerAuth !== undefined) {
-      const v = !!pv.listenerAuth;
+      const v = pv.listenerAuth as boolean;
       if (v !== cur.privacy.listenerAuth) {
         // Flipping the toggle adds/removes the <mount> auth blocks in
         // icecast.xml, which only re-render on a broadcast restart. Password
@@ -2071,86 +1905,77 @@ export async function update(patch) {
     }
   }
   if ('requests' in patch) {
-    const rq = patch.requests || {};
-    const cur = next.requests || DEFAULTS.requests;
+    // The schema decides "usable or absent" per field; the fallback to the
+    // CURRENT value is this spread. Same result as the old per-field ternaries,
+    // including the load-bearing part: an emptied admin input arrives as JSON
+    // null, which is UNUSABLE rather than 0, so it leaves the stored value
+    // alone instead of clamping to the field's floor and closing the request
+    // line. The rebuild keeps exactly the seven known keys.
+    const rq = parseSettingsPatchKey<Record<string, unknown>>('requests', patch.requests);
+    const curReq = next.requests || DEFAULTS.requests;
+    const pick = <K extends keyof typeof curReq>(k: K) =>
+      (rq[k as string] !== undefined ? rq[k as string] : curReq[k]) as (typeof curReq)[K];
     next.requests = {
-      enabled: typeof rq.enabled === 'boolean' ? rq.enabled : cur.enabled,
-      maxPending: intIn(rq.maxPending, cur.maxPending, 1, 50),
-      globalHourlyCap: intIn(rq.globalHourlyCap, cur.globalHourlyCap, 5, 500),
-      repeatCooldownMin: intIn(rq.repeatCooldownMin, cur.repeatCooldownMin, 0, 1440),
-      cooldownSec: intIn(rq.cooldownSec, cur.cooldownSec, 5, 600),
-      perIpHourlyCap: intIn(rq.perIpHourlyCap, cur.perIpHourlyCap, 1, 100),
-      onePendingPerIp: typeof rq.onePendingPerIp === 'boolean' ? rq.onePendingPerIp : cur.onePendingPerIp,
+      enabled: pick('enabled'),
+      maxPending: pick('maxPending'),
+      globalHourlyCap: pick('globalHourlyCap'),
+      repeatCooldownMin: pick('repeatCooldownMin'),
+      cooldownSec: pick('cooldownSec'),
+      perIpHourlyCap: pick('perIpHourlyCap'),
+      onePendingPerIp: pick('onePendingPerIp'),
     };
   }
   if ('webhooks' in patch) {
     next.webhooks = validateWebhooksStrict(patch.webhooks, next.webhooks || []);
   }
   if ('webhooksPolicy' in patch) {
-    const wp = patch.webhooksPolicy || {};
+    const wp = parseSettingsPatchKey<Record<string, unknown>>(
+      'webhooksPolicy',
+      patch.webhooksPolicy,
+    );
     if (wp.trackPlayListenerGated !== undefined) {
-      next.webhooksPolicy.trackPlayListenerGated = !!wp.trackPlayListenerGated;
+      next.webhooksPolicy.trackPlayListenerGated = wp.trackPlayListenerGated as boolean;
     }
   }
   if ('scrobble' in patch) {
-    const sb = patch.scrobble || {};
+    const sb = parseSettingsPatchKey<{
+      lastfm?: Record<string, unknown>;
+      listenbrainz?: Record<string, unknown>;
+    }>('scrobble', patch.scrobble);
+    const rawSb = (patch.scrobble || {}) as Record<string, Record<string, unknown> | undefined>;
+    // 'set' is the redaction sentinel from getRedacted() — ignore it so a
+    // round-tripped form doesn't overwrite the stored secret. Tested against
+    // the RAW patch value: "keep what is stored" is an instruction to the
+    // applier, not a value any schema could return. It guards ONLY the secret
+    // fields — a username of literally 'set' has always been stored as such.
+    const LASTFM_SECRETS = ['apiKey', 'apiSecret', 'sessionKey'];
     if (sb.lastfm !== undefined) {
-      const lf = sb.lastfm || {};
-      if (lf.enabled !== undefined) next.scrobble.lastfm.enabled = !!lf.enabled;
-      if (lf.username !== undefined) {
-        const v = String(lf.username ?? '').trim();
-        if (v.length > 40) throw new Error('scrobble.lastfm.username must be 0-40 chars');
-        next.scrobble.lastfm.username = v;
-      }
-      // 'set' is the redaction sentinel from getRedacted() — ignore it so a
-      // round-tripped form doesn't overwrite the stored secret.
-      for (const k of ['apiKey', 'apiSecret', 'sessionKey'] as const) {
-        if (lf[k] !== undefined && lf[k] !== 'set') {
-          const v = String(lf[k] ?? '').trim();
-          if (v.length > 200) throw new Error(`scrobble.lastfm.${k} must be 0-200 chars`);
-          next.scrobble.lastfm[k] = v;
-        }
+      const lf = sb.lastfm;
+      for (const k of ['enabled', 'username', 'apiKey', 'apiSecret', 'sessionKey'] as const) {
+        if (lf[k] === undefined) continue;
+        if (LASTFM_SECRETS.includes(k) && rawSb.lastfm?.[k] === 'set') continue;
+        (next.scrobble.lastfm as Record<string, unknown>)[k] = lf[k];
       }
     }
     if (sb.listenbrainz !== undefined) {
-      const lb = sb.listenbrainz || {};
-      if (lb.enabled !== undefined) next.scrobble.listenbrainz.enabled = !!lb.enabled;
-      if (lb.username !== undefined) {
-        const v = String(lb.username ?? '').trim();
-        if (v.length > 40) throw new Error('scrobble.listenbrainz.username must be 0-40 chars');
-        next.scrobble.listenbrainz.username = v;
-      }
-      if (lb.userToken !== undefined && lb.userToken !== 'set') {
-        const v = String(lb.userToken ?? '').trim();
-        if (v.length > 200) throw new Error('scrobble.listenbrainz.userToken must be 0-200 chars');
-        next.scrobble.listenbrainz.userToken = v;
-      }
-      if (lb.baseUrl !== undefined) {
-        const trimmed = String(lb.baseUrl ?? '').trim();
-        if (trimmed.length > 500) throw new Error('scrobble.listenbrainz.baseUrl too long');
-        if (trimmed && !/^https?:\/\//i.test(trimmed)) {
-          throw new Error('scrobble.listenbrainz.baseUrl must start with http:// or https://');
-        }
-        next.scrobble.listenbrainz.baseUrl = trimmed;
+      const lb = sb.listenbrainz;
+      for (const k of ['enabled', 'username', 'userToken', 'baseUrl'] as const) {
+        if (lb[k] === undefined) continue;
+        if (k === 'userToken' && rawSb.listenbrainz?.[k] === 'set') continue;
+        (next.scrobble.listenbrainz as Record<string, unknown>)[k] = lb[k];
       }
     }
   }
   if ('likes' in patch) {
-    const lk = patch.likes || {};
-    if (lk.enabled !== undefined) next.likes.enabled = !!lk.enabled;
-    if (lk.starInNavidrome !== undefined) next.likes.starInNavidrome = !!lk.starInNavidrome;
-    if (lk.influenceDj !== undefined) next.likes.influenceDj = !!lk.influenceDj;
-    if (lk.maxTracks !== undefined) {
-      const n = Math.round(Number(lk.maxTracks));
-      if (!Number.isFinite(n) || n < 1 || n > 25) throw new Error('likes.maxTracks must be 1-25');
-      next.likes.maxTracks = n;
-    }
-    if (lk.windowDays !== undefined) {
-      const n = Math.round(Number(lk.windowDays));
-      if (!Number.isFinite(n) || n < 0 || n > 365) {
-        throw new Error('likes.windowDays must be 0-365 (0 = all time)');
-      }
-      next.likes.windowDays = n;
+    const lk = parseSettingsPatchKey<Record<string, unknown>>('likes', patch.likes);
+    for (const k of [
+      'enabled',
+      'starInNavidrome',
+      'influenceDj',
+      'maxTracks',
+      'windowDays',
+    ] as const) {
+      if (lk[k] !== undefined) (next.likes as Record<string, unknown>)[k] = lk[k];
     }
   }
 

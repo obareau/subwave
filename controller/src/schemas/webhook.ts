@@ -66,7 +66,10 @@ export type WebhookParsed = z.output<typeof webhookSchema>;
 export type Webhook = WebhookParsed & { id: string };
 
 export const webhooksSchema = z
-  .array(webhookSchema)
+  // Explicit, so a non-array reads as something an operator can act on rather
+  // than zod's 'Invalid input: expected array, received number'. Both callers
+  // root this schema at 'webhooks'.
+  .array(webhookSchema, { error: 'must be an array' })
   .max(WEBHOOKS_LIMIT, `At most ${WEBHOOKS_LIMIT} webhooks`);
 
 // Both fields optional: the route lets the listener gate save on its own

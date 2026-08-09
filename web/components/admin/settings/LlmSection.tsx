@@ -33,7 +33,7 @@ interface LlmSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   refresh: () => void;
 }
-export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: LlmSectionProps) {
+export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LlmSectionProps) {
   const [primaryKeyInput, setPrimaryKeyInput] = useState('');
   const [fallbackKeyInput, setFallbackKeyInput] = useState('');
   const [primaryKeyTest, setPrimaryKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
@@ -1198,6 +1198,8 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         busy={busy}
         onSave={save}
         saveLabel="Save LLM provider"
+        errors={fieldErrors}
+        ownedKeys={['llm']}
       />
 
       {/* The SAFE outcome (keep the embedding pin) is the default; only the explicit

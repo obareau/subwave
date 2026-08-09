@@ -11,6 +11,7 @@
 
 import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
+import { SFX_MAX_SEC } from '../schemas/imaging.js';
 import { generateSfx, isConfigured } from '../audio/sfx-gen.js';
 import { transcodeAudio, hasFfmpeg, extOf, isAcceptedAudio, probeDurationSec } from '../audio/audio-import.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
@@ -19,8 +20,10 @@ import { slugify } from '../util/slug.js';
 // Hard ceiling on any effect's length, generated or uploaded. Effects are
 // stingers that ride under a voice line or a crossfade, not beds — Liquidsoap
 // mixes them at 0.7 gain with only a light music duck, so a long clip keeps
-// droning over the programme after the voice has finished.
-export const MAX_DURATION_SEC = 10;
+// droning over the programme after the voice has finished. The figure lives in
+// the shared imaging schema so the admin form's duration input and this module
+// can't disagree (they did: the input offered up to 22s).
+export const MAX_DURATION_SEC = SFX_MAX_SEC;
 
 const DIR = `${STATE_DIR}/sfx`;
 const META = `${STATE_DIR}/sfx.json`;

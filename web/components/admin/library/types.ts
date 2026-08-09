@@ -73,15 +73,17 @@ export interface BlockEntry {
 }
 
 // Rule entries — attribute/tag predicates beside the id entries, with an
-// optional seasonal allow-window and show scope. Server shape from
-// music/blocklist-rules.ts; `active`/`matchCount` are the listing stats
-// GET /library/blocklist stamps per rule.
-export type RuleField = 'genre' | 'tag' | 'mood' | 'artist' | 'album' | 'title' | 'playlist';
+// optional seasonal allow-window and show scope. `active`/`matchCount` are the
+// listing stats GET /library/blocklist stamps per rule.
+//
+// The SHAPE comes from the mirrored schema rather than being re-declared here.
+// Both of these were hand-copied from the controller, which is the drift the
+// mirror exists to prevent: the field vocabulary in particular is enumerated in
+// FIELD_OPTIONS on the card too, and a field added server-side would otherwise
+// typecheck cleanly here while being unreachable in the UI.
+export type { RuleField, SeasonWindow } from '@/lib/schemas.generated';
 
-export interface SeasonWindow {
-  from: { month: number; day: number };
-  to: { month: number; day: number };
-}
+import type { RuleField, SeasonWindow } from '@/lib/schemas.generated';
 
 export interface BlockRule {
   id: string;

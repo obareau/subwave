@@ -1,34 +1,34 @@
 'use client';
-import type { ChangeEvent } from 'react';
-import type { Persona } from './types';
+import type { Control } from 'react-hook-form';
+import type { Persona, PersonasFormValues } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { NAME_MAX, TAGLINE_MAX, SOUL_MAX, LANGUAGE_MAX } from './constants';
 import { Card } from '../ui';
-import { Input } from '../../ui/input';
-import { Textarea } from '../../ui/textarea';
-import { Label } from '../../ui/label';
+import { TextField, TextareaField } from '@/lib/form-fields';
 import { AiFill } from '../AiFill';
 import { PersonaAvatarPicker } from './PersonaAvatarPicker';
-import { cn } from '../../../lib/cn';
 
 interface PersonaIdentityCardProps {
   persona: Persona;
+  index: number;
+  control: Control<PersonasFormValues>;
   isNew: boolean;       // show the AI-draft field only while creating
   adminFetch: AdminAuth['adminFetch'];
   avatarTick: number;
   uploading: boolean;
-  update: (patch: Partial<Persona>) => void;
+  // The AI-draft "apply" is the one remaining multi-field bulk patch — every
+  // keystroke field below is bound straight to `control` instead.
+  onUpdate: (patch: Partial<Persona>) => void;
   onPickAvatar: (file: File) => void;
   onGenerateAvatar: () => void;
   onClearAvatar: () => void;
 }
 
 export function PersonaIdentityCard({
-  persona, isNew, adminFetch, avatarTick, uploading,
-  update, onPickAvatar, onGenerateAvatar, onClearAvatar,
+  persona, index, control, isNew, adminFetch, avatarTick, uploading,
+  onUpdate, onPickAvatar, onGenerateAvatar, onClearAvatar,
 }: PersonaIdentityCardProps) {
   const soulLen = persona.soul.trim().length;
-  const soulOver = soulLen > SOUL_MAX;
   return (
     <Card flat title="Identity">
       {isNew && (
@@ -38,7 +38,7 @@ export function PersonaIdentityCard({
             resultKey="persona"
             adminFetch={adminFetch}
             placeholder="e.g. a late-night jazz host with a dry wit"
-            onApply={(p) => update(p)}
+            onApply={(p) => onUpdate(p)}
           />
         </div>
       )}
@@ -55,26 +55,25 @@ export function PersonaIdentityCard({
               onClear={onClearAvatar}
             />
             <div className="grid gap-4">
-              <div className="field">
-                <Label>On-air name</Label>
-                <Input
-                  value={persona.name}
+              <div>
+                <TextField
+                  control={control}
+                  name={`personas.${index}.name`}
+                  label="On-air name"
                   maxLength={NAME_MAX}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => update({ name: e.target.value })}
-                  className={persona.name.trim() ? 'border-ink' : 'border-[var(--danger)]'}
                 />
                 <div className="field-hint">
                   Shown in the player and injected into every prompt as <code>{'{name}'}</code>.
                   <span className="ml-2 text-muted">{persona.name.trim().length} / {NAME_MAX}</span>
                 </div>
               </div>
-              <div className="field">
-                <Label>Tagline</Label>
-                <Input
-                  value={persona.tagline}
-                  maxLength={TAGLINE_MAX}
+              <div>
+                <TextField
+                  control={control}
+                  name={`personas.${index}.tagline`}
+                  label="Tagline"
                   placeholder="e.g. late-night drift"
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => update({ tagline: e.target.value })}
+                  maxLength={TAGLINE_MAX}
                 />
                 <div className="field-hint">
                   A short line shown alongside the persona. Optional.
@@ -84,13 +83,13 @@ export function PersonaIdentityCard({
             </div>
           </div>
 
-          <div className="field">
-            <Label>Language</Label>
-            <Input
-              value={persona.language}
-              maxLength={LANGUAGE_MAX}
+          <div>
+            <TextField
+              control={control}
+              name={`personas.${index}.language`}
+              label="Language"
               placeholder="English (default)"
-              onChange={(e: ChangeEvent<HTMLInputElement>) => update({ language: e.target.value })}
+              maxLength={LANGUAGE_MAX}
             />
             <div className="field-hint">
               The DJ <em>writes</em> every on-air line in this language; leave empty for English.
@@ -103,20 +102,17 @@ export function PersonaIdentityCard({
           </div>
         </div>
 
-        <div className="field mt-4 lg:mt-0">
-          <Label>Soul</Label>
-          <Textarea
+        <div className="mt-4 lg:mt-0">
+          <TextareaField
+            control={control}
+            name={`personas.${index}.soul`}
+            label="Soul"
             rows={14}
-            value={persona.soul}
             placeholder="e.g. warm and dry, never corny, observant, favours one good image over a list"
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => update({ soul: e.target.value })}
-            className={soulOver || soulLen === 0 ? 'border-[var(--danger)]' : 'border-ink'}
           />
           <div className="field-hint">
             One short personality sketch. Injected into the prompt as <code>{'{soul}'}</code>.
-            <span className={cn('ml-2', soulOver ? 'text-[var(--danger)]' : 'text-muted')}>
-              {soulLen} / {SOUL_MAX}
-            </span>
+            <span className="ml-2 text-muted">{soulLen} / {SOUL_MAX}</span>
           </div>
         </div>
       </div>

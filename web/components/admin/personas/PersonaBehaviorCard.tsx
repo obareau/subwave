@@ -2,18 +2,34 @@
 // How this persona talks: talk frequency, script length, DJ mode and the tone
 // dials. Frequency and script length are stepped faders (discrete named stops),
 // deliberately distinct from the continuous rotary tone knobs.
-import type { Persona } from './types';
+//
+// Every control here is a custom rotary/fader/toggle whose shape the five
+// shared bound components (TextField/SelectField/…) don't cover, so each is
+// wired through its own `useController` — real RHF state, just not the
+// generic wrapper. SteppedFader/ToneKnob/Toggle already take plain
+// `value`/`onChange(v)` props, which is exactly `field.value`/`field.onChange`,
+// so no adapter is needed at any of the four sites below.
+import { useController, type Control } from 'react-hook-form';
+import type { PersonasFormValues } from './types';
 import { FREQUENCIES, SCRIPT_LENGTHS, TONE_DIALS, toneBandIndex } from './constants';
 import { Card, Toggle } from '../ui';
 import { SteppedFader } from './SteppedFader';
 import { ToneKnob } from './ToneKnob';
 
 interface PersonaBehaviorCardProps {
-  persona: Persona;
-  update: (patch: Partial<Persona>) => void;
+  index: number;
+  control: Control<PersonasFormValues>;
 }
 
-export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProps) {
+export function PersonaBehaviorCard({ index, control }: PersonaBehaviorCardProps) {
+  const frequency = useController({ control, name: `personas.${index}.frequency` });
+  const scriptLength = useController({ control, name: `personas.${index}.scriptLength` });
+  const djMode = useController({ control, name: `personas.${index}.djMode` });
+  const humour = useController({ control, name: `personas.${index}.humour` });
+  const localColour = useController({ control, name: `personas.${index}.localColour` });
+  const warmth = useController({ control, name: `personas.${index}.warmth` });
+  const dials = { humour, localColour, warmth } as const;
+
   return (
     <Card flat title="Behaviour" sub="how this persona talks">
       <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8">
@@ -22,16 +38,16 @@ export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProp
           <SteppedFader
             ariaLabel="Talk frequency"
             stops={FREQUENCIES}
-            value={persona.frequency || 'moderate'}
-            onChange={id => update({ frequency: id })}
+            value={frequency.field.value || 'moderate'}
+            onChange={frequency.field.onChange}
           />
 
           <div className="rule-label">script length</div>
           <SteppedFader
             ariaLabel="Script length"
             stops={SCRIPT_LENGTHS}
-            value={persona.scriptLength || 'concise'}
-            onChange={id => update({ scriptLength: id })}
+            value={scriptLength.field.value || 'concise'}
+            onChange={scriptLength.field.onChange}
           />
 
           <div className="rule-label">DJ mode</div>
@@ -45,8 +61,8 @@ export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProp
               </div>
             </div>
             <Toggle
-              on={persona.djMode}
-              onClick={() => update({ djMode: !persona.djMode })}
+              on={djMode.field.value}
+              onClick={() => djMode.field.onChange(!djMode.field.value)}
               ariaLabel="Work the desk like a real DJ"
             />
           </div>
@@ -56,7 +72,8 @@ export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProp
           <div className="rule-label">tone dials</div>
           <div className="grid grid-cols-3 gap-2 sm:gap-4">
             {TONE_DIALS.map(d => {
-              const val = persona[d.id];
+              const dial = dials[d.id];
+              const val = dial.field.value;
               return (
                 <ToneKnob
                   key={d.id}
@@ -65,7 +82,7 @@ export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProp
                   band={d.words[toneBandIndex(val)]}
                   low={d.low}
                   high={d.high}
-                  onChange={v => update({ [d.id]: v } as Partial<Persona>)}
+                  onChange={dial.field.onChange}
                 />
               );
             })}

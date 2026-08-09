@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from 'react';
 import { useAdminAuth } from '@/lib/adminAuth';
+import { fishAudioIssue } from '@/lib/schemas.generated';
 
 // Every step reads and writes through the `set` updater rather than its own
 // state, so the Review step can show the whole picture without prop-drilling.
@@ -121,7 +122,13 @@ export function useWizard() {
   // 401-handling. Both test helpers catch their own failures into the result
   // pill: a rejected or timed-out fetch must surface as a red pill, never as an
   // unhandled throw that wedges the button on "Testing…" (issue #682).
-  const testNavidrome = useCallback(async () => {
+  //
+  // Both now take the credentials/config as an explicit argument rather than
+  // reading `data.navidrome` / `data.llm` — each step owns its own
+  // react-hook-form instance and only writes back into `data` on Next, so the
+  // Test button (which must probe whatever is CURRENTLY typed, not the last
+  // committed value) hands over the step form's live values directly.
+  const testNavidrome = useCallback(async (creds: WizardData['navidrome']) => {
     // The browser→controller hop has no default timeout, so a request that
     // never answers wedges the button. 15s clears the 5s server-side Subsonic
     // probe with margin.
@@ -129,7 +136,7 @@ export function useWizard() {
       const r = await auth.adminFetch('/onboarding/test-navidrome', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(data.navidrome),
+        body: JSON.stringify(creds),
         signal: AbortSignal.timeout(15000),
       });
       const j = (await r.json().catch(() => ({}))) as { ok?: boolean; serverType?: string; serverVersion?: string; error?: string };
@@ -141,16 +148,16 @@ export function useWizard() {
       patch({ navidromeTest: result });
       return result;
     }
-  }, [auth, data.navidrome, patch]);
+  }, [auth, patch]);
 
-  const testLlm = useCallback(async () => {
+  const testLlm = useCallback(async (values: WizardData['llm']) => {
     // 60s sits just above the controller's 45s generateText abort, so a slow
     // model surfaces the server's error rather than a bare client timeout.
     try {
       const r = await auth.adminFetch('/onboarding/test-llm', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(data.llm),
+        body: JSON.stringify(values),
         signal: AbortSignal.timeout(60000),
       });
       const j = (await r.json().catch(() => ({}))) as { ok?: boolean; sample?: string; error?: string };
@@ -162,7 +169,7 @@ export function useWizard() {
       patch({ llmTest: result });
       return result;
     }
-  }, [auth, data.llm, patch]);
+  }, [auth, patch]);
 
   // Uses data.llm.baseUrl when set; otherwise the controller defaults to the
   // locca host URL.
@@ -197,27 +204,26 @@ export function useWizard() {
         data.tts.cloud.provider === 'fish-audio' ? 'FISH_API_KEY' : '';
       if (k) apiKeys[k] = data.tts.cloud.apiKey;
     }
-    if (data.tts.cloud.enabled && data.tts.cloud.provider === 'fish-audio') {
-      // The key may already come from the root environment, so only validate
-      // fields the wizard itself must persist for a usable Fish request.
-      const model = data.tts.cloud.model.trim();
-      const voice = data.tts.cloud.voice.trim();
-      if (!model || model.length > 100 || /[\r\n]/.test(model)) {
-        return { ok: false, error: 'Fish Audio model id must be 1–100 characters with no line breaks.' };
-      }
-      if (!voice || voice.length > 100 || /[\r\n]/.test(voice)) {
-        return { ok: false, error: 'Fish Audio voice reference id must be 1–100 characters with no line breaks.' };
-      }
-    }
+    // The key may already come from the root environment, so fishAudioIssue
+    // only judges the fields the wizard itself must persist for a usable Fish
+    // request. Same helper the controller's save handler runs — the two
+    // hand-rolled copies this replaces had already drifted in the message
+    // ('1-100' vs '1–100') before they could in logic.
+    const fishIssue = fishAudioIssue(data.tts.cloud);
+    if (fishIssue) return { ok: false, error: fishIssue };
 
     const body = {
       navidrome: data.navidrome,
       llm: {
         provider: data.llm.provider,
         model: data.llm.model,
-        // Cloud keys go to apiKeys (state/secrets.env); settings.json keeps only
-        // the provider/model/url, never the key.
-        apiKey: '',
+        // Deliberately NO apiKey field. Cloud keys go to apiKeys
+        // (state/secrets.env), so the wizard has none to offer here — but
+        // settings.llm.apiKey does not mean "no key", it means "CLEAR the
+        // stored key for this provider" (applyInlineKey, #657). This block sent
+        // '' on every save, so re-running onboarding deleted the inline key of
+        // whichever provider it selected (#1351). Absent = leave it alone; the
+        // admin LLM panel omits the field the same way unless one is typed.
         baseUrl: data.llm.baseUrl,
         ollamaUrl: data.llm.ollamaUrl,
       },

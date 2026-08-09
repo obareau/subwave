@@ -32,6 +32,10 @@ import {
   coerceShowVocals,
   type EraWindow,
 } from '../settings.js';
+// Caps come from the shared show schema, not local literals — a hardcoded 60
+// here silently diverged the moment SHOW_NAME_MAX became the one rule the
+// validator, the loader and the admin form all run.
+import { SHOW_NAME_MAX, SHOW_SEGMENT_SKILL_MAX, repairEraWindow } from '../schemas/show.js';
 
 // Slug rule shared by every community artifact — lowercase, starts alphanumeric,
 // then alphanumeric/hyphen, ≤49 chars. Anchored, so a slug can't carry a path
@@ -207,13 +211,11 @@ function normalizeEras(v: unknown): EraWindow[] {
   if (!Array.isArray(v)) return [];
   const out: EraWindow[] = [];
   for (const w of v) {
-    if (!w || typeof w !== 'object') continue;
-    const r = w as { fromYear?: unknown; toYear?: unknown };
-    const from = Number.isInteger(r.fromYear) ? (r.fromYear as number) : null;
-    const to = Number.isInteger(r.toYear) ? (r.toYear as number) : null;
-    if (from == null && to == null) continue;
-    if (from != null && to != null && from > to) continue;
-    out.push({ fromYear: from, toYear: to });
+    // Window repair (year bounds, from<=to) is the schema's own repairEraWindow
+    // so a catalog era can't be judged by different rules than a saved one.
+    const win = repairEraWindow(w);
+    if (win == null) continue;
+    out.push(win);
     if (out.length >= 6) break;
   }
   return out;
@@ -222,7 +224,7 @@ function normalizeEras(v: unknown): EraWindow[] {
 function normalizeShow(raw: any): CommunityShow | null {
   const slug = str(raw?.slug);
   if (!SLUG_RE.test(slug)) return null;
-  const name = (str(raw?.name) || str(raw?.displayName)).slice(0, 60);
+  const name = (str(raw?.name) || str(raw?.displayName)).slice(0, SHOW_NAME_MAX);
   if (!name) return null;
   const seconds = Number(raw?.maxTrackSeconds);
   return {
@@ -242,7 +244,7 @@ function normalizeShow(raw: any): CommunityShow | null {
     filtersStrict: raw?.filtersStrict === true,
     banter: raw?.banter === true,
     programme: raw?.programme === true,
-    segmentSkill: str(raw?.segmentSkill).slice(0, 64),
+    segmentSkill: str(raw?.segmentSkill).slice(0, SHOW_SEGMENT_SKILL_MAX),
     maxTrackSeconds: Number.isInteger(seconds) && seconds >= 0 ? seconds : null,
     submittedBy: optStr(raw?.submittedBy, 80),
     dateAdded: optStr(raw?.dateAdded, 10),

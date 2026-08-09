@@ -115,14 +115,12 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 # CLAP + Demucs are OFF by default (lean image); `subwave-aio-heavy` bakes
 # them, and `subwave-aio-cuda` (#1186) adds cu124 torch — WITH_CUDA implies the
 # heavy tier (CUDA torch alone would be dead weight), and the worker still
-# picks the device itself (ANALYZE_DEVICE=auto), so it degrades to CPU on a
-# driverless host. Host needs only the NVIDIA driver + container runtime; on
-# Unraid see docs/unraid.md.
+# picks its device (ANALYZE_DEVICE=auto), so it degrades to CPU on a driverless
+# host. See docs/unraid.md.
 #
 # Pins mirror docker/Dockerfile.analyzer — keep the two in lockstep. This venv
 # runs on the system python3 (trixie → 3.13, unlike the analyzer image's 3.11);
-# torch 2.6.0 publishes cp313 wheels on both the cpu and cu124 indexes, so the
-# shared pin holds.
+# torch 2.6.0 publishes cp313 wheels on both indexes, so the shared pin holds.
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ARG WITH_CUDA=0
@@ -141,9 +139,9 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
-      # diffq (quantized-checkpoint decompressor) ships sdist-only: lend it a
-      # toolchain and purge in the SAME layer. Unlike the analyzer image, this
-      # base's apt python3 has no headers — python3-dev supplies Python.h.
+      # diffq ships sdist-only: lend it a toolchain and purge in the SAME
+      # layer (see docker/Dockerfile.analyzer). Unlike that image, this base's
+      # apt python3 has no headers — python3-dev supplies Python.h.
       apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev python3-dev && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \

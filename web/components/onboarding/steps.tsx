@@ -1,7 +1,31 @@
 'use client';
 
-import { useState } from 'react';
-import type { WizardController } from './useWizard';
+import { useRef, useState } from 'react';
+import { z } from 'zod';
+import { useController } from 'react-hook-form';
+import { useZodForm, fieldAria } from '@/lib/form';
+import { TextField, SelectField, SwitchField } from '@/lib/form-fields';
+import {
+  Field,
+  FieldLabel,
+  FieldError,
+} from '@/components/ui/field';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  llmProbeSchema,
+  navidromeProbeSchema,
+  TTS_ENGINES,
+  TTS_CLOUD_PROVIDERS,
+  SETTINGS_STATION_NAME_MAX,
+} from '@/lib/schemas.generated';
+import type { WizardController, WizardData } from './useWizard';
 import { ProviderSelector } from '../admin/llm/ProviderSelector';
 import { ModelCombobox } from '../admin/llm/ModelCombobox';
 import { PROVIDER_IDS } from '../admin/llm/providerMeta';
@@ -15,8 +39,9 @@ import { V3Alert } from '@/components/ui/alert';
 // see once doesn't drag in the full admin UI library. Labels, fills and borders
 // ride the theme tokens.
 
-// Shared by <Field> and the inline label rows that can't wrap their control in
-// a <label>.
+// Shared by the bare-span composite-control labels below (Provider/Model/
+// Location — none of these are a single labelable input, so none of them use
+// FieldLabel/htmlFor; see the comment at each site).
 const WIZARD_LABEL_CLASS =
   'font-mono text-[11px] font-bold tracking-[0.18em] text-ink uppercase';
 
@@ -26,40 +51,6 @@ function StepHeader({ title, blurb }: { title: string; blurb: string }) {
       <h2 className="font-display text-xl font-bold text-ink">{title}</h2>
       <p className="mt-1 text-sm text-muted">{blurb}</p>
     </div>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className={WIZARD_LABEL_CLASS}>{label}</span>
-      {children}
-      {hint ? <span className="font-mono text-[12px] text-muted">{hint}</span> : null}
-    </label>
-  );
-}
-
-function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return <Input {...props} />;
-}
-
-function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
-  return (
-    <select
-      {...props}
-      className={
-        'border border-input bg-field px-3 py-[9px] text-[13px] text-ink focus:outline-none focus-visible:ring-1 focus-visible:ring-ring ' +
-        (props.className || '')
-      }
-    />
   );
 }
 
@@ -81,66 +72,108 @@ function TestPill({ result }: { result: { ok: boolean | null; msg?: string } }) 
   );
 }
 
-// NAVIDROME
+function NextButton({ disabled }: { disabled: boolean }) {
+  return (
+    <div className="mt-2 flex justify-end">
+      <Button type="submit" variant="solid" disabled={disabled}>
+        Next →
+      </Button>
+    </div>
+  );
+}
+
+// ─── NAVIDROME ────────────────────────────────────────────────────────────
+//
+// Skipping Navidrome mid-wizard is a supported path (useWizard.save() and
+// routes/onboarding.ts both persist empty creds fine — the only thing that
+// requires all three fields is the PROBE), so this step's own schema carries
+// no format rules at all: Next stays enabled regardless of content. The
+// stricter, shared navidromeProbeSchema (imported) gates only the Test
+// button, replacing the old hand-rolled `!url || !user || !pass` check with
+// the exact rule the controller enforces server-side.
+const navidromeStepSchema = z.object({
+  url: z.string(),
+  user: z.string(),
+  pass: z.string(),
+});
+
 export function NavidromeStep({ w }: { w: WizardController }) {
   const [busy, setBusy] = useState(false);
+  const form = useZodForm(navidromeStepSchema, { ...w.data.navidrome });
+  const values = form.watch();
+  const navParsed = navidromeProbeSchema.safeParse(values);
+  // Typing lives in this step's own form now, not in `w.data`, so the old
+  // "reset the pill on every keystroke" behaviour (every onChange used to
+  // patch `navidromeTest: { ok: null }`) has to be reproduced locally: track
+  // what was actually tested, and hide the pill once the live values drift
+  // from it — otherwise a stale "connection ok" would survive an edit until
+  // the next Next-submit.
+  const testedRef = useRef<string | null>(null);
+  const stale = testedRef.current !== JSON.stringify(values);
+
   const onTest = async () => {
+    if (!navParsed.success) return;
     setBusy(true);
-    // testNavidrome catches its own errors into the pill; the finally is the
-    // backstop so the button can't wedge on "Testing…" (issue #682).
+    testedRef.current = JSON.stringify(values);
     try {
-      await w.testNavidrome();
+      await w.testNavidrome(navParsed.data);
     } finally {
       setBusy(false);
     }
   };
+
+  const onNext = form.handleSubmit(vals => {
+    // patch() itself merges with the existing data — the callback returns
+    // only the keys to overwrite, never the whole object back (that would
+    // clobber this very update on the next render).
+    w.patch({
+      navidrome: vals,
+      // Commit clears the pill only when the committed values differ from
+      // whatever was last tested — an untouched, already-tested value keeps
+      // its result across Next.
+      ...(testedRef.current !== JSON.stringify(vals) ? { navidromeTest: { ok: null } } : {}),
+    });
+    w.next();
+  });
+
   return (
-    <div>
+    <form onSubmit={onNext} noValidate>
       <StepHeader
         title="Connect Navidrome"
         blurb="SUB/WAVE plays from your Subsonic-compatible music library. Point it at your Navidrome and the AI DJ takes over."
       />
       <div className="grid gap-3">
-        <Field label="Navidrome URL" hint="e.g. http://host.docker.internal:4533">
-          <TextInput
-            value={w.data.navidrome.url}
-            placeholder="http://host.docker.internal:4533"
-            onChange={e =>
-              w.patch(d => ({ navidrome: { ...d.navidrome, url: e.target.value }, navidromeTest: { ok: null } }))
-            }
-          />
-        </Field>
-        <Field
+        <TextField
+          control={form.control}
+          name="url"
+          label="Navidrome URL"
+          placeholder="http://host.docker.internal:4533"
+          description="e.g. http://host.docker.internal:4533"
+        />
+        <TextField
+          control={form.control}
+          name="user"
           label="Username"
-          hint="tip: a dedicated Navidrome user that can only access the libraries you want on air keeps audiobooks and seasonal collections off the stream"
-        >
-          <TextInput
-            value={w.data.navidrome.user}
-            autoComplete="username"
-            onChange={e =>
-              w.patch(d => ({ navidrome: { ...d.navidrome, user: e.target.value }, navidromeTest: { ok: null } }))
-            }
-          />
-        </Field>
-        <Field label="Password">
-          <TextInput
-            type="password"
-            value={w.data.navidrome.pass}
-            autoComplete="current-password"
-            onChange={e =>
-              w.patch(d => ({ navidrome: { ...d.navidrome, pass: e.target.value }, navidromeTest: { ok: null } }))
-            }
-          />
-        </Field>
+          autoComplete="username"
+          description="tip: a dedicated Navidrome user that can only access the libraries you want on air keeps audiobooks and seasonal collections off the stream"
+        />
+        <TextField
+          control={form.control}
+          name="pass"
+          label="Password"
+          type="password"
+          autoComplete="current-password"
+        />
         <div>
           <Button
+            type="button"
             variant="solid"
             onClick={onTest}
-            disabled={busy || !w.data.navidrome.url || !w.data.navidrome.user || !w.data.navidrome.pass}
+            disabled={busy || !navParsed.success}
           >
             {busy ? 'Testing…' : 'Test connection'}
           </Button>
-          <TestPill result={w.data.navidromeTest} />
+          <TestPill result={stale ? { ok: null } : w.data.navidromeTest} />
         </div>
         <V3Alert title="Music licensing">
           Owning these files covers your own private listening, not{' '}
@@ -152,123 +185,183 @@ export function NavidromeStep({ w }: { w: WizardController }) {
           royalty-free, public domain). You are the broadcaster and are
           responsible for clearing these rights. Not legal advice.
         </V3Alert>
+        <NextButton disabled={!form.formState.isValid} />
       </div>
-    </div>
+    </form>
   );
 }
 
-// LLM. Provider list, labels and blurbs come from admin/llm/providerMeta so
+// ─── LLM ────────────────────────────────────────────────────────────────
+//
+// Provider list, labels and blurbs come from admin/llm/providerMeta so
 // onboarding and the admin Settings tab never drift.
+//
+// llmProbeSchema itself can't be handed to useZodForm directly: it's rooted
+// at `z.unknown()` (a POST-body probe schema, not a structural z.object), so
+// its z.input is genuinely `unknown` — unlike the imaging/skill schemas'
+// z.preprocess-wrapped LEAF fields (whose object ROOT still satisfies
+// react-hook-form's FieldValues bound), an unknown ROOT has no shape to
+// widen. This step's own schema is a real z.object with the exact fields it
+// collects, and its superRefine calls llmProbeSchema to run the ACTUAL rule
+// — one source of truth for "provider+model required, baseUrl required for
+// openai-compatible" — so formState.isValid (gating both this step's Next
+// and the Test button below) is exactly llmProbeSchema's verdict, just
+// wrapped in a shape RHF can bind fields against directly.
+const llmStepSchema = z.object({
+  provider: z.string(),
+  model: z.string(),
+  apiKey: z.string(),
+  baseUrl: z.string(),
+  ollamaUrl: z.string(),
+}).superRefine((val, ctx) => {
+  const r = llmProbeSchema.safeParse(val);
+  if (!r.success) {
+    for (const issue of r.error.issues) {
+      ctx.addIssue({ code: 'custom', message: issue.message, path: issue.path });
+    }
+  }
+});
 
 export function LlmStep({ w }: { w: WizardController }) {
   const [busy, setBusy] = useState(false);
-  const isOllama = w.data.llm.provider === 'ollama';
-  const isLocca = w.data.llm.provider === 'locca';
-  const isCustom = w.data.llm.provider === 'openai-compatible';
+  const form = useZodForm(llmStepSchema, {
+    provider: w.data.llm.provider,
+    model: w.data.llm.model,
+    apiKey: w.data.llm.apiKey,
+    baseUrl: w.data.llm.baseUrl,
+    ollamaUrl: w.data.llm.ollamaUrl,
+  });
+  const control = form.control;
+
+  const provider = String(form.watch('provider') ?? '');
+  const baseUrl = String(form.watch('baseUrl') ?? '');
+  const ollamaUrl = String(form.watch('ollamaUrl') ?? '');
+  const isOllama = provider === 'ollama';
+  const isLocca = provider === 'locca';
+  const isCustom = provider === 'openai-compatible';
+
+  const providerField = useController({ control, name: 'provider' });
+  const modelField = useController({ control, name: 'model' });
+  const modelAria = fieldAria('llm-model', modelField.fieldState.error);
+
+  // Same staleness tracking as NavidromeStep — see its comment.
+  const testedRef = useRef<string | null>(null);
+  const liveValues = form.watch();
+  const stale = testedRef.current !== JSON.stringify(liveValues);
+
   const onTest = async () => {
     setBusy(true);
+    testedRef.current = JSON.stringify(liveValues);
     try {
-      await w.testLlm();
+      await w.testLlm(form.getValues() as unknown as WizardData['llm']);
     } finally {
       setBusy(false);
     }
   };
+
   // Enabled for the keyless-discoverable providers; cloud providers need their
   // key saved on the box first, so they fall back to free-typing the model id.
   const discoveryEnabled =
     isOllama || isLocca ||
-    (isCustom && !!w.data.llm.baseUrl.trim()) ||
-    w.data.llm.provider === 'openrouter';
+    (isCustom && !!baseUrl.trim()) ||
+    provider === 'openrouter';
   const discovery = useModelDiscovery({
-    provider: w.data.llm.provider,
-    baseUrl: w.data.llm.baseUrl,
-    ollamaUrl: w.data.llm.ollamaUrl,
+    provider,
+    baseUrl,
+    ollamaUrl,
     enabled: discoveryEnabled,
     adminFetch: w.auth.adminFetch,
   });
+
+  const onNext = form.handleSubmit(vals => {
+    const v = vals as unknown as WizardData['llm'];
+    w.patch({
+      llm: v,
+      ...(testedRef.current !== JSON.stringify(liveValues) ? { llmTest: { ok: null } } : {}),
+    });
+    w.next();
+  });
+
   return (
-    <div>
+    <form onSubmit={onNext} noValidate>
       <StepHeader
         title="Pick a language model"
         blurb="The DJ talks between tracks. Ollama running on the host is the homelab default — no API key needed."
       />
       <div className="grid gap-3">
-        {/* Not <Field>: it renders a <label>, and a label around a radiogroup of
-            buttons hijacks clicks. */}
+        {/* Bare span, not FieldLabel: ProviderSelector renders its own
+            role="radiogroup" aria-label, and a wrapping <label> around a
+            radiogroup of buttons hijacks clicks. Raw useController (not
+            SelectField) because ProviderSelector is a radio-card composite
+            the shared select wrapper can't express — see lib/form-fields.tsx's
+            header. */}
         <div className="flex flex-col gap-1">
           <span className={WIZARD_LABEL_CLASS}>Provider</span>
           <ProviderSelector
-            value={w.data.llm.provider}
+            value={providerField.field.value}
             providerIds={PROVIDER_IDS}
             keyAware={false}
-            onChange={id =>
-              w.patch(d => ({ llm: { ...d.llm, provider: id }, llmTest: { ok: null } }))
-            }
+            onChange={providerField.field.onChange}
           />
         </div>
         {isOllama && (
-          <Field label="Ollama URL" hint="Reachable from the controller container">
-            <TextInput
-              value={w.data.llm.ollamaUrl}
-              onChange={e =>
-                w.patch(d => ({ llm: { ...d.llm, ollamaUrl: e.target.value }, llmTest: { ok: null } }))
-              }
-            />
-          </Field>
+          <TextField
+            control={control}
+            name="ollamaUrl"
+            label="Ollama URL"
+            description="Reachable from the controller container"
+          />
         )}
         {isCustom && (
-          <Field label="Base URL" hint="e.g. http://localhost:8080/v1 (llama.cpp / vLLM / LM Studio)">
-            <TextInput
-              value={w.data.llm.baseUrl}
-              onChange={e =>
-                w.patch(d => ({ llm: { ...d.llm, baseUrl: e.target.value }, llmTest: { ok: null } }))
-              }
-            />
-          </Field>
+          <TextField
+            control={control}
+            name="baseUrl"
+            label="Base URL"
+            description="e.g. http://localhost:8080/v1 (llama.cpp / vLLM / LM Studio)"
+          />
         )}
         {isLocca && (
-          <Field
+          <TextField
+            control={control}
+            name="baseUrl"
             label="Base URL"
-            hint="Blank → http://host.docker.internal:8080/v1 (the locca server on the host)"
-          >
-            <TextInput
-              value={w.data.llm.baseUrl}
-              placeholder="http://host.docker.internal:8080/v1"
-              onChange={e =>
-                w.patch(d => ({ llm: { ...d.llm, baseUrl: e.target.value }, llmTest: { ok: null } }))
-              }
-            />
-          </Field>
+            placeholder="http://host.docker.internal:8080/v1"
+            description="Blank → http://host.docker.internal:8080/v1 (the locca server on the host)"
+          />
         )}
         {!isOllama && !isLocca && (
-          <Field label="API key" hint="Stored in state/secrets.env (mode 0600), not in settings.json">
-            <TextInput
-              type="password"
-              autoComplete="off"
-              value={w.data.llm.apiKey}
-              onChange={e =>
-                w.patch(d => ({ llm: { ...d.llm, apiKey: e.target.value }, llmTest: { ok: null } }))
-              }
-            />
-          </Field>
+          <TextField
+            control={control}
+            name="apiKey"
+            label="API key"
+            type="password"
+            autoComplete="off"
+            description="Stored in state/secrets.env (mode 0600), not in settings.json"
+          />
         )}
-        {/* Not <Field>: the combobox trigger is a <button>, and a wrapping
-            <label> would hijack the click. */}
+        {/* Bare span, not FieldLabel: the combobox trigger is a <button>, and
+            a wrapping <label> would hijack the click. Raw useController: the
+            control itself swaps between ModelCombobox and a plain input
+            depending on live discovery state — neither TextField nor a
+            select wrapper can express that swap alone. */}
         <div className="flex flex-col gap-1">
           <span className={WIZARD_LABEL_CLASS}>Model</span>
           <div className="flex items-stretch gap-2">
             {discovery.models.length > 0 ? (
               <ModelCombobox
                 models={discovery.models}
-                value={w.data.llm.model}
-                onChange={v => w.patch(d => ({ llm: { ...d.llm, model: v }, llmTest: { ok: null } }))}
+                value={modelField.field.value}
+                onChange={modelField.field.onChange}
                 placeholder="Select a model"
               />
             ) : (
-              <TextInput
+              <Input
+                {...modelAria.controlProps}
                 aria-label="Model"
-                value={w.data.llm.model}
-                onChange={e => w.patch(d => ({ llm: { ...d.llm, model: e.target.value }, llmTest: { ok: null } }))}
+                value={modelField.field.value}
+                onChange={e => modelField.field.onChange(e.target.value)}
+                onBlur={modelField.field.onBlur}
+                ref={modelField.field.ref}
                 placeholder={isOllama ? 'glm-5.1:cloud' : (isCustom || isLocca) ? 'model filename or id' : 'e.g. claude-sonnet-4 · gpt-4o-mini'}
                 className="max-w-[360px] flex-1"
               />
@@ -296,57 +389,94 @@ export function LlmStep({ w }: { w: WizardController }) {
                       : 'No models found yet — set the URL above, or type a model ID.')
                 : 'Type the model ID. Discovery runs here once the API key is saved.'}
           </span>
+          <FieldError {...modelAria.errorProps} errors={modelField.fieldState.error ? [modelField.fieldState.error] : undefined} />
         </div>
         <div>
-          <Button variant="solid" onClick={onTest} disabled={busy || !w.data.llm.model}>
+          {/* The step's own resolver IS llmProbeSchema now, so formState.isValid
+              is byte-for-byte the old inline `llmProbeSchema.safeParse(w.data.llm)`
+              check — kept as the one gate for both this button and Next, per
+              the migration brief ("pick one and delete the other"). */}
+          <Button variant="solid" type="button" onClick={onTest} disabled={busy || !form.formState.isValid}>
             {busy ? 'Asking…' : 'Send a test prompt'}
           </Button>
-          <TestPill result={w.data.llmTest} />
+          <TestPill result={stale ? { ok: null } : w.data.llmTest} />
         </div>
+        <NextButton disabled={!form.formState.isValid} />
       </div>
-    </div>
+    </form>
   );
 }
 
-// TTS
+// ─── TTS ──────────────────────────────────────────────────────────────────
+const ttsStepSchema = z.object({
+  defaultEngine: z.enum(TTS_ENGINES),
+  heavyEnabled: z.boolean(),
+  cloud: z.object({
+    enabled: z.boolean(),
+    provider: z.enum(TTS_CLOUD_PROVIDERS),
+    apiKey: z.string(),
+    model: z.string(),
+    voice: z.string(),
+  }),
+});
+
+const TTS_ENGINE_OPTIONS = [
+  { value: 'piper', label: 'Piper (fast, local)' },
+  { value: 'kokoro', label: 'Kokoro (natural, local)' },
+  { value: 'cloud', label: 'Cloud (OpenAI / ElevenLabs / Fish Audio)' },
+  { value: 'chatterbox', label: 'Chatterbox (voice cloning, sidecar)' },
+  { value: 'pocket-tts', label: 'PocketTTS (multilingual, sidecar)' },
+  { value: 'remote', label: 'Remote (your own server)' },
+];
+
+// Only the three cloud providers the wizard actually collects credentials
+// for — TTS_CLOUD_PROVIDERS (imported) also lists 'openai-compatible', which
+// this step doesn't offer a base-URL field for, so it stays off this list.
+const TTS_CLOUD_PROVIDER_OPTIONS = [
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'elevenlabs', label: 'ElevenLabs' },
+  { value: 'fish-audio', label: 'Fish Audio' },
+];
+
 export function TtsStep({ w }: { w: WizardController }) {
-  const engine = w.data.tts.defaultEngine;
+  // WizardData's cloud.provider is a plain `string` (it also has to hold
+  // 'openai-compatible', which this step's own narrower enum below never
+  // offers) — cast the seed once rather than widen the schema.
+  const form = useZodForm(ttsStepSchema, { ...w.data.tts } as z.input<typeof ttsStepSchema>);
+  const engine = form.watch('defaultEngine');
+  const heavyEnabled = form.watch('heavyEnabled');
+  const cloudEnabled = form.watch('cloud.enabled');
   const heavyPicked = engine === 'chatterbox' || engine === 'pocket-tts';
-  const heavyEnabled = w.data.tts.heavyEnabled;
+
+  // Side-effecting onChange (clears the credential, and for Fish Audio
+  // pre-fills its model/voice defaults) — a raw useController, not
+  // SelectField, per lib/form-fields.tsx's header.
+  const cloudProviderField = useController({ control: form.control, name: 'cloud.provider' });
+  const cloudProviderAria = fieldAria('tts-cloud-provider', cloudProviderField.fieldState.error);
+
+  const onNext = form.handleSubmit(vals => {
+    w.patch(d => ({ tts: { ...d.tts, ...vals } }));
+    w.next();
+  });
+
   return (
-    <div>
+    <form onSubmit={onNext} noValidate>
       <StepHeader
         title="Choose a voice engine"
         blurb="Piper is the default — fast, local, decent. Kokoro is slower but more natural. Cloud routes through OpenAI, ElevenLabs, or Fish Audio."
       />
       <div className="grid gap-3">
-        <Field label="Default engine">
-          <Select
-            value={w.data.tts.defaultEngine}
-            onChange={e =>
-              w.patch(d => ({
-                tts: { ...d.tts, defaultEngine: e.target.value as typeof d.tts.defaultEngine },
-              }))
-            }
-          >
-            <option value="piper">Piper (fast, local)</option>
-            <option value="kokoro">Kokoro (natural, local)</option>
-            <option value="cloud">Cloud (OpenAI / ElevenLabs / Fish Audio)</option>
-            <option value="chatterbox">Chatterbox (voice cloning, sidecar)</option>
-            <option value="pocket-tts">PocketTTS (multilingual, sidecar)</option>
-            <option value="remote">Remote (your own server)</option>
-          </Select>
-        </Field>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={heavyEnabled}
-            onChange={e =>
-              w.patch(d => ({ tts: { ...d.tts, heavyEnabled: e.target.checked } }))
-            }
-          />
-          Enable Chatterbox + PocketTTS (tts-heavy sidecar, ~5–6 GB)
-        </label>
+        <SelectField
+          control={form.control}
+          name="defaultEngine"
+          label="Default engine"
+          options={TTS_ENGINE_OPTIONS}
+        />
+        <SwitchField
+          control={form.control}
+          name="heavyEnabled"
+          label="Enable Chatterbox + PocketTTS (tts-heavy sidecar, ~5–6 GB)"
+        />
         {heavyEnabled && (
           <V3Alert title="Heavy TTS enabled">
             The sidecar isn&apos;t started by default. On the machine running
@@ -370,83 +500,68 @@ export function TtsStep({ w }: { w: WizardController }) {
             sidecar is started.
           </V3Alert>
         )}
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={w.data.tts.cloud.enabled}
-            onChange={e =>
-              w.patch(d => ({
-                tts: { ...d.tts, cloud: { ...d.tts.cloud, enabled: e.target.checked } },
-              }))
-            }
-          />
-          Enable cloud TTS as a fallback
-        </label>
-        {w.data.tts.cloud.enabled && (
+        <SwitchField
+          control={form.control}
+          name="cloud.enabled"
+          label="Enable cloud TTS as a fallback"
+        />
+        {cloudEnabled && (
           <>
-            <Field label="Cloud TTS provider">
+            <Field data-invalid={cloudProviderAria.invalid || undefined}>
+              <FieldLabel {...cloudProviderAria.labelProps}>Cloud TTS provider</FieldLabel>
               <Select
-                value={w.data.tts.cloud.provider}
-                onChange={e => {
-                  const provider = e.target.value;
-                  w.patch(d => ({
-                    tts: {
-                      ...d.tts,
-                      cloud: {
-                        ...d.tts.cloud,
-                        provider,
-                        // Credentials are provider-specific: never carry a
-                        // typed key across a selector change.
-                        apiKey: '',
-                        ...(provider === 'fish-audio' ? { model: 's2.1-pro', voice: '' } : {}),
-                      },
-                    },
-                  }));
+                value={cloudProviderField.field.value}
+                onValueChange={(provider) => {
+                  cloudProviderField.field.onChange(provider);
+                  // Credentials are provider-specific: never carry a typed key
+                  // across a selector change.
+                  form.setValue('cloud.apiKey', '', { shouldValidate: true, shouldDirty: true });
+                  if (provider === 'fish-audio') {
+                    form.setValue('cloud.model', 's2.1-pro', { shouldValidate: true, shouldDirty: true });
+                    form.setValue('cloud.voice', '', { shouldValidate: true, shouldDirty: true });
+                  }
                 }}
               >
-                <option value="openai">OpenAI</option>
-                <option value="elevenlabs">ElevenLabs</option>
-                <option value="fish-audio">Fish Audio</option>
+                <SelectTrigger
+                  {...cloudProviderAria.controlProps}
+                  onBlur={cloudProviderField.field.onBlur}
+                  ref={cloudProviderField.field.ref}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {TTS_CLOUD_PROVIDER_OPTIONS.map(o => (
+                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
               </Select>
+              <FieldError {...cloudProviderAria.errorProps} errors={cloudProviderField.fieldState.error ? [cloudProviderField.fieldState.error] : undefined} />
             </Field>
-            <Field label="API key">
-              <TextInput
-                type="password"
-                autoComplete="off"
-                value={w.data.tts.cloud.apiKey}
-                onChange={e =>
-                  w.patch(d => ({
-                    tts: { ...d.tts, cloud: { ...d.tts.cloud, apiKey: e.target.value } },
-                  }))
-                }
-              />
-            </Field>
-            {w.data.tts.cloud.provider === 'fish-audio' && (
+            <TextField
+              control={form.control}
+              name="cloud.apiKey"
+              label="API key"
+              type="password"
+              autoComplete="off"
+            />
+            {form.watch('cloud.provider') === 'fish-audio' && (
               <>
-                <Field label="Fish model id">
-                  <TextInput
-                    value={w.data.tts.cloud.model}
-                    maxLength={100}
-                    placeholder="s2.1-pro"
-                    onChange={e =>
-                      w.patch(d => ({
-                        tts: { ...d.tts, cloud: { ...d.tts.cloud, model: e.target.value } },
-                      }))
-                    }
-                  />
-                </Field>
-                <Field label="Fish voice reference id">
-                  <TextInput
-                    value={w.data.tts.cloud.voice}
-                    maxLength={100}
-                    placeholder="Paste an account, public, or custom reference_id"
-                    onChange={e =>
-                      w.patch(d => ({
-                        tts: { ...d.tts, cloud: { ...d.tts.cloud, voice: e.target.value } },
-                      }))
-                    }
-                  />
-                </Field>
+                <TextField
+                  control={form.control}
+                  name="cloud.model"
+                  label="Fish model id"
+                  placeholder="s2.1-pro"
+                  maxLength={100}
+                />
+                <TextField
+                  control={form.control}
+                  name="cloud.voice"
+                  label="Fish voice reference id"
+                  placeholder="Paste an account, public, or custom reference_id"
+                  maxLength={100}
+                />
                 <p className="text-xs text-muted">
                   Account voice discovery is available after setup in Admin → Settings → TTS.
                 </p>
@@ -454,59 +569,89 @@ export function TtsStep({ w }: { w: WizardController }) {
             )}
           </>
         )}
+        <NextButton disabled={!form.formState.isValid} />
       </div>
-    </div>
+    </form>
   );
 }
 
-// DJ persona
+// ─── DJ PERSONA ─────────────────────────────────────────────────────────
+const djStepSchema = z.object({
+  stationName: z.string().max(
+    SETTINGS_STATION_NAME_MAX,
+    `station name must be ${SETTINGS_STATION_NAME_MAX} chars or fewer`,
+  ),
+  locationName: z.string(),
+  lat: z.string(),
+  lng: z.string(),
+  timezone: z.string(),
+});
+
 export function DjStep({ w }: { w: WizardController }) {
+  const form = useZodForm(djStepSchema, {
+    stationName: w.data.dj.stationName,
+    locationName: w.data.dj.locationName,
+    lat: w.data.dj.lat,
+    lng: w.data.dj.lng,
+    timezone: w.data.dj.timezone,
+  });
+  const locationName = form.watch('locationName');
+  const lat = form.watch('lat');
+  const lng = form.watch('lng');
+  const timezone = form.watch('timezone');
+
+  const onNext = form.handleSubmit(vals => {
+    // `frequency` isn't part of this step's schema (nothing here edits it),
+    // so merge rather than replace — a plain overwrite would drop it.
+    w.patch(d => ({ dj: { ...d.dj, ...vals } }));
+    w.next();
+  });
+
   return (
-    <div>
+    <form onSubmit={onNext} noValidate>
       <StepHeader
         title="DJ persona"
         blurb="The DJ's voice on air. Name your station and set your location for weather. Personality tuning lives in /admin/settings — keep this step short."
       />
       <div className="grid gap-3">
-        <Field label="Station name">
-          <TextInput
-            value={w.data.dj.stationName}
-            onChange={e => w.patch(d => ({ dj: { ...d.dj, stationName: e.target.value } }))}
-          />
-        </Field>
-        {/* Not <Field>: the picker is a composite and can't live inside one
-            <label>. */}
+        <TextField control={form.control} name="stationName" label="Station name" />
+        {/* Bare span, not FieldLabel: the picker is a composite (three fields
+            at once) that can't live inside one <label>, and it has no single
+            RHF field name to bind a Controller to — read/write directly via
+            watch()/setValue() instead. */}
         <div className="flex flex-col gap-1">
           <span className={WIZARD_LABEL_CLASS}>Location</span>
           <LocationPicker
             variant="onboarding"
-            value={{
-              locationName: w.data.dj.locationName,
-              lat: w.data.dj.lat,
-              lng: w.data.dj.lng,
+            value={{ locationName, lat, lng }}
+            onChange={next => {
+              form.setValue('locationName', next.locationName, { shouldValidate: true, shouldDirty: true });
+              form.setValue('lat', next.lat, { shouldValidate: true, shouldDirty: true });
+              form.setValue('lng', next.lng, { shouldValidate: true, shouldDirty: true });
             }}
-            onChange={next => w.patch(d => ({ dj: { ...d.dj, ...next } }))}
             onPick={r => {
-              const tz = r.timezone;
-              if (tz) w.patch(d => ({ dj: { ...d.dj, timezone: tz } }));
+              if (r.timezone) form.setValue('timezone', r.timezone, { shouldValidate: true, shouldDirty: true });
             }}
           />
           <span className="text-xs text-muted">
             Search a city — coordinates and timezone fill in automatically. Used for weather +
             “broadcasting from…” prompts.
           </span>
-          {w.data.dj.timezone ? (
+          {timezone ? (
             <span className="text-xs text-muted">
-              Timezone: {w.data.dj.timezone} (from your location)
+              Timezone: {timezone} (from your location)
             </span>
           ) : null}
         </div>
+        <NextButton disabled={!form.formState.isValid} />
       </div>
-    </div>
+    </form>
   );
 }
 
-// REVIEW + SAVE
+// ─── REVIEW + SAVE ──────────────────────────────────────────────────────
+// No fields of its own (a read-only summary of `data` plus one Save button),
+// so nothing here to bind to react-hook-form.
 export function ReviewStep({
   w,
   onDone,
@@ -547,6 +692,12 @@ export function ReviewStep({
           </div>
         ))}
       </dl>
+      {/* POST /onboarding/save never emits fieldErrors — it's a hand-rolled
+          try/catch (routes/onboarding.ts), not validateBody(schema), so there
+          is no field-addressable channel here to route through
+          applyServerFieldErrors. Confirmed by reading the route AND by curl:
+          see verify-forms.py's `onboarding` check. Plain string display, same
+          as before. */}
       {err && <p role="alert" className="mt-3 text-sm text-destructive">{err}</p>}
       <Button variant="solid" size="lg" className="mt-5" onClick={onSave} disabled={busy}>
         {busy ? 'Saving…' : 'Save and finish'}

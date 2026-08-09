@@ -1,19 +1,13 @@
-// Operator CLI preferences. Persisted to ~/.config/subwave/cli.json so the
-// next session remembers things like the last-chosen env when both compose
-// files are present. Tiny by design — most state lives in the root .env and
-// state/{settings,setup-config}.json, not here.
-//
-// Pattern: load defaults() merged with whatever's on disk. New keys added
-// to defaults() are automatically present in old configs without migration.
+// Operator CLI preferences, in ~/.config/subwave/cli.json. Deliberately tiny —
+// station state belongs in the root .env and state/, not here. Loading merges
+// over defaults(), so a new key needs no migration for old configs.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 export interface CliConfig {
-  // Preferred env when multiple compose files exist and none is up.
-  preferredEnv: 'dev' | 'prod' | 'prod-byo' | null;
-  // Last apiBase the operator manually overrode (rare, keep around).
+  preferredEnv: 'dev' | 'prod' | 'prod-byo' | null; // used when nothing is up
   apiBaseOverride: string | null;
 }
 
@@ -41,7 +35,7 @@ export function loadConfig(): CliConfig {
     const parsed = JSON.parse(raw) as Partial<CliConfig>;
     return { ...defaults(), ...parsed };
   } catch {
-    // Corrupt config falls back to defaults rather than crashing the menu.
+    // A corrupt config must not crash the menu.
     return defaults();
   }
 }

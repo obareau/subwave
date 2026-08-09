@@ -1,5 +1,4 @@
-// `subwave status` — quick render: compose env, services, now-playing,
-// recent DJ events. Much lighter than `doctor`; designed to be glance-able.
+// `subwave status` — glance-able by design, and much lighter than `doctor`.
 
 import { detectCompose } from '../compose.ts';
 import { makeClient, type NowPlayingPayload, type StatePayload } from '../api.ts';
@@ -24,9 +23,8 @@ export async function runStatusCommand(): Promise<void> {
     else err(`${svc} — ${pc.dim(state)}`);
   }
 
-  // Dev mode only: the web UI runs as a host-side `npm run dev`, not a
-  // compose service, so it doesn't appear in compose.services. Surface it
-  // here so `status` covers the whole rig in one glance.
+  // The dev web server isn't a compose service, so it's absent from
+  // compose.services — add it so status covers the whole rig.
   if (compose.env === 'dev') {
     const holder = whoHolds7700();
     const trackedPid = readWebDevPid();
@@ -54,7 +52,7 @@ export async function runStatusCommand(): Promise<void> {
     if (track?.title) {
       ok(`track: ${pc.bold(track.title)} — ${pc.dim(track.artist ?? 'unknown')}`);
       if (track.album) muted(`album: ${track.album}`);
-      // controller emits `timestamp` in unix seconds; convert to ms for formatRelative.
+      // The controller emits `timestamp` in unix SECONDS.
       if (track.timestamp) muted(`started ${formatRelative(track.timestamp * 1000)}`);
     } else {
       warn('no track metadata yet');

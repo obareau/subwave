@@ -7,7 +7,7 @@
 import { useMemo } from 'react';
 import type { Persona } from './types';
 import { API_BASE } from './constants';
-import { initialsFor, personaValid } from './helpers';
+import { initialsFor } from './helpers';
 import { Pill, MetaChip } from '../ui';
 import { RosterTable } from '../RosterTable';
 import type { RosterColumn } from '../RosterTable';
@@ -21,6 +21,8 @@ interface PersonaTableProps {
   onAirPersonaId: string;
   // Cache-buster bumped on avatar upload/delete.
   avatarTick: number;
+  // Sourced from the RHF form's own formState.errors.personas.
+  isPersonaInvalid: (idx: number) => boolean;
   onSelect: (idx: number) => void;
 }
 
@@ -31,7 +33,7 @@ interface PersonaRow {
 }
 
 export function PersonaTable({
-  personas, activePersonaId, onAirPersonaId, avatarTick, onSelect,
+  personas, activePersonaId, onAirPersonaId, avatarTick, isPersonaInvalid, onSelect,
 }: PersonaTableProps) {
   const rows = useMemo<PersonaRow[]>(
     () => personas.map((persona, index) => ({ persona, index })),
@@ -113,19 +115,19 @@ export function PersonaTable({
       label: '',
       align: 'right',
       className: 'w-24 whitespace-nowrap',
-      render: ({ persona: p }) => (
-        personaValid(p)
-          ? null
-          : <Pill className="border-[var(--danger)] text-[var(--danger)]">incomplete</Pill>
+      render: ({ index }) => (
+        isPersonaInvalid(index)
+          ? <Pill className="border-[var(--danger)] text-[var(--danger)]">incomplete</Pill>
+          : null
       ),
     },
-  ], [activePersonaId, onAirPersonaId, avatarTick]);
+  ], [activePersonaId, onAirPersonaId, avatarTick, isPersonaInvalid]);
 
   // Same status priority as the card spine.
-  const spineFor = ({ persona: p }: PersonaRow): string => {
+  const spineFor = ({ persona: p, index }: PersonaRow): string => {
     if (p.id === onAirPersonaId) return 'var(--accent)';
     if (p.id === activePersonaId) return 'var(--ink)';
-    if (!personaValid(p)) return 'var(--danger)';
+    if (isPersonaInvalid(index)) return 'var(--danger)';
     return 'var(--separator-strong)';
   };
 

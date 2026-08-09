@@ -2,6 +2,16 @@
 // `schedule[day][hour]` holds a show id or null (day keys are JS getDay:
 // 0=Sun..6=Sat). Everything the screen renders derives from that one grid through
 // the block helpers here, so the board and the listing can never disagree.
+//
+// The grid's DIMENSIONS come from the shared schema
+// (controller/src/schemas/schedule.ts, mirrored into lib/schemas.generated.ts),
+// which is also what validates every save — this file used to spell 7 and 24 as
+// bare literals in a dozen places.
+import {
+  SCHEDULE_DAYS,
+  SCHEDULE_HOURS,
+  emptyWeek as emptyScheduleWeek,
+} from '@/lib/schemas.generated';
 
 export interface Schedule {
   [day: number]: (string | null)[];
@@ -45,7 +55,7 @@ export const DAYS: { key: number; label: string; name: string }[] = [
   { key: 0, label: 'SUN', name: 'Sunday' },
 ];
 
-export const HOURS = Array.from({ length: 24 }, (_, h) => h);
+export const HOURS = Array.from({ length: SCHEDULE_HOURS }, (_, h) => h);
 
 // Same palette and index-keyed assignment as ShowsPanel, so a show's colour
 // matches between the two pages. Each hex is blended 25% toward the theme paper so
@@ -57,14 +67,13 @@ export const SHOW_COLORS = [
 ].map((hex) => `color-mix(in oklab, ${hex} 75%, var(--bg))`);
 
 export function emptyWeek(): Schedule {
-  const w: Schedule = {};
-  for (let d = 0; d < 7; d++) w[d] = Array(24).fill(null);
-  return w;
+  return emptyScheduleWeek();
 }
 
 export function cloneWeek(s: Schedule): Schedule {
   const w: Schedule = {};
-  for (let d = 0; d < 7; d++) w[d] = (s[d] ?? Array(24).fill(null)).slice();
+  for (let d = 0; d < SCHEDULE_DAYS; d++)
+    w[d] = (s[d] ?? Array(SCHEDULE_HOURS).fill(null)).slice();
   return w;
 }
 
@@ -84,13 +93,13 @@ export function hhmm(h: number): string {
 
 /** Group one day's 24 cells into contiguous blocks (shows and silent runs). */
 export function dayBlocks(schedule: Schedule, day: number): Block[] {
-  const cells = schedule[day] ?? Array(24).fill(null);
+  const cells = schedule[day] ?? Array(SCHEDULE_HOURS).fill(null);
   const blocks: Block[] = [];
   let h = 0;
-  while (h < 24) {
+  while (h < SCHEDULE_HOURS) {
     const v = cells[h] ?? null;
     let end = h + 1;
-    while (end < 24 && (cells[end] ?? null) === v) end++;
+    while (end < SCHEDULE_HOURS && (cells[end] ?? null) === v) end++;
     blocks.push({ day, start: h, span: end - h, showId: v });
     h = end;
   }
@@ -108,14 +117,14 @@ export function bookedHoursOf(schedule: Schedule, day: number): number {
 
 export function bookedHours(schedule: Schedule): number {
   let n = 0;
-  for (let d = 0; d < 7; d++) n += bookedHoursOf(schedule, d);
+  for (let d = 0; d < SCHEDULE_DAYS; d++) n += bookedHoursOf(schedule, d);
   return n;
 }
 
 export function showHours(schedule: Schedule, showId: string): number {
   let n = 0;
-  for (let d = 0; d < 7; d++)
-    for (let h = 0; h < 24; h++) if (schedule[d]?.[h] === showId) n++;
+  for (let d = 0; d < SCHEDULE_DAYS; d++)
+    for (let h = 0; h < SCHEDULE_HOURS; h++) if (schedule[d]?.[h] === showId) n++;
   return n;
 }
 
@@ -129,7 +138,7 @@ export function setRange(
 ): Schedule {
   const week = cloneWeek(schedule);
   for (const d of days)
-    for (let h = start; h < end && h < 24; h++) week[d]![h] = value;
+    for (let h = start; h < end && h < SCHEDULE_HOURS; h++) week[d]![h] = value;
   return week;
 }
 
@@ -137,8 +146,8 @@ export function setRange(
  *  but that show, so a second click undoes the first. */
 export function fillDayToggle(schedule: Schedule, day: number, showId: string): Schedule {
   const cells = schedule[day] ?? [];
-  const allSet = cells.length === 24 && cells.every(c => c === showId);
-  return setRange(schedule, [day], 0, 24, allSet ? null : showId);
+  const allSet = cells.length === SCHEDULE_HOURS && cells.every(c => c === showId);
+  return setRange(schedule, [day], 0, SCHEDULE_HOURS, allSet ? null : showId);
 }
 
 /** One hour across all seven days, same toggle-off rule as `fillDayToggle`. */
@@ -158,7 +167,7 @@ export function resizedRun(
 ): { start: number; end: number } {
   const end = block.start + block.span;
   if (edge === 'top') return { start: Math.min(Math.max(hour, 0), end - 1), end };
-  return { start: block.start, end: Math.max(Math.min(hour, 24), block.start + 1) };
+  return { start: block.start, end: Math.max(Math.min(hour, SCHEDULE_HOURS), block.start + 1) };
 }
 
 /** Moves one run's boundaries to [start, end): the hours it gives up fall silent,
@@ -178,8 +187,8 @@ export function resizeBlock(
 /** Number of cells where the two grids disagree (the unsaved-edit count). */
 export function diffCells(a: Schedule, b: Schedule): number {
   let n = 0;
-  for (let d = 0; d < 7; d++)
-    for (let h = 0; h < 24; h++)
+  for (let d = 0; d < SCHEDULE_DAYS; d++)
+    for (let h = 0; h < SCHEDULE_HOURS; h++)
       if ((a[d]?.[h] ?? null) !== (b[d]?.[h] ?? null)) n++;
   return n;
 }
@@ -189,13 +198,13 @@ export function diffRanges(local: Schedule, server: Schedule): DiffRange[] {
   const out: DiffRange[] = [];
   for (const { key: d } of DAYS) {
     let h = 0;
-    while (h < 24) {
+    while (h < SCHEDULE_HOURS) {
       const from = server[d]?.[h] ?? null;
       const to = local[d]?.[h] ?? null;
       if (from === to) { h++; continue; }
       let end = h + 1;
       while (
-        end < 24 &&
+        end < SCHEDULE_HOURS &&
         (server[d]?.[end] ?? null) === from &&
         (local[d]?.[end] ?? null) === to &&
         from !== (local[d]?.[end] ?? null)
@@ -222,7 +231,7 @@ export function blockAhead(schedule: Schedule, day: number, hour: number, offset
   for (let i = 0; i < offset; i++) {
     let nd = cur.day;
     let nh = cur.start + cur.span;
-    if (nh >= 24) { nh = 0; nd = (cur.day + 1) % 7; }
+    if (nh >= SCHEDULE_HOURS) { nh = 0; nd = (cur.day + 1) % SCHEDULE_DAYS; }
     cur = blockAt(schedule, nd, nh);
   }
   return cur;

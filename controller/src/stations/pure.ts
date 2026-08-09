@@ -2,15 +2,18 @@
 // depends on stations/resolve.ts, which depends on this file; keep it leaf-level).
 // Spec: docs/superpowers/specs/2026-07-24-multi-station-profiles-design.md
 
-// Station id = directory name under state/stations/. Also the containment
-// guard's first line of defence (no dots, no slashes, no uppercase).
-export const STATION_ID_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
+// STATION_ID_RE, MAX_STATIONS and slugifyStationName now live in
+// schemas/station.ts so the admin form validates against them directly (the
+// slug preview was a hand-copied second implementation, and it had drifted).
+// Re-exported here because this is the import path every caller already uses,
+// and schemas/station.ts imports only zod, so the leaf-level rule above holds.
+import { STATION_ID_RE } from '../schemas/station.js';
 
-// Hard ceiling on stations per install. Each station is a full state dir
-// (own library.db, jingles, archive), so the cap keeps a runaway "new
-// station" habit from silently eating the disk. Enforced in
-// manager.createStation and surfaced to the UI via GET /stations `limit`.
-export const MAX_STATIONS = 8;
+export {
+  MAX_STATIONS,
+  STATION_ID_RE,
+  slugifyStationName,
+} from '../schemas/station.js';
 
 // stations/active.json is controller-written as {"activeId":"<id>"} but parsed
 // defensively — a hand-edited or truncated file must never crash a boot path.
@@ -21,16 +24,6 @@ export function parseActivePointer(raw: string): string | null {
     if (typeof id === 'string' && STATION_ID_RE.test(id)) return id;
   } catch {}
   return null;
-}
-
-export function slugifyStationName(name: string): string {
-  const slug = String(name || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 41)
-    .replace(/-+$/g, '');
-  return STATION_ID_RE.test(slug) ? slug : 'station';
 }
 
 // Duplicate = new station inherits identity/config, starts fresh history.

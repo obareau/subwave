@@ -1,44 +1,10 @@
-// `subwave setup` — the configuration wizard.
+// `subwave setup` — the configuration wizard, browser counterpart /onboarding.
 //
-// Configures an already-running stack: collects Navidrome + LLM + timezone,
-// probes them live, and persists into the layers the controller reads on
-// boot. The browser counterpart at /onboarding writes to the same files,
-// so the two paths are interchangeable.
-//
-// Boundary with `subwave init`:
-//   - init  → filesystem scaffolding + boot-critical .env (ADMIN_USER,
-//             ADMIN_PASS, SITE_URL, deployment shape) + optionally starts
-//             the stack.
-//   - setup → configuration that runs against the live controller: Navidrome
-//             creds, LLM provider/model/key, timezone, jingles.
-//
-// Setup REQUIRES a running stack (it POSTs /settings and renders jingles
-// through /jingles). If no stack is up, it exits with a pointer to
-// `subwave start` rather than starting one itself.
-//
-// Persistence layers (shared with /onboarding):
-//   .env                      — TZ (setup-owned); ADMIN_USER, ADMIN_PASS,
-//                                SITE_URL written by init and only read here.
-//   state/setup-config.json   — Navidrome creds + setupCompletedAt
-//   state/secrets.env (0600)  — cloud LLM/TTS API keys
-//   POST /settings            — LLM provider/model (live)
-//
-// Flow:
-//   1. Preconditions — .env has admin creds, stack is up
-//   2. Preflight (node, docker, docker daemon)
-//   3. Navidrome (URL/user/pass) + reachability probe
-//   4. LLM choice + API key + probe
-//   5. Timezone
-//   6. Write root .env (TZ + SUBWAVE_HOMEPAGE if missing)
-//   7. Navidrome → state/setup-config.json
-//   8. Cloud LLM API key → state/secrets.env (0600)
-//   9. State dir perms (standalone install only)
-//  10. POST /settings to apply the LLM choice
-//  11. Optionally render jingles
-//  12. Endpoints summary
-//
-// Probes (cli/src/probes.ts) are warn-not-fail — the operator can keep
-// going if the network isn't ready yet.
+// Boundary with `subwave init`: init scaffolds the filesystem and writes the
+// boot-critical .env; setup configures a stack that is already RUNNING (it
+// pushes through the live controller), so it exits rather than starting one.
+// Probes are warn-not-fail — the operator can keep going if the network isn't
+// ready yet.
 
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
@@ -66,11 +32,9 @@ import {
 } from '../probes.ts';
 import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, info, muted } from '../ui.ts';
 
-// LLM providers — kept in step with the controller's LLM_PROVIDERS list
-// (controller/src/settings.ts) and the admin Settings UI provider picker.
-// `locca` (first-class local llama.cpp) shares the openai-compatible transport
-// but has a default host base URL and needs no API key, so it's grouped with
-// the keyless local providers here rather than the cloud set.
+// Keep in step with the controller's LLM_PROVIDERS (controller/src/settings.ts).
+// `locca` shares the openai-compatible transport but is keyless with a default
+// host base URL, so it groups with the local providers rather than the cloud set.
 type CloudProvider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'openrouter' | 'requesty' | 'gateway';
 type LlmProvider = 'ollama' | 'openai-compatible' | 'locca' | CloudProvider;
 
@@ -89,26 +53,20 @@ const CLOUD_ENV_VAR: Record<CloudProvider, string> = {
 
 interface LlmChoice {
   provider: LlmProvider | null; // null = "configure later"
-  // Ollama only:
   ollamaUrl?: string;
   ollamaModel?: string;
-  // openai-compatible only — the self-hosted server URL (with /v1 suffix):
-  baseUrl?: string;
-  // Model id — openai-compatible + cloud. Optional: blank defers to the admin UI.
-  model?: string;
-  // API key. Cloud → written to state/secrets.env (mode 0600), sourced into
-  // process.env on controller boot. openai-compatible → applied to
-  // settings.llm.apiKey via POST /settings (no canonical env var).
+  baseUrl?: string; // openai-compatible / locca server URL, /v1 suffix included
+  model?: string; // blank defers the choice to the admin UI
+  // Cloud → state/secrets.env (0600), sourced into process.env on controller
+  // boot. openai-compatible → settings.llm.apiKey (it has no canonical env var).
   apiKey?: string;
 }
 
 export async function runSetupCommand(): Promise<void> {
   banner('configuration wizard');
 
-  // --- 1. Preconditions ---------------------------------------------------
-  // (a) .env must have ADMIN_USER + ADMIN_PASS — those are init's
-  // responsibility now. Without them the controller exits at boot in prod,
-  // so refusing here is the same gate, surfaced earlier.
+  // Admin creds are init's responsibility. Without them the controller exits at
+  // boot in prod, so refusing here is the same gate, surfaced earlier.
   const existingRoot = parseEnvFile(getRootEnv());
   const legacy = parseEnvFile(getLegacyControllerEnv());
   const hasAdmin = (existingRoot.ADMIN_USER && existingRoot.ADMIN_PASS) ||
@@ -119,9 +77,7 @@ export async function runSetupCommand(): Promise<void> {
     process.exit(2);
   }
 
-  // (b) The stack must be up — setup POSTs /settings and renders jingles
-  // through /jingles, both of which need the controller alive. Cold-start
-  // is `subwave start`'s job, not ours.
+  // Cold-start is `subwave start`'s job, not ours.
   const current = detectCompose();
   if (current.env === 'down') {
     err('Stack is not running.');
@@ -130,40 +86,17 @@ export async function runSetupCommand(): Promise<void> {
   }
   const mode = current.env;
 
-  // --- 2. Preflight --------------------------------------------------------
   await preflight();
-
-  // --- 3. Navidrome --------------------------------------------------------
   const navidrome = await collectNavidrome();
-
-  // --- 4. LLM --------------------------------------------------------------
   const llm = await collectLlm();
-
-  // --- 4b. Heavy TTS sidecar -----------------------------------------------
-  // Opt-in to the tts-heavy compose profile (Chatterbox + PocketTTS). When
-  // selected, we merge `tts-heavy` into COMPOSE_PROFILES in .env so future
-  // `docker compose up -d` invocations pick the sidecar up automatically —
-  // no `--profile` flag at the call site. The choice is also POSTed to
-  // /onboarding/save as tts.heavyEnabled, mirroring the web wizard.
   const heavyTts = await promptHeavyTts();
-
-  // --- 4c. Heavy acoustic analysis -----------------------------------------
-  // Opt-in to the CLAP "sounds-like" + Demucs vocal image. When selected we set
-  // ANALYZER_HEAVY=1 in .env, which repoints the analyzer service at
-  // subwave-analyzer-heavy on the next `docker compose up -d`.
   const heavyAnalysis = await promptHeavyAnalysis();
-
-  // --- 5. Timezone ---------------------------------------------------------
   const tz = await promptTimezone();
-
-  // --- 5b. Station name ----------------------------------------------------
   const station = await promptStationName();
 
-  // --- 6. Write the root .env ---------------------------------------------
-  // Setup only owns TZ and (one-time) SUBWAVE_HOMEPAGE, plus COMPOSE_PROFILES
-  // when the operator opts into the tts-heavy sidecar. Admin creds and
-  // SITE_URL come from init and are preserved by writeEnvFile's
-  // existing-keys-win behaviour when not in our values map.
+  // Setup only owns TZ, one-time SUBWAVE_HOMEPAGE and the two heavy-image
+  // switches. Admin creds and SITE_URL come from init and survive because
+  // writeEnvFile leaves existing keys alone when they aren't in the values map.
   header('Writing .env (repo root)');
   const envValues: Record<string, string> = { TZ: tz };
   if (!existingRoot.SUBWAVE_HOMEPAGE) envValues.SUBWAVE_HOMEPAGE = 'player';
@@ -182,22 +115,9 @@ export async function runSetupCommand(): Promise<void> {
     muted('Heavy analysis enabled — next `docker compose up -d` pulls subwave-analyzer-heavy (~1.9 GB).');
   }
 
-  // --- 7. Push everything through the controller via /onboarding/save -----
-  // Same endpoint the browser wizard hits. Doing it this way (rather than
-  // writing setup-config.json + secrets.env + POSTing /settings separately)
-  // means the controller handles the side-effects atomically: cache reload,
-  // in-memory config.navidrome.* update, settings.update, and the post-save
-  // refreshAutoPlaylist() that un-sticks the picker after a fresh install.
-  // Bypassing the endpoint (the old "write files from host" flow) left the
-  // controller's in-memory state stale until the next restart.
   await pushOnboardingSave(mode, navidrome, llm, station, heavyTts);
-
-  // --- 8. State dir perms (standalone install only) -----------------------
-  // Idempotent — safe even when running setup against an already-configured
-  // install. Container UIDs vary, so chmod 777 is the simplest fix.
   await runBashSetup({ ...process.env });
 
-  // --- 11. Optionally render jingles --------------------------------------
   const wantsJingles = exitIfCancelled(await p.confirm({
     message: 'Generate station jingles now? (Piper TTS, ~30 s)',
     initialValue: false,
@@ -207,10 +127,8 @@ export async function runSetupCommand(): Promise<void> {
     if (composeFile) await renderJingles(composeFile.file, { ...process.env });
   }
 
-  // --- 12. Summary --------------------------------------------------------
-  // Listen + Admin are the URLs the operator actually clicks right after
-  // setup. Promote them to `info()` (un-dimmed, accent bullet) so they
-  // stand above the secondary Stream / API / Reference lines.
+  // Listen + Admin are what the operator actually clicks, so they get `info()`
+  // (un-dimmed) above the secondary Stream / API / Reference lines.
   header('Endpoints');
   if (mode === 'prod') {
     const base = webBaseFor('prod');
@@ -219,9 +137,8 @@ export async function runSetupCommand(): Promise<void> {
     muted(`Stream:  ${accent(streamUrlFor('prod'))}`);
     muted(`API:     ${accent(`${apiBaseFor('prod')}/health`)}`);
   } else if (mode === 'prod-byo') {
-    // The host ports the BYO compose file binds — these are what the
-    // operator's reverse proxy should target. See docker/Caddyfile for the
-    // route table to replicate.
+    // The host ports the BYO compose file binds — what the operator's reverse
+    // proxy should target. docker/Caddyfile has the route table to replicate.
     info(`Listen:      ${accent('http://localhost:7700/listen')}`);
     info(`Admin:       ${accent('http://localhost:7700/admin')}`);
     muted(`Web:         ${accent('http://localhost:7700')}  ${pc.dim('(point your proxy at this for /)')}`);
@@ -240,10 +157,6 @@ export async function runSetupCommand(): Promise<void> {
   ok('Setup complete.');
   muted(`Try ${pc.dim('`subwave status`')} or ${pc.dim('`subwave doctor`')}.`);
 }
-
-// ---------------------------------------------------------------------------
-// Step implementations
-// ---------------------------------------------------------------------------
 
 async function preflight(): Promise<void> {
   header('Preflight');
@@ -278,16 +191,11 @@ async function preflight(): Promise<void> {
 interface NavidromeCreds { url: string; user: string; pass: string; }
 
 async function collectNavidrome(): Promise<NavidromeCreds> {
-  // Pre-fill from the wizard overlay (state/setup-config.json), then env
-  // overrides on the root .env (NAVIDROME_*), then legacy controller/.env
-  // from a pre-single-compose install. First non-empty value wins.
+  // Pre-fill order, first non-empty wins: root .env → wizard overlay → legacy
+  // controller/.env from a pre-single-compose install.
   const sc = readSetupConfig().navidrome || {};
   const rootEnv = parseEnvFile(getRootEnv());
   const legacy = parseEnvFile(getLegacyControllerEnv());
-  // The default URL reads natural in the prompt (matches what most operators
-  // type), but the controller runs in Docker so a loopback URL won't resolve
-  // to anything useful at runtime. We handle that with a post-probe swap
-  // prompt below — see the LOOPBACK_RE block.
   let url = rootEnv.NAVIDROME_URL || sc.url || legacy.NAVIDROME_URL || 'http://localhost:4533';
   let user = rootEnv.NAVIDROME_USER || sc.user || legacy.NAVIDROME_USER || '';
   let pass = rootEnv.NAVIDROME_PASS || sc.pass || legacy.NAVIDROME_PASS || '';
@@ -333,7 +241,6 @@ async function collectNavidrome(): Promise<NavidromeCreds> {
     }), { backOnCancel: false });
     if (next === 'continue') break;
     if (next === 'abort') process.exit(1);
-    // retry: loop
   }
 
   url = await maybeSwapLoopbackForContainer(url, 'Navidrome');
@@ -341,13 +248,10 @@ async function collectNavidrome(): Promise<NavidromeCreds> {
   return { url, user, pass };
 }
 
-// Loopback hostnames (localhost / 127.0.0.1 / 0.0.0.0 / ::1) don't resolve
-// to the host from inside the controller container — they resolve to the
-// container itself. The compose files wire host.docker.internal to the host
-// gateway via `extra_hosts`, so we offer to swap the hostname now rather than
-// letting the controller fail every call until the operator notices.
-//
-// Returns the (possibly swapped) URL.
+// A loopback host resolves to the CONTROLLER CONTAINER, not the operator's
+// machine. The compose files wire host.docker.internal to the host gateway via
+// `extra_hosts`, so offer the swap now rather than letting the controller fail
+// every call until the operator notices.
 async function maybeSwapLoopbackForContainer(url: string, serviceLabel: string): Promise<string> {
   const loopbackMatch = url.match(/^(https?:\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i);
   if (!loopbackMatch) return url;
@@ -369,10 +273,8 @@ async function maybeSwapLoopbackForContainer(url: string, serviceLabel: string):
   return url;
 }
 
-// Detect a reachable Ollama. Tries common loopback URLs from the host with a
-// short timeout each; returns the first one that responds. Used to set a
-// smart initial value for the wizard's Ollama URL prompt — the loopback-swap
-// step rewrites it for the controller container afterwards.
+// Probed from the HOST to seed the prompt's initial value; the loopback-swap
+// step rewrites whatever we land on for the controller container.
 async function detectOllamaUrl(): Promise<string | null> {
   const candidates = ['http://localhost:11434', 'http://127.0.0.1:11434'];
   for (const base of candidates) {
@@ -383,14 +285,12 @@ async function detectOllamaUrl(): Promise<string | null> {
       clearTimeout(t);
       if (r.ok) return base;
     } catch {
-      // fall through to the next candidate
+      // unreachable — try the next candidate
     }
   }
   return null;
 }
 
-// The provider picker — the providers the admin Settings UI offers, plus an
-// explicit "configure later" escape hatch.
 const LLM_PROVIDER_OPTIONS: Array<{ value: LlmProvider | 'later'; label: string; hint: string }> = [
   { value: 'ollama',            label: 'Ollama — local homelab',          hint: 'no API key — point at your homelab box' },
   { value: 'openai-compatible', label: 'OpenAI-compatible — self-hosted',  hint: 'llama.cpp, vLLM, LM Studio — your own server URL' },
@@ -429,9 +329,6 @@ async function collectLlm(): Promise<LlmChoice> {
   if (choice === 'later') return { provider: null };
 
   if (choice === 'ollama') {
-    // Quick probe from the host so the default URL reflects reality. Whatever
-    // we land on is then loopback-swapped to host.docker.internal for the
-    // controller container.
     const detected = await detectOllamaUrl();
     if (detected) ok(`Detected Ollama on ${detected}`);
     let url = exitIfCancelled(await p.text({
@@ -441,10 +338,9 @@ async function collectLlm(): Promise<LlmChoice> {
       validate: (v: string) => (!/^https?:\/\//.test(v) ? 'must start with http(s)://' : undefined),
     }), { backOnCancel: false });
     const model = exitIfCancelled(await p.text({
-      // glm-5.1:cloud is the recommended default — it calls tools reliably
-      // (~97% on the picker-test harness, ~2s/pick), which the DJ picker
-      // agent depends on. kimi-k2.6:cloud honours tool calls only ~50% of
-      // the time; avoid it for the picker.
+      // glm-5.1:cloud calls tools reliably (~97% on the picker-test harness,
+      // ~2s/pick), which the DJ picker agent depends on. kimi-k2.6:cloud
+      // honours tool calls only ~50% of the time — don't default to it.
       message: 'Ollama model (must be pulled on the server)',
       initialValue: 'glm-5.1:cloud',
       placeholder: 'glm-5.1:cloud',
@@ -475,11 +371,8 @@ async function collectLlm(): Promise<LlmChoice> {
   }
 
   if (choice === 'locca') {
-    // First-class locca: an openai-compatible llama.cpp server with a sane
-    // default (the host locca box, reachable from the container via
-    // host.docker.internal:8080). Collect a host-perspective URL and loopback-
-    // swap it for the container, mirroring the Ollama flow; blank keeps the
-    // controller's built-in default. No API key — it's local.
+    // Host-perspective URL, loopback-swapped for the container like Ollama's;
+    // blank keeps the controller's built-in default. Local, so no API key.
     let url = exitIfCancelled(await p.text({
       message: 'locca server URL (blank = controller default, host :8080/v1)',
       initialValue: 'http://localhost:8080/v1',
@@ -495,8 +388,8 @@ async function collectLlm(): Promise<LlmChoice> {
     return { provider: 'locca', baseUrl: url || undefined, model };
   }
 
-  // Cloud branch — choice is now narrowed to CloudProvider.
-  const provider = choice;
+  const provider = choice; // narrowed to CloudProvider by the branches above
+
   const label = (LLM_PROVIDER_OPTIONS.find((o) => o.value === provider)?.label ?? provider)
     .split(' — ')[0] as string;
   const apiKey = exitIfCancelled(await p.password({
@@ -515,8 +408,8 @@ async function collectLlm(): Promise<LlmChoice> {
   return { provider, apiKey: apiKey || undefined, model: model || undefined };
 }
 
-// Probe the cloud providers we ship a probe for; google / deepseek / gateway
-// have none, so their key is first exercised on the controller's first DJ call.
+// google / deepseek / gateway have no probe — their key is first exercised on
+// the controller's first DJ call.
 async function maybeProbeCloud(provider: CloudProvider, label: string, apiKey: string): Promise<void> {
   if (provider === 'openai') return reportProbe(label, () => probeOpenAI({ apiKey }));
   if (provider === 'anthropic') return reportProbe(label, () => probeAnthropic({ apiKey }));
@@ -524,11 +417,8 @@ async function maybeProbeCloud(provider: CloudProvider, label: string, apiKey: s
   if (provider === 'requesty') return reportProbe(label, () => probeRequesty({ apiKey }));
 }
 
-// Ask whether to enable the optional tts-heavy sidecar (Chatterbox +
-// PocketTTS). The two engines live in their own ghcr.io image and the compose
-// profile keeps them out of the default install — we set COMPOSE_PROFILES in
-// .env so subsequent `docker compose up -d` invocations bring the sidecar up
-// without a `--profile` flag.
+// Setting COMPOSE_PROFILES in .env is what brings the sidecar up on subsequent
+// `docker compose up -d` without a `--profile` flag at the call site.
 async function promptHeavyTts(): Promise<boolean> {
   header('Heavy TTS sidecar (optional)');
   muted('Chatterbox: zero-shot voice cloning. PocketTTS: 6x real-time multilingual.');
@@ -539,11 +429,9 @@ async function promptHeavyTts(): Promise<boolean> {
   }), { backOnCancel: false });
 }
 
-// Ask whether to enable the heavy acoustic-analysis dimensions. Basic analysis
-// (bpm/key/loudness) runs by default in the lean `analyzer` sidecar; CLAP
-// "sounds-like" embeddings + Demucs vocal ranges need the CPU-torch stack, which
-// ships in a separate `subwave-analyzer-heavy` image. Setting ANALYZER_HEAVY=1
-// in .env points the analyzer service at that image on the next `up -d`.
+// CLAP "sounds-like" + Demucs vocal ranges need the CPU-torch stack, which only
+// ships in the separate `subwave-analyzer-heavy` image; ANALYZER_HEAVY=1 is what
+// repoints the analyzer service at it on the next `up -d`.
 async function promptHeavyAnalysis(): Promise<boolean> {
   header('Heavy acoustic analysis (optional)');
   muted('Basic analysis (bpm/key/loudness) is already on. This adds CLAP');
@@ -556,8 +444,8 @@ async function promptHeavyAnalysis(): Promise<boolean> {
   }), { backOnCancel: false });
 }
 
-// Merge a value into a comma-separated env var (e.g. COMPOSE_PROFILES). Strips
-// blanks, dedupes, and preserves the order of any pre-existing entries.
+// Merge into a comma-separated env var (COMPOSE_PROFILES), preserving the order
+// of pre-existing entries.
 function mergeCsv(prev: string | undefined, add: string): string {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -579,9 +467,7 @@ async function promptTimezone(): Promise<string> {
   }), { backOnCancel: false });
 }
 
-// What the DJ calls the station on air — substituted into the {station}
-// placeholder in renderDjPrompt() and returned by GET /dj. Defaulting to
-// 'SUB/WAVE' matches the wizard and the historical hardcoded value.
+// Substituted into the {station} placeholder in renderDjPrompt().
 async function promptStationName(): Promise<string> {
   return exitIfCancelled(await p.text({
     message: 'Station name (what the DJ calls this radio)',
@@ -591,15 +477,10 @@ async function promptStationName(): Promise<string> {
   }), { backOnCancel: false });
 }
 
-// ---------------------------------------------------------------------------
-// Shell-outs
-// ---------------------------------------------------------------------------
-
 async function runBashSetup(env: NodeJS.ProcessEnv): Promise<void> {
-  // In clone mode, scripts/setup.sh handles state perms, .env scaffolding,
-  // and web/.env.local. In standalone-CLI installs there's no scripts/ dir
-  // (and no web/ either), so we inline the only step that still matters:
-  // making sure state/ is writable by every container UID.
+  // Clone mode delegates to scripts/setup.sh. Standalone installs have no
+  // scripts/ dir, so inline the only step that still matters: state/ writable
+  // by every container UID (they vary, hence 777). Idempotent either way.
   const { isCloneMode } = await import('../home.ts');
   if (!isCloneMode(getSubwaveHome())) {
     header('State directory perms (standalone install)');
@@ -635,10 +516,8 @@ async function runBashSetup(env: NodeJS.ProcessEnv): Promise<void> {
 }
 
 async function renderJingles(composeFile: string, env: NodeJS.ProcessEnv): Promise<void> {
-  // Jingle generation lives in scripts/generate-jingles.sh which docker-execs
-  // into the controller. Standalone installs don't have the script — defer
-  // the operator to the /onboarding wizard's jingle UI, which talks to the
-  // same controller endpoint.
+  // Standalone installs don't ship scripts/generate-jingles.sh — send the
+  // operator to /onboarding's jingle step, which hits the same endpoint.
   const { isCloneMode } = await import('../home.ts');
   if (!isCloneMode(getSubwaveHome())) {
     muted('Skipping jingle rendering — finish at /onboarding (Jingles step) or POST /jingles per ident text you want spoken.');
@@ -660,22 +539,11 @@ async function renderJingles(composeFile: string, env: NodeJS.ProcessEnv): Promi
   });
 }
 
-// ---------------------------------------------------------------------------
-// Post-boot settings application
-// ---------------------------------------------------------------------------
-
-// POST the wizard's collected values to /onboarding/save — the same endpoint
-// the browser wizard hits. Centralising the persistence here means the
-// controller owns:
-//   - writing state/setup-config.json (with setupCompletedAt)
-//   - writing cloud API keys to state/secrets.env (mode 0600)
-//   - settings.update for LLM provider/model/baseUrl
-//   - reloading config.navidrome.* in-memory (so the picker sees new creds)
-//   - kicking refreshAutoPlaylist() so the stream comes on-air without a restart
-//
-// Bypassing this endpoint (the previous "write files from the host" path)
-// left the running controller's in-memory state stale, requiring an explicit
-// `subwave restart controller` for setup to take effect.
+// Everything persists through /onboarding/save, the endpoint the browser wizard
+// hits, so the controller owns the side-effects: the file writes, the in-memory
+// config.navidrome.* reload, and the refreshAutoPlaylist() that brings the
+// stream on air. The old "write the files from the host" path left the running
+// controller stale until an explicit `subwave restart controller`.
 async function pushOnboardingSave(
   env: ComposeEnv,
   navidrome: NavidromeCreds,
@@ -688,9 +556,8 @@ async function pushOnboardingSave(
   const body: Record<string, unknown> = {
     navidrome: { url: navidrome.url, user: navidrome.user, pass: navidrome.pass },
     station,
-    // Mirror the web wizard — persist the operator's heavy-TTS intent on
-    // settings.tts.heavyEnabled. The CLI has already written COMPOSE_PROFILES
-    // into .env if true; this entry just keeps both wizards' views consistent.
+    // COMPOSE_PROFILES in .env is what actually starts the sidecar; this only
+    // records the intent on settings, keeping both wizards' views consistent.
     tts: { heavyEnabled: heavyTts },
   };
 
@@ -700,15 +567,12 @@ async function pushOnboardingSave(
       if (llm.ollamaUrl) llmPatch.ollamaUrl = llm.ollamaUrl;
       if (llm.ollamaModel) llmPatch.model = llm.ollamaModel;
     } else if (llm.provider === 'openai-compatible' || llm.provider === 'locca') {
-      // No canonical env var for these — server URL and (optional) key both
-      // live in settings.llm. locca's baseUrl is optional (blank → the
-      // controller's host default) and it carries no key.
+      // No canonical env var for these, so URL and key both live in settings.llm.
       if (llm.baseUrl) llmPatch.baseUrl = llm.baseUrl;
       if (llm.model) llmPatch.model = llm.model;
       if (llm.apiKey) llmPatch.apiKey = llm.apiKey;
     } else if (llm.model) {
-      // Cloud — model id carries through to settings; the API key goes into
-      // body.apiKeys below and lands in state/secrets.env mode 0600.
+      // Cloud keys ride body.apiKeys below instead, into state/secrets.env.
       llmPatch.model = llm.model;
     }
     body.llm = llmPatch;
@@ -729,10 +593,6 @@ async function pushOnboardingSave(
     process.exit(1);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Small helpers
-// ---------------------------------------------------------------------------
 
 async function reportProbe(label: string, run: () => Promise<ProbeResult>): Promise<void> {
   const sp = p.spinner();

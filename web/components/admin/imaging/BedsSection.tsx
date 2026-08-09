@@ -2,61 +2,232 @@
 
 import type { ChangeEvent } from 'react';
 import { useRef, useState } from 'react';
+import { Controller, useWatch, type Control } from 'react-hook-form';
 import { Trash2 } from 'lucide-react';
 import { fmtSize } from '../../../lib/format';
 import { Modal } from '../../ui/modal';
 import { Input } from '../../ui/input';
-import { Textarea } from '../../ui/textarea';
-import { Label } from '../../ui/label';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
 import { V3Alert } from '../../ui/alert';
 import { SkeletonCards } from '@/components/ui/skeleton';
 import { Btn, Seg } from '../ui';
 import { PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
-import type { BedsData, BedsForm } from './types';
+import type { BedsData, ImagingSubmitResult } from './types';
+import { notify } from '../../../lib/notify';
+import {
+  BEDS_CROSS_SEC_BOUNDS,
+  BEDS_THRESHOLD_SEC_BOUNDS,
+  IMAGING_DESCRIPTION_MAX,
+  IMAGING_NAME_MAX,
+  IMAGING_PROMPT_MAX,
+  bedCreateSchema,
+  bedsPatchSchema,
+  imagingImportSchema,
+} from '@/lib/schemas.generated';
+import { useZodForm, applyServerFieldErrors } from '@/lib/form';
+import { TextField, TextareaField } from '@/lib/form-fields';
 import {
   SectionMasthead, PanelBox, PanelHead, EmptyState, DropZone, MetaLine, TabMetric, pad2,
 } from './parts';
 
 interface BedsSectionProps {
   bedsData: BedsData | null;
-  bedsForm: BedsForm;
-  setBedsForm: (updater: (f: BedsForm) => BedsForm) => void;
   busy: boolean;
-  createBed: () => Promise<boolean>;
-  uploadBed: (file: File, name: string, description: string) => Promise<boolean>;
+  createBed: (values: { name: string; description: string; prompt: string; durationSec?: number }) => Promise<ImagingSubmitResult>;
+  uploadBed: (file: File, values: { name: string; description: string }) => Promise<ImagingSubmitResult>;
   onDelete: (name: string | null) => void;
   data: SettingsData | null;
   saveSettings: SaveSettings;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
-export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, uploadBed, onDelete, data, saveSettings, adminFetch }: BedsSectionProps) {
+// name/description/durationSec are z.preprocess-wrapped in the shared schema
+// (unknown z.input) — cast once here, same as SfxSection.
+interface BedsCreateFormValues {
+  name: string;
+  description: string;
+  prompt: string;
+  durationSec: string | number;
+}
+
+function BedsCreateModal({
+  busy, ready, minSec, maxGenSec, createBed, onClose,
+}: {
+  busy: boolean;
+  ready: boolean;
+  minSec: number;
+  maxGenSec: number;
+  createBed: BedsSectionProps['createBed'];
+  onClose: () => void;
+}) {
+  const form = useZodForm(bedCreateSchema, { name: '', description: '', prompt: '', durationSec: '' });
+  const control = form.control as unknown as Control<BedsCreateFormValues>;
+  const promptValue = (useWatch({ control, name: 'prompt' }) as string | undefined) || '';
+
+  const onSubmit = form.handleSubmit(async (values) => {
+    const res = await createBed(values);
+    if (res.ok) onClose();
+    else applyServerFieldErrors(form, res.fieldErrors);
+  });
+
+  return (
+    <Modal
+      open
+      onOpenChange={(o) => { if (!o) onClose(); }}
+      title="create bed"
+      sub="an instrumental we’ll generate with ElevenLabs"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={onClose}>Cancel</Button>
+          <Btn
+            sm
+            tone="accent"
+            className="min-h-9 sm:min-h-0"
+            onClick={() => void onSubmit()}
+            disabled={busy || !ready || !form.formState.isValid}
+          >
+            {busy ? 'Generating…' : 'Create'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="grid gap-3.5">
+        {!ready && (
+          <V3Alert title="key required">
+            You’ll need an ElevenLabs key to generate. Add{' '}
+            <code className="font-mono text-[12px]">ELEVENLABS_API_KEY</code> and restart the
+            controller.
+          </V3Alert>
+        )}
+        <div className="grid grid-cols-[1fr_120px] gap-3">
+          <TextField control={control} name="name" label="Name" placeholder="midnight-drift" maxLength={IMAGING_NAME_MAX} />
+          <TextField control={control} name="durationSec" label="Length · s" numeric placeholder="45" step={1} min={minSec} max={maxGenSec} />
+        </div>
+        <TextField
+          control={control}
+          name="description"
+          label="Description · optional"
+          placeholder="For your own reference — the DJ never reads this"
+          maxLength={IMAGING_DESCRIPTION_MAX}
+        />
+        <div className="grid gap-1.5">
+          <TextareaField
+            control={control}
+            name="prompt"
+            label="Generation prompt"
+            rows={3}
+            placeholder="Describe the instrumental for ElevenLabs — e.g. warm lo-fi ambient pad, no drums, soft and neutral…"
+          />
+          <div className="text-right font-mono text-[11px] text-muted">{promptValue.length} / {IMAGING_PROMPT_MAX}</div>
+        </div>
+        <p className="m-0 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
+          Vocal-free instrumental, {minSec}–{maxGenSec}s. Each bed is trimmed to fit the link, so
+          it just needs to outlast your DJ’s longest bit of chat — atmospheric and neutral works
+          best.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+// `file` rides on the same control as name/description but is not part of the
+// zod schema — see SfxSection's ImportFormValues comment for why.
+interface BedsImportFormValues {
+  name: string;
+  description: string;
+  file: File | null;
+}
+
+function BedsImportModal({
+  busy, minSec, uploadBed, onClose,
+}: {
+  busy: boolean;
+  minSec: number;
+  uploadBed: BedsSectionProps['uploadBed'];
+  onClose: () => void;
+}) {
+  const form = useZodForm(imagingImportSchema, { name: '', description: '' });
+  const control = form.control as unknown as Control<BedsImportFormValues>;
+  const file = useWatch({ control, name: 'file' }) as File | null;
+  const importRef = useRef<HTMLInputElement>(null);
+
+  const onSubmit = form.handleSubmit(async (values) => {
+    if (!file) return; // Save is disabled without one — see below
+    const res = await uploadBed(file, values);
+    if (res.ok) onClose();
+    else applyServerFieldErrors(form, res.fieldErrors);
+  });
+
+  return (
+    <Modal
+      open
+      onOpenChange={(o) => { if (!o) onClose(); }}
+      title="import bed"
+      sub="an instrumental the DJ can talk over"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={onClose}>Cancel</Button>
+          <Btn
+            sm
+            tone="accent"
+            className="min-h-9 sm:min-h-0"
+            onClick={() => void onSubmit()}
+            disabled={busy || !file || !form.formState.isValid}
+          >
+            {busy ? 'Importing…' : 'Import'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="grid gap-3.5">
+        <TextField control={control} name="name" label="Name" placeholder="midnight-drift" maxLength={IMAGING_NAME_MAX} />
+        <TextField
+          control={control}
+          name="description"
+          label="Description · optional"
+          placeholder="For your own reference — the DJ never reads this"
+          maxLength={IMAGING_DESCRIPTION_MAX}
+        />
+        <Controller
+          control={control}
+          name="file"
+          defaultValue={null}
+          render={({ field }) => (
+            <>
+              <input
+                ref={importRef}
+                type="file"
+                accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
+                aria-label="Import bed audio file"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => field.onChange(e.target.files?.[0] ?? null)}
+                className="hidden"
+              />
+              <DropZone
+                label={field.value ? `${field.value.name} · ${fmtSize(field.value.size)}` : 'choose a file…'}
+                hint={`mp3 · wav · ogg · flac · m4a · aac · opus — at least ${minSec}s · up to 25 MB · converted to MP3`}
+                onClick={() => importRef.current?.click()}
+              />
+            </>
+          )}
+        />
+        <p className="m-0 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
+          Each bed is trimmed to fit the link and never loops — it only needs to outlast your
+          DJ’s longest bit of chat. Atmospheric, with no strong key, works best.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+export function BedsSection({ bedsData, busy, createBed, uploadBed, onDelete, data, saveSettings, adminFetch }: BedsSectionProps) {
   // Hooks must run before the early "loading…" return — keep them at the top.
   const [modal, setModal] = useState<null | 'create' | 'import'>(null);
-  const [importFile, setImportFile] = useState<File | null>(null);
-  const [importName, setImportName] = useState('');
-  const [importDesc, setImportDesc] = useState('');
+  const closeModal = () => setModal(null);
   // null = show the saved value, so the inputs stay controlled and an out-of-range
   // entry snaps back on blur instead of lingering as a never-persisted number.
   const [thresholdEdit, setThresholdEdit] = useState<string | null>(null);
   const [crossEdit, setCrossEdit] = useState<string | null>(null);
-  const importRef = useRef<HTMLInputElement>(null);
-  const doImport = async () => {
-    if (!importFile || !importName.trim()) return;
-    const ok = await uploadBed(importFile, importName, importDesc);
-    if (ok) {
-      setImportFile(null);
-      setImportName('');
-      setImportDesc('');
-      if (importRef.current) importRef.current.value = '';
-      setModal(null);
-    }
-  };
-  const doCreate = async () => {
-    if (await createBed()) setModal(null);
-  };
 
   if (!bedsData) {
     return <SkeletonCards cards={4} />;
@@ -70,14 +241,34 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
   const thresholdSec = beds?.thresholdSec ?? 12;
   const crossSec = beds?.crossSec ?? 6;
 
+  // Pre-flight against the SAME schema the controller enforces
+  // (controller/src/schemas/settings.ts, mirrored). This used to hand-check
+  // `v >= 0 && v <= max` against a bare 60 / 15 copied from BOUNDS — two
+  // literals with nothing keeping them in step with the controller.
+  //
+  // It also no longer swallows a bad value. The old branch dropped anything
+  // out of range and reset the input, so typing 99 silently reverted to the
+  // stored number with no explanation; now the schema's own message says why,
+  // matching what the server would have answered.
+  //
+  // This inline pair (threshold/cross) is deliberately NOT converted to
+  // react-hook-form — see ImagingPanel.tsx's saveSettings comment: each one
+  // posts its own one-key /settings patch, and `Object.values(j.fieldErrors ||
+  // {})[0]` is already the more specific of the two messages.
   const saveNumber = async (
-    raw: string, current: number, max: number,
+    raw: string, current: number,
     patch: (v: number) => Record<string, unknown>,
     reset: (v: string | null) => void,
   ) => {
-    const v = parseFloat(raw);
-    if (Number.isFinite(v) && v >= 0 && v <= max && v !== current) {
-      await saveSettings(patch(v)); // refreshes `data`, so clearing shows the new value
+    const parsed = bedsPatchSchema.safeParse(patch(parseFloat(raw)).beds);
+    if (!parsed.success) {
+      notify.err(parsed.error.issues[0]?.message || 'invalid value');
+      reset(null);
+      return;
+    }
+    const [[field, value]] = Object.entries(parsed.data) as [[string, number]];
+    if (value !== current) {
+      await saveSettings({ beds: { [field]: value } }); // refreshes `data`, so clearing shows the new value
     }
     reset(null);
   };
@@ -134,15 +325,15 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
                 className="mono-num w-[72px]"
                 type="number"
                 step={1}
-                min={0}
-                max={60}
+                min={BEDS_THRESHOLD_SEC_BOUNDS.min}
+                max={BEDS_THRESHOLD_SEC_BOUNDS.max}
                 value={thresholdEdit ?? String(thresholdSec)}
                 disabled={busy}
                 aria-label="Bed threshold seconds"
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setThresholdEdit(e.target.value)}
                 onBlur={() => {
                   if (thresholdEdit == null) return;
-                  void saveNumber(thresholdEdit, thresholdSec, 60,
+                  void saveNumber(thresholdEdit, thresholdSec,
                     v => ({ beds: { thresholdSec: v } }), setThresholdEdit);
                 }}
               />
@@ -161,15 +352,15 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
                 className="mono-num w-[72px]"
                 type="number"
                 step={1}
-                min={0}
-                max={15}
+                min={BEDS_CROSS_SEC_BOUNDS.min}
+                max={BEDS_CROSS_SEC_BOUNDS.max}
                 value={crossEdit ?? String(crossSec)}
                 disabled={busy}
                 aria-label="Ramp seconds"
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setCrossEdit(e.target.value)}
                 onBlur={() => {
                   if (crossEdit == null) return;
-                  void saveNumber(crossEdit, crossSec, 15,
+                  void saveNumber(crossEdit, crossSec,
                     v => ({ beds: { crossSec: v } }), setCrossEdit);
                 }}
               />
@@ -238,137 +429,15 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         )}
       </PanelBox>
 
-      <Modal
-        open={modal === 'create'}
-        onOpenChange={(o) => { if (!o) setModal(null); }}
-        title="create bed"
-        sub="an instrumental we’ll generate with ElevenLabs"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={() => setModal(null)}>Cancel</Button>
-            <Btn
-              sm
-              tone="accent"
-              className="min-h-9 sm:min-h-0"
-              onClick={doCreate}
-              disabled={busy || !ready || !bedsForm.name.trim() || !bedsForm.prompt.trim()}
-            >
-              {busy ? 'Generating…' : 'Create'}
-            </Btn>
-          </>
-        }
-      >
-        <div className="grid gap-3.5">
-          {!ready && (
-            <V3Alert title="key required">
-              You’ll need an ElevenLabs key to generate. Add{' '}
-              <code className="font-mono text-[12px]">ELEVENLABS_API_KEY</code> and restart the
-              controller.
-            </V3Alert>
-          )}
-          <div className="grid grid-cols-[1fr_120px] gap-3">
-            <div className="grid gap-1.5">
-              <Label>Name</Label>
-              <Input
-                value={bedsForm.name}
-                maxLength={60}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => setBedsForm(f => ({ ...f, name: e.target.value }))}
-                placeholder="midnight-drift"
-              />
-            </div>
-            <div className="grid gap-1.5">
-              <Label>Length · s</Label>
-              <Input
-                className="mono-num"
-                type="number"
-                step={1}
-                min={minSec}
-                max={maxGenSec}
-                value={bedsForm.durationSec}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => setBedsForm(f => ({ ...f, durationSec: e.target.value }))}
-                placeholder="45"
-              />
-            </div>
-          </div>
-          <div className="grid gap-1.5">
-            <Label>Description · optional</Label>
-            <Input
-              value={bedsForm.description}
-              maxLength={200}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setBedsForm(f => ({ ...f, description: e.target.value }))}
-              placeholder="For your own reference — the DJ never reads this"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label>Generation prompt</Label>
-            <Textarea
-              rows={3}
-              value={bedsForm.prompt}
-              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setBedsForm(f => ({ ...f, prompt: e.target.value.slice(0, 500) }))}
-              placeholder="Describe the instrumental for ElevenLabs — e.g. warm lo-fi ambient pad, no drums, soft and neutral…"
-            />
-            <div className="text-right font-mono text-[11px] text-muted">{bedsForm.prompt.length} / 500</div>
-          </div>
-          <p className="m-0 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
-            Vocal-free instrumental, {minSec}–{maxGenSec}s. Each bed is trimmed to fit the link, so
-            it just needs to outlast your DJ’s longest bit of chat — atmospheric and neutral works
-            best.
-          </p>
-        </div>
-      </Modal>
-
-      <Modal
-        open={modal === 'import'}
-        onOpenChange={(o) => { if (!o) setModal(null); }}
-        title="import bed"
-        sub="an instrumental the DJ can talk over"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={() => setModal(null)}>Cancel</Button>
-            <Btn sm tone="accent" className="min-h-9 sm:min-h-0" onClick={doImport} disabled={busy || !importFile || !importName.trim()}>
-              {busy ? 'Importing…' : 'Import'}
-            </Btn>
-          </>
-        }
-      >
-        <div className="grid gap-3.5">
-          <div className="grid gap-1.5">
-            <Label>Name</Label>
-            <Input
-              value={importName}
-              maxLength={60}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setImportName(e.target.value)}
-              placeholder="midnight-drift"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label>Description · optional</Label>
-            <Input
-              value={importDesc}
-              maxLength={200}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setImportDesc(e.target.value)}
-              placeholder="For your own reference — the DJ never reads this"
-            />
-          </div>
-          <input
-            ref={importRef}
-            type="file"
-            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
-            aria-label="Import bed audio file"
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
-            className="hidden"
-          />
-          <DropZone
-            label={importFile ? `${importFile.name} · ${fmtSize(importFile.size)}` : 'choose a file…'}
-            hint={`mp3 · wav · ogg · flac · m4a · aac · opus — at least ${minSec}s · up to 25 MB · converted to MP3`}
-            onClick={() => importRef.current?.click()}
-          />
-          <p className="m-0 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
-            Each bed is trimmed to fit the link and never loops — it only needs to outlast your
-            DJ’s longest bit of chat. Atmospheric, with no strong key, works best.
-          </p>
-        </div>
-      </Modal>
+      {modal === 'create' && (
+        <BedsCreateModal
+          busy={busy} ready={ready} minSec={minSec} maxGenSec={maxGenSec}
+          createBed={createBed} onClose={closeModal}
+        />
+      )}
+      {modal === 'import' && (
+        <BedsImportModal busy={busy} minSec={minSec} uploadBed={uploadBed} onClose={closeModal} />
+      )}
     </section>
   );
 }

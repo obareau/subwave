@@ -1,12 +1,8 @@
-// Reachability probes for the setup wizard.
-//
-// Every probe returns a uniform { ok, reason? } shape so the wizard can
-// render the same way regardless of which service is being checked. They
-// are deliberately *non-fatal* — the wizard reports the result and lets
-// the operator decide whether to retry, continue, or abort. That matches
-// real install flows where (a) Navidrome may not be up yet on the same
-// host, (b) cloud keys may be added later, (c) Ollama may be on a
-// network that isn't reachable from the wizard's perspective.
+// Reachability probes for the setup wizard. One uniform { ok, reason? } shape
+// so the wizard renders every service the same way, and deliberately non-fatal:
+// a real install often has Navidrome not up yet, cloud keys still to come, or an
+// Ollama the wizard's host can't see, so the operator decides whether to retry,
+// continue or abort.
 
 import crypto from 'node:crypto';
 import { fetchErrorReason } from './util.ts';
@@ -19,13 +15,8 @@ export interface ProbeResult {
 
 const DEFAULT_TIMEOUT_MS = 3000;
 
-// --- Navidrome / Subsonic ---------------------------------------------------
-
-// Hit GET /rest/ping.view with salt+token MD5 auth — matches the controller's
-// own subsonic.js (lines 8–14). Salt is fresh per call so we never reuse one.
-//
-// Navidrome responds with subsonic-response.status="ok" on auth success, or
-// "failed" with a code/message on bad creds.
+// salt+token MD5 auth, matching the controller's own subsonic.js. Salt is fresh
+// per call so one is never reused.
 export async function probeSubsonic(args: {
   url: string;
   user: string;
@@ -66,12 +57,8 @@ export async function probeSubsonic(args: {
   }
 }
 
-// --- Ollama -----------------------------------------------------------------
-
-// Hit /api/tags to confirm the server is reachable and list installed
-// models. Optionally checks that `model` is among them — the wizard
-// uses this to flag missing models early (`ollama pull <name>` is the
-// usual fix; we don't run it ourselves because it's a multi-GB download).
+// Also checks `model` is installed, so the wizard can flag it early. The fix is
+// `ollama pull <name>`, which we don't run — it's a multi-GB download.
 export async function probeOllama(args: {
   url: string;
   model?: string;
@@ -101,11 +88,7 @@ export async function probeOllama(args: {
   }
 }
 
-// --- OpenAI -----------------------------------------------------------------
-
-// `GET /v1/models` with bearer auth — accepts the key and returns the
-// catalog. We don't validate that any particular model is present; the
-// admin UI is where the operator picks a specific model.
+// Key validity only — picking a specific model is the admin UI's job.
 export async function probeOpenAI(args: {
   apiKey: string;
   baseUrl?: string;        // honoured for OpenAI-compatible reuse
@@ -130,10 +113,7 @@ export async function probeOpenAI(args: {
   }
 }
 
-// --- Anthropic --------------------------------------------------------------
-
-// Anthropic's /v1/models requires the `x-api-key` header and an
-// `anthropic-version` header. Returns a paginated list.
+// Anthropic wants `x-api-key` plus an `anthropic-version` header, not a bearer.
 export async function probeAnthropic(args: {
   apiKey: string;
   timeoutMs?: number;
@@ -159,10 +139,8 @@ export async function probeAnthropic(args: {
   }
 }
 
-// --- OpenRouter -------------------------------------------------------------
-
-// OpenRouter's /api/v1/models is happy with or without a key; supplying
-// the key just narrows the response to what's enabled for the account.
+// This endpoint answers with or without a key — the key only narrows the list
+// to what the account has enabled, so a bad key won't fail the probe.
 export async function probeOpenRouter(args: {
   apiKey: string;
   timeoutMs?: number;
@@ -185,11 +163,7 @@ export async function probeOpenRouter(args: {
   }
 }
 
-// --- Requesty ---------------------------------------------------------------
-
-// Requesty is an OpenAI-compatible gateway; its /v1/models lists the models
-// enabled for the account. A key is required, so a missing/invalid key
-// surfaces as a clear 401.
+// Unlike OpenRouter, a key is required here, so a bad one surfaces as a 401.
 export async function probeRequesty(args: {
   apiKey: string;
   timeoutMs?: number;

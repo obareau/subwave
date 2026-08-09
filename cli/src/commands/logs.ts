@@ -1,8 +1,5 @@
-// `subwave logs [service]` — tail docker compose logs for one or more
-// services. Streams to the terminal; Ctrl-C breaks out.
-//
-// With no arg, prompts for a service (or "all"). With `all` (literal),
-// tails every service. With a service name, tails just that one.
+// `subwave logs [service|all]` — tails compose logs to the terminal; Ctrl-C
+// breaks out. With no arg, prompts.
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -29,7 +26,7 @@ export async function runLogsCommand(opts: LogsOpts = {}): Promise<void> {
   const services = await resolveServices(current.file, current.env, opts.service);
   if (!services) return;
 
-  // Special-case the host-side web dev server — not in docker, separate log.
+  // The dev web server isn't in docker; its log is a plain file.
   if (services.length === 1 && services[0] === WEB_DEV_SERVICE) {
     return tailWebDev();
   }
@@ -43,8 +40,7 @@ export async function runLogsCommand(opts: LogsOpts = {}): Promise<void> {
 
 async function resolveServices(file: ComposeFile, env: ComposeEnv, arg?: string): Promise<string[] | null> {
   const declared = listDeclaredServices(file);
-  // Aliases the operator can pass on the command line. The picker label uses
-  // the spaced form, but `subwave logs web-dev` should work as a shorthand.
+  // The picker shows the spaced form, but `subwave logs web-dev` must work too.
   const WEB_DEV_ALIASES = new Set(['web-dev', 'webdev', WEB_DEV_SERVICE]);
 
   if (arg) {

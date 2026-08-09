@@ -2,7 +2,8 @@
 // Request endpoint throttling. The /request path triggers an LLM call,
 // Subsonic searches, TTS, and a booth-log write — cheap individually but
 // trivially weaponisable by anyone with curl. Defence in depth:
-//   - hard size caps on text + name
+//   - hard size caps on text + name (schemas/request.ts, enforced at the
+//     route boundary by validateBody)
 //   - operator kill switch (REQUESTS_DISABLED env)
 //   - per-IP cooldown (no more than 1 request per COOLDOWN_MS)
 //   - per-IP hourly ceiling
@@ -13,7 +14,6 @@
 // ---------------------------------------------------------------------------
 import * as settings from '../settings.js';
 
-export const REQUEST_TEXT_MAX = 280;
 export const REQUESTS_DISABLED = process.env.REQUESTS_DISABLED === '1' || process.env.REQUESTS_DISABLED === 'true';
 
 // Live limits from settings.requests (raid hardening 2026-07-28) — read per

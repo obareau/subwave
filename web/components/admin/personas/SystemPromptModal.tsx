@@ -5,23 +5,33 @@
 // is showing.
 import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useState } from 'react';
+import { useFormState, useWatch, type Control, type UseFormSetValue } from 'react-hook-form';
 import { Btn, Pill } from '../ui';
-import { Input } from '../../ui/input';
 import { Textarea } from '../../ui/textarea';
 import { Modal } from '../../ui/modal';
 import { V3AlertDialog } from '../../ui/alert-dialog';
+import { TextField, TextareaField } from '@/lib/form-fields';
 import { cn } from '../../../lib/cn';
-import type { DjPromptPreset } from './types';
-import { promptPresetValid, clientMintId } from './helpers';
-import { HOUSE_RULES_MAX, PROMPT_MIN, PROMPT_MAX, PROMPT_NAME_MAX, PROMPT_PRESET_MAX } from './constants';
+import type { DjPromptPreset, PersonasFormValues } from './types';
+import { clientMintId } from './helpers';
+import { HOUSE_RULES_MAX, PROMPT_MAX, PROMPT_NAME_MAX, PROMPT_PRESET_MAX } from './constants';
 
 interface SystemPromptModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  presets: DjPromptPreset[];
+  control: Control<PersonasFormValues>;
+  // `useFieldArray('djPrompts')`'s own `fields` — carries `_rhfKey` alongside
+  // the real `id`, so a row's identity survives an add/remove without
+  // reshuffling which row a still-open editor points at.
+  promptFields: (DjPromptPreset & { _rhfKey: string })[];
+  setValue: UseFormSetValue<PersonasFormValues>;
+  onAppendPreset: (preset: DjPromptPreset) => void;
+  onRemovePreset: (idx: number, id: string) => void;
   activeId: string;        // '' = built-in default
   // Station house rules — the one block appended to EVERY spoken-output
   // prompt, including the agent paths the template never reaches (#1182).
+  // Plain state, not RHF — it isn't an array row and the controller validates
+  // it as its own top-level settings key.
   houseRules: string;
   onHouseRulesChange: (v: string) => void;
   defaultPrompt: string;   // the built-in template text
@@ -33,22 +43,28 @@ interface SystemPromptModalProps {
   allPersonasOk: boolean;
   promptsOk: boolean;      // every preset in the library is valid
   onSetActive: (id: string) => void;
-  onAddPreset: (preset: DjPromptPreset) => void;
-  onPatchPreset: (id: string, patch: Partial<Pick<DjPromptPreset, 'name' | 'text'>>) => void;
-  onRemovePreset: (id: string) => void;
   onSave: () => void;
   onDiscard: () => void;
 }
 
 export function SystemPromptModal({
-  open, onOpenChange,
-  presets, activeId, houseRules, onHouseRulesChange, defaultPrompt,
+  open, onOpenChange, control, promptFields, setValue,
+  activeId, houseRules, onHouseRulesChange, defaultPrompt,
   busy, canSave, allPersonasOk, promptsOk,
-  onSetActive, onAddPreset, onPatchPreset, onRemovePreset, onSave, onDiscard,
+  onSetActive, onAppendPreset, onRemovePreset, onSave, onDiscard,
 }: SystemPromptModalProps) {
   // null = the library list, 'default' = the read-only built-in, else a preset id.
   const [editing, setEditing] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // The schema's own per-row verdict — not a local reimplementation of it.
+  const { errors } = useFormState({ control, name: 'djPrompts' });
+  // `promptFields` (useFieldArray) is the ROW identity list (_rhfKey, order,
+  // id) — it is not guaranteed to reflect a live keystroke on an already-
+  // mounted row's name/text (those are written by TextField's OWN
+  // useController elsewhere in the tree). `useWatch` reads the live values
+  // from the same central RHF store every writer updates, regardless of
+  // which component performed the write.
+  const watchedPrompts = useWatch({ control, name: 'djPrompts' });
 
   // Re-opening always lands on the library list, never a stale editor.
   useEffect(() => {
@@ -56,26 +72,24 @@ export function SystemPromptModal({
   }, [open]);
 
   const addPreset = () => {
-    if (presets.length >= PROMPT_PRESET_MAX) return;
+    if (promptFields.length >= PROMPT_PRESET_MAX) return;
     // Seed from the built-in template rather than a blank textarea.
     const preset: DjPromptPreset = {
       id: clientMintId('dp_'),
-      name: `Prompt ${presets.length + 1}`,
+      name: `Prompt ${promptFields.length + 1}`,
       text: defaultPrompt,
     };
-    onAddPreset(preset);
+    onAppendPreset(preset);
     setEditing(preset.id);
   };
 
-  const editingPreset = editing && editing !== 'default'
-    ? presets.find(p => p.id === editing) ?? null
-    : null;
+  const editingIdx = editing && editing !== 'default'
+    ? promptFields.findIndex(p => p.id === editing)
+    : -1;
+  const editingPreset = editingIdx !== -1 ? (watchedPrompts[editingIdx] ?? null) : null;
   const editingText = editingPreset ? editingPreset.text.trim() : '';
-  const editingNameOk = !editingPreset
-    || (editingPreset.name.trim().length >= 1 && editingPreset.name.trim().length <= PROMPT_NAME_MAX);
-  const editingTextOk = !editingPreset
-    || (editingText.length >= PROMPT_MIN && editingText.length <= PROMPT_MAX && editingText.includes('{name}'));
-  const deleting = confirmDeleteId ? presets.find(p => p.id === confirmDeleteId) : null;
+  const editingError = editingIdx !== -1 ? errors.djPrompts?.[editingIdx] : undefined;
+  const deleting = confirmDeleteId ? promptFields.find(p => p.id === confirmDeleteId) : null;
 
   const row = (opts: {
     key: string;
@@ -151,11 +165,10 @@ export function SystemPromptModal({
   const editorFooter = (
     <div className="flex w-full flex-wrap items-center justify-end gap-2">
       {editingPreset && (
-        <span className={cn('caption mr-auto min-w-0', editingTextOk && editingNameOk ? 'text-muted' : 'text-[var(--danger)]')}>
+        <span className={cn('caption mr-auto min-w-0', !editingError ? 'text-muted' : 'text-[var(--danger)]')}>
           {editingText.length}/{PROMPT_MAX} chars
-          {!editingNameOk && ' · name required'}
-          {!editingText.includes('{name}') && ' · missing {name}'}
-          {editingText.length > 0 && editingText.length < PROMPT_MIN && ` · min ${PROMPT_MIN}`}
+          {editingError?.name?.message && ` · ${editingError.name.message}`}
+          {editingError?.text?.message && ` · ${editingError.text.message}`}
         </span>
       )}
       <Btn className="min-h-9 sm:min-h-0" onClick={() => setEditing(null)}>Back to library</Btn>
@@ -202,29 +215,30 @@ export function SystemPromptModal({
                 onUse: () => onSetActive(''),
                 actions: <Btn sm className="min-h-9 sm:min-h-0" onClick={() => setEditing('default')}>View</Btn>,
               })}
-              {presets.map(p =>
-                row({
-                  key: p.id,
-                  name: p.name.trim() || '(unnamed)',
-                  meta: `${p.text.trim().length} chars`,
-                  isActive: activeId === p.id,
-                  invalid: !promptPresetValid(p),
-                  onUse: () => onSetActive(p.id),
+              {promptFields.map((f, idx) => {
+                const live = watchedPrompts[idx];
+                return row({
+                  key: f._rhfKey,
+                  name: (live?.name ?? f.name).trim() || '(unnamed)',
+                  meta: `${(live?.text ?? f.text).trim().length} chars`,
+                  isActive: activeId === f.id,
+                  invalid: !!errors.djPrompts?.[idx],
+                  onUse: () => onSetActive(f.id),
                   actions: (
                     <>
-                      <Btn sm className="min-h-9 sm:min-h-0" onClick={() => setEditing(p.id)}>Edit</Btn>
-                      <Btn sm className="min-h-9 sm:min-h-0" onClick={() => setConfirmDeleteId(p.id)} disabled={busy}>Delete</Btn>
+                      <Btn sm className="min-h-9 sm:min-h-0" onClick={() => setEditing(f.id)}>Edit</Btn>
+                      <Btn sm className="min-h-9 sm:min-h-0" onClick={() => setConfirmDeleteId(f.id)} disabled={busy}>Delete</Btn>
                     </>
                   ),
-                }),
-              )}
+                });
+              })}
             </div>
             <div className="mt-3">
               <Btn
                 className="min-h-9 sm:min-h-0"
                 onClick={addPreset}
-                disabled={busy || presets.length >= PROMPT_PRESET_MAX}
-                title={presets.length >= PROMPT_PRESET_MAX ? `The library is full (${PROMPT_PRESET_MAX} templates)` : undefined}
+                disabled={busy || promptFields.length >= PROMPT_PRESET_MAX}
+                title={promptFields.length >= PROMPT_PRESET_MAX ? `The library is full (${PROMPT_PRESET_MAX} templates)` : undefined}
               >
                 New prompt
               </Btn>
@@ -258,27 +272,13 @@ export function SystemPromptModal({
           <pre className="term max-h-[420px]">{defaultPrompt || '(default unavailable)'}</pre>
         ) : editingPreset ? (
           <div className="grid gap-3">
+            <TextField control={control} name={`djPrompts.${editingIdx}.name`} label="name" maxLength={PROMPT_NAME_MAX} />
+            <TextareaField control={control} name={`djPrompts.${editingIdx}.text`} label="template" rows={16} className="font-mono text-[12px]" maxLength={PROMPT_MAX} />
             <div>
-              <div className="caption mb-1.5">name</div>
-              <Input
-                value={editingPreset.name}
-                maxLength={PROMPT_NAME_MAX}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => onPatchPreset(editingPreset.id, { name: e.target.value })}
-                className={cn(!editingNameOk && 'border-[var(--danger)]')}
-              />
-            </div>
-            <div>
-              <div className="caption mb-1.5">template</div>
-              <Textarea
-                rows={16}
-                value={editingPreset.text}
-                maxLength={PROMPT_MAX}
-                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => onPatchPreset(editingPreset.id, { text: e.target.value })}
-                className={cn('font-mono text-[12px]', editingTextOk ? 'border-ink' : 'border-[var(--danger)]')}
-              />
-            </div>
-            <div>
-              <Btn onClick={() => onPatchPreset(editingPreset.id, { text: defaultPrompt })} disabled={!defaultPrompt}>
+              <Btn
+                onClick={() => setValue(`djPrompts.${editingIdx}.text`, defaultPrompt, { shouldDirty: true, shouldValidate: true })}
+                disabled={!defaultPrompt}
+              >
                 Restore default text
               </Btn>
             </div>
@@ -301,7 +301,10 @@ export function SystemPromptModal({
         cancelLabel="Cancel"
         danger
         onConfirm={() => {
-          if (confirmDeleteId) onRemovePreset(confirmDeleteId);
+          if (confirmDeleteId) {
+            const idx = promptFields.findIndex(p => p.id === confirmDeleteId);
+            if (idx !== -1) onRemovePreset(idx, confirmDeleteId);
+          }
           setConfirmDeleteId(null);
         }}
       />

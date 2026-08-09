@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validate.js';
+import { stationCreateSchema, stationRenameSchema, type StationCreate } from '../schemas/station.js';
 import { STATE_ROOT } from '../config.js';
 import { envHasNavidrome } from '../setup/firstRun.js';
 import { MAX_STATIONS } from '../stations/pure.js';
@@ -100,12 +102,17 @@ router.get('/stations', requireAdmin, (req, res) => {
   }
 });
 
-router.post('/stations', requireAdmin, async (req, res) => {
+// validateBody runs the shared schema BEFORE the handler, so a bad name or an
+// unrecognised mode comes back as `{ error, fieldErrors }` keyed by dotted
+// path — which is react-hook-form's setError syntax, so the admin form lands
+// the message on the input rather than in a toast. createStation runs the same
+// schema again as the chokepoint (it is reachable without this route).
+router.post('/stations', requireAdmin, validateBody(stationCreateSchema), async (req, res) => {
   try {
-    const { name, mode } = req.body || {};
+    const { name, mode } = req.body as StationCreate;
     const { id, converted } = await manager.createStation(STATE_ROOT, {
-      name: String(name || ''),
-      mode: mode === 'duplicate' ? 'duplicate' : 'fresh',
+      name,
+      mode,
       currentName: currentName(),
       // Fresh installs may never have opened library.db — a duplicate without
       // the analysis cache is still a valid station, so tolerate failure.
@@ -127,19 +134,26 @@ router.post('/stations', requireAdmin, async (req, res) => {
     // conversion is durable (pointer + stations/main already on disk), so the
     // restart must happen regardless of this create() failing, or the
     // running process keeps writing into the now-stale root forever.
+    // A rule only the server could check (the live station's own state) still
+    // reaches the input it belongs to — same `fieldErrors` contract
+    // validateBody emits, so the panel handles both with one code path.
+    const field = err instanceof manager.StationCreateError ? err.field : undefined;
+    const fieldErrors = field ? { [field]: (err as Error).message } : undefined;
     if (err instanceof manager.StationCreateError && err.converted) {
-      res.status(500).json({ error: err.message, converted: true, switching: true });
+      res.status(500).json({
+        error: err.message, fieldErrors, converted: true, switching: true,
+      });
       scheduleSwitchExit();
       return;
     }
-    res.status(400).json({ error: (err as Error).message });
+    res.status(400).json({ error: (err as Error).message, fieldErrors });
   }
 });
 
-router.patch('/stations/:id', requireAdmin, async (req, res) => {
+router.patch('/stations/:id', requireAdmin, validateBody(stationRenameSchema), async (req, res) => {
   try {
     const id = String(req.params.id);
-    const resolved = manager.renameStation(STATE_ROOT, id, String(req.body?.name || ''));
+    const resolved = manager.renameStation(STATE_ROOT, id, String(req.body.name));
     // The active station's settings live in the running process, not just on
     // disk — route the name through settings.update() so /state (the player's
     // name source) flips immediately. It also rewrites settings.json from

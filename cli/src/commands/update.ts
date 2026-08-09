@@ -1,16 +1,8 @@
-// `subwave update` — refresh the running stack to the latest published
-// images (or, in clone mode, the latest source).
-//
-// Two flavours collapse into one command:
-//   - Image-first install (standalone CLI / no clone): pull fresh
-//     ghcr.io/perminder-klair/subwave-* images, recreate any service whose
-//     image actually changed. No build — the binary on PATH already has
-//     the latest compose file thanks to `subwave self-update`.
-//   - Clone install: git pull + rebuild local images for services whose
-//     source changed, then recreate. Mirrors scripts/update.sh.
-//
-// `subwave self-update` is a separate concern — it replaces the CLI
-// binary itself, not the docker images.
+// `subwave update` — refresh the running stack. Two shapes behind one command:
+// a standalone install pulls fresh GHCR images and never builds (its compose
+// files came in with the binary), while a clone git-pulls and rebuilds locally,
+// mirroring scripts/update.sh. Replacing the CLI binary itself is a separate
+// command, `subwave self-update`.
 
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -39,7 +31,6 @@ export async function runUpdateCommand(): Promise<void> {
   info(`env: ${compose.env}   compose: ${compose.file.file}   home: ${home}`);
   console.log();
 
-  // 1. (clone only) git pull. Standalone installs don't have a checkout.
   if (cloneMode) {
     header('git pull');
     const pullCode = await run('git', ['pull', '--ff-only'], home);
@@ -51,14 +42,12 @@ export async function runUpdateCommand(): Promise<void> {
     }
   }
 
-  // 1b. (standalone only) Move the SUBWAVE_VERSION pin to this CLI's version
-  // before pulling, so a binary that was just `self-update`d pulls the images
-  // matching its frozen compose files instead of whatever the old pin named.
-  // Clone installs track git, not image tags — leave their .env alone.
+  // Must happen BEFORE the pull: a binary that was just self-updated has to
+  // fetch the images matching its frozen compose files, not whatever the old
+  // pin named. Clone installs track git, not image tags — leave their .env be.
   if (!cloneMode) moveVersionPin(home);
 
-  // 2. docker compose pull — refresh base images. --ignore-buildable lets
-  // it skip services with only a `build:` block (only matters in dev).
+  // --ignore-buildable skips services that carry only a `build:` block.
   header('docker compose pull');
   const pullArgs = ['compose', '-f', compose.file.file, 'pull'];
   if (cloneMode) pullArgs.push('--ignore-buildable');
@@ -67,8 +56,6 @@ export async function runUpdateCommand(): Promise<void> {
     warn(`docker compose pull exited ${pullCode} — continuing anyway.`);
   }
 
-  // 3. (clone only) rebuild local images. Standalone installs use the
-  // pulled GHCR images directly; nothing to build locally.
   if (cloneMode) {
     header('docker compose build');
     const buildCode = await run(
@@ -83,9 +70,8 @@ export async function runUpdateCommand(): Promise<void> {
     }
   }
 
-  // 4. Recreate. `up -d --remove-orphans` recreates only services whose
-  // image / config actually changed; listeners on /stream.mp3 only hiccup
-  // if the broadcast container restarts (rare on a pure image bump).
+  // Recreates only what actually changed, so listeners hiccup only when the
+  // broadcast container itself restarts — rare on a pure image bump.
   header('docker compose up -d');
   const upCode = await run(
     'docker',
@@ -106,10 +92,9 @@ export async function runUpdateCommand(): Promise<void> {
     muted('  `subwave self-update` to refresh the CLI binary itself.');
   }
 
-  // Compose topology (new services, changed env wiring) doesn't ride an image
-  // bump — only `subwave sync` re-materialises it. Flag drift so an install
-  // scaffolded before a service was added (e.g. the analyzer sidecar) doesn't
-  // silently stay behind. See #1043. Clone installs track git, not the binary.
+  // New services and changed env wiring don't ride an image bump — only
+  // `subwave sync` re-materialises the compose files, so an install scaffolded
+  // before the analyzer sidecar existed would silently stay behind (#1043).
   if (!cloneMode) {
     const mode = resolveInstallMode(home);
     if (mode && hasDrift(detectDrift(home, mode))) {
@@ -122,11 +107,9 @@ export async function runUpdateCommand(): Promise<void> {
   await pauseForEnter();
 }
 
-// Move an existing SUBWAVE_VERSION version pin in the install's .env up to this
-// CLI's version. No-op (silent) when: the CLI is a dev build (no published tag
-// to pin to), there's no .env, or there's no concrete version pin to move
-// (fresh pre-pin installs stay on :latest — no surprises). Edits only the pin
-// line, preserving the rest of the file byte-for-byte.
+// Silently a no-op on a dev build (no published tag), with no .env, or with no
+// concrete pin to move — a pre-pin install stays on :latest rather than being
+// surprised into a fixed version.
 function moveVersionPin(home: string): void {
   const target = cliImageTag();
   if (!target) return;

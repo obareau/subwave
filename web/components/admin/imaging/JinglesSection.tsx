@@ -2,17 +2,27 @@
 
 import type { ChangeEvent } from 'react';
 import { useRef, useState } from 'react';
+import { Controller, useWatch, type Control } from 'react-hook-form';
 import { Trash2 } from 'lucide-react';
 import { fmtSize } from '../../../lib/format';
 import { Modal } from '../../ui/modal';
 import { Input } from '../../ui/input';
-import { Textarea } from '../../ui/textarea';
-import { Label } from '../../ui/label';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
 import { Btn } from '../ui';
 import { PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
-import type { JingleImportFailure, JingleImportResult } from './types';
+import type { JingleImportFailure, JingleImportResult, ImagingSubmitResult } from './types';
+import { notify } from '../../../lib/notify';
+import {
+  IMAGING_DESCRIPTION_MAX,
+  JINGLE_RATIO_BOUNDS,
+  JINGLE_TEXT_MAX,
+  jingleCreateSchema,
+  jingleImportSchema,
+  jingleRatioSchema,
+} from '@/lib/schemas.generated';
+import { useZodForm, applyServerFieldErrors } from '@/lib/form';
+import { TextField, TextareaField } from '@/lib/form-fields';
 import {
   SectionMasthead, PanelBox, PanelHead, EmptyState, DropZone, MetaLine, TabMetric, pad2,
 } from './parts';
@@ -23,41 +33,116 @@ interface JinglesSectionProps {
   saveSettings: SaveSettings;
   jingleRatio: string;
   setJingleRatio: (v: string) => void;
-  jingleText: string;
-  setJingleText: (s: string) => void;
-  createJingle: () => Promise<boolean>;
+  createJingle: (values: { text: string }) => Promise<ImagingSubmitResult>;
   uploadJingle: (
     files: File[],
-    label: string,
+    label: string | undefined,
     opts?: { onProgress?: (done: number, total: number) => void; signal?: AbortSignal },
   ) => Promise<JingleImportResult | null>;
   onDelete: (filename: string | null) => void;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
-export function JinglesSection({
-  data, busy, jingleRatio, setJingleRatio, jingleText, setJingleText,
-  createJingle, uploadJingle, saveSettings, onDelete, adminFetch,
-}: JinglesSectionProps) {
-  const ratioRaw = data.values?.jingleRatio;
-  const ratioDirty = jingleRatio !== String(ratioRaw);
-  const ratioMetric = ratioRaw == null ? '—' : ratioRaw === 0 ? 'off' : `1 : ${ratioRaw}`;
-  const jingles = data.jingles || [];
-  const [modal, setModal] = useState<null | 'create' | 'import'>(null);
-  const [importFiles, setImportFiles] = useState<File[]>([]);
-  const [importLabel, setImportLabel] = useState('');
-  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
-  const [importFailures, setImportFailures] = useState<JingleImportFailure[]>([]);
+function JingleCreateModal({
+  busy, createJingle, onClose,
+}: {
+  busy: boolean;
+  createJingle: JinglesSectionProps['createJingle'];
+  onClose: () => void;
+}) {
+  const form = useZodForm(jingleCreateSchema, { text: '' });
+  // text is a plain z.string() (no preprocess wrapper), so its z.input is a
+  // real string and form.control needs no cast here — unlike every other
+  // field in this file, which goes through imagingName/imagingDescription.
+  const textValue = useWatch({ control: form.control, name: 'text' }) || '';
+
+  const onSubmit = form.handleSubmit(async (values) => {
+    const res = await createJingle(values);
+    if (res.ok) onClose();
+    else applyServerFieldErrors(form, res.fieldErrors);
+  });
+
+  return (
+    <Modal
+      open
+      onOpenChange={(o) => { if (!o) onClose(); }}
+      title="create jingle"
+      sub="we’ll voice it in your station’s configured TTS voice"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={onClose}>Cancel</Button>
+          <Btn
+            sm
+            tone="accent"
+            className="min-h-9 sm:min-h-0"
+            onClick={() => void onSubmit()}
+            disabled={busy || !form.formState.isValid}
+          >
+            {busy ? 'Generating…' : 'Create'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="grid gap-1.5">
+        <TextareaField
+          control={form.control}
+          name="text"
+          label="Jingle text"
+          rows={4}
+          placeholder="You’re tuned to SUB/WAVE…"
+        />
+        <div className="text-right font-mono text-[11px] text-muted">{textValue.length} / {JINGLE_TEXT_MAX}</div>
+      </div>
+    </Modal>
+  );
+}
+
+// `label` is jingleImportSchema's one field (z.preprocess-wrapped — unknown
+// z.input, cast once). `files` (a multi-file picker) is not part of that
+// schema at all — a jingle import's shape only ever describes the label a
+// single-file import may carry — so it's a plain Controller field read via
+// useWatch, the same raw-Controller case as every file picker in this task.
+interface JingleImportFormValues {
+  label?: string;
+  files: File[];
+}
+
+function JingleImportModal({
+  busy, uploadJingle, importProgress, setImportProgress, importFailures, setImportFailures, onClose,
+}: {
+  busy: boolean;
+  uploadJingle: JinglesSectionProps['uploadJingle'];
+  importProgress: { done: number; total: number } | null;
+  setImportProgress: (p: { done: number; total: number } | null) => void;
+  importFailures: JingleImportFailure[];
+  setImportFailures: (f: JingleImportFailure[]) => void;
+  onClose: () => void;
+}) {
+  const form = useZodForm(jingleImportSchema, { label: '' });
+  const control = form.control as unknown as Control<JingleImportFormValues>;
+  // `files` has no place in jingleImportSchema's own type (see the interface
+  // comment above), so clearing it after a batch needs the same widened cast
+  // `control` uses rather than the schema-typed `form.setValue`.
+  const setFormValue = form.setValue as unknown as <K extends keyof JingleImportFormValues>(
+    name: K, value: JingleImportFormValues[K],
+  ) => void;
+  const files = (useWatch({ control, name: 'files' }) as File[] | undefined) || [];
   const importRef = useRef<HTMLInputElement>(null);
   const importAbort = useRef<AbortController | null>(null);
-  const closeImport = () => { setModal(null); setImportFailures([]); };
-  const doImport = async () => {
-    if (!importFiles.length) return;
+
+  const requestClose = () => {
+    if (importProgress) return; // Cancel is disabled while a batch is in flight
+    setImportFailures([]);
+    onClose();
+  };
+
+  const onSubmit = form.handleSubmit(async (values) => {
+    if (!files.length) return;
     const ac = new AbortController();
     importAbort.current = ac;
     setImportFailures([]);
-    setImportProgress({ done: 0, total: importFiles.length });
-    const res = await uploadJingle(importFiles, importLabel, {
+    setImportProgress({ done: 0, total: files.length });
+    const res = await uploadJingle(files, values.label, {
       onProgress: (done, total) => setImportProgress({ done, total }),
       signal: ac.signal,
     });
@@ -66,18 +151,138 @@ export function JinglesSection({
     if (!res) return;
     // Always clear the selection so a retry can't re-upload files that already
     // made it in; failures stay listed so the operator can re-pick just those.
-    setImportFiles([]);
+    setFormValue('files', []);
     if (importRef.current) importRef.current.value = '';
     if (res.failures.length || res.aborted) {
       setImportFailures(res.failures);
     } else {
-      setImportLabel('');
-      setModal(null);
+      setFormValue('label', '');
+      onClose();
     }
-  };
-  const doCreate = async () => {
-    if (await createJingle()) setModal(null);
-  };
+  });
+
+  return (
+    <Modal
+      open
+      onOpenChange={(o) => { if (!o) requestClose(); }}
+      title="import jingles"
+      sub="bring your own mp3 / wav — select one or many"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={requestClose} disabled={!!importProgress}>Cancel</Button>
+          <Btn sm tone="accent" className="min-h-9 sm:min-h-0" onClick={() => void onSubmit()} disabled={busy || !files.length}>
+            {importProgress
+              ? 'Importing…'
+              : files.length > 1
+                ? `Import ${files.length} files`
+                : 'Import'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="grid gap-3.5">
+        <Controller
+          control={control}
+          name="files"
+          defaultValue={[]}
+          render={({ field }) => (
+            <>
+              <input
+                ref={importRef}
+                type="file"
+                multiple
+                accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
+                aria-label="Import jingle audio files"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                  const list = Array.from(e.target.files ?? []);
+                  field.onChange(list);
+                  setImportFailures([]);
+                  if (list.length > 1) form.setValue('label', '');
+                }}
+                className="hidden"
+              />
+              <DropZone
+                label={
+                  field.value.length
+                    ? `${field.value.length} file${field.value.length === 1 ? '' : 's'} selected — click to re-select`
+                    : 'choose files…'
+                }
+                hint="mp3 · wav · ogg · flac · m4a · aac · opus — up to 25 MB each · we convert and level-match them for you"
+                onClick={() => importRef.current?.click()}
+                disabled={!!importProgress}
+              />
+            </>
+          )}
+        />
+
+        {files.length > 0 && (
+          <div className="max-h-[180px] divide-y divide-separator-soft overflow-auto border border-separator-strong">
+            {files.map((f, i) => (
+              <div
+                key={`${f.name}-${i}`}
+                className="flex justify-between gap-3 px-3 py-2 font-mono text-[11px]"
+              >
+                <span className="truncate">{f.name}</span>
+                <span className="flex-none text-muted">{fmtSize(f.size)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {files.length === 1 && (
+          <TextField
+            control={control}
+            name="label"
+            label="Label · optional"
+            placeholder="Defaults to the file’s own name"
+            maxLength={IMAGING_DESCRIPTION_MAX}
+          />
+        )}
+
+        {importProgress && (
+          <div className="flex items-center justify-between gap-3 border border-ink px-3.5 py-2.5">
+            <span className="font-mono text-[12px] font-bold">
+              Importing {importProgress.done}/{importProgress.total}…
+            </span>
+            <Btn sm tone="danger" onClick={() => importAbort.current?.abort()}>Stop</Btn>
+          </div>
+        )}
+
+        {importFailures.length > 0 && (
+          <div className="border border-[var(--destructive)]">
+            <div className="border-b border-separator-soft px-3 py-2 font-mono text-[10px] font-bold tracking-[0.16em] text-[var(--destructive)] uppercase">
+              failed — re-select just these to retry
+            </div>
+            <div className="divide-y divide-separator-soft">
+              {importFailures.map((f, i) => (
+                <div
+                  key={`${f.name}-${i}`}
+                  className="flex justify-between gap-3 px-3 py-2 font-mono text-[11px]"
+                >
+                  <span className="truncate">{f.name}</span>
+                  <span className="flex-none text-[var(--destructive)]">{f.reason}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+export function JinglesSection({
+  data, busy, jingleRatio, setJingleRatio,
+  createJingle, uploadJingle, saveSettings, onDelete, adminFetch,
+}: JinglesSectionProps) {
+  const ratioRaw = data.values?.jingleRatio;
+  const ratioDirty = jingleRatio !== String(ratioRaw);
+  const ratioMetric = ratioRaw == null ? '—' : ratioRaw === 0 ? 'off' : `1 : ${ratioRaw}`;
+  const jingles = data.jingles || [];
+  const [modal, setModal] = useState<null | 'create' | 'import'>(null);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
+  const [importFailures, setImportFailures] = useState<JingleImportFailure[]>([]);
+  const closeModal = () => setModal(null);
 
   return (
     <section className="grid gap-[22px]">
@@ -106,8 +311,8 @@ export function JinglesSection({
             <Input
               className="mono-num w-[84px]"
               type="number"
-              min={0}
-              max={1000}
+              min={JINGLE_RATIO_BOUNDS.min}
+              max={JINGLE_RATIO_BOUNDS.max}
               value={jingleRatio}
               aria-label="Jingle ratio"
               onChange={(e: ChangeEvent<HTMLInputElement>) => setJingleRatio(e.target.value)}
@@ -122,7 +327,22 @@ export function JinglesSection({
             sm
             tone="accent"
             className="min-h-9 sm:min-h-0"
-            onClick={() => saveSettings({ jingleRatio: parseInt(jingleRatio, 10) })}
+            onClick={() => {
+              // Pre-flight against the controller's own schema, so an
+              // out-of-range ratio reads the same message here and on the wire.
+              // The raw string goes in on purpose — the schema parses it the way
+              // update() does, including the string forms `type="number"` still
+              // hands back. This inline control is deliberately NOT react-hook-
+              // form — see ImagingPanel.tsx's saveSettings comment: it posts its
+              // own one-key /settings patch and needs restart handling the shared
+              // create/import forms don't.
+              const parsed = jingleRatioSchema.safeParse(jingleRatio);
+              if (!parsed.success) {
+                notify.err(parsed.error.issues[0]?.message || 'invalid value');
+                return;
+              }
+              void saveSettings({ jingleRatio: parsed.data });
+            }}
             disabled={busy || !ratioDirty}
           >
             Save · needs restart
@@ -186,131 +406,17 @@ export function JinglesSection({
         )}
       </PanelBox>
 
-      <Modal
-        open={modal === 'create'}
-        onOpenChange={(o) => { if (!o) setModal(null); }}
-        title="create jingle"
-        sub="we’ll voice it in your station’s configured TTS voice"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={() => setModal(null)}>Cancel</Button>
-            <Btn sm tone="accent" className="min-h-9 sm:min-h-0" onClick={doCreate} disabled={busy || !jingleText.trim()}>
-              {busy ? 'Generating…' : 'Create'}
-            </Btn>
-          </>
-        }
-      >
-        <div className="grid gap-1.5">
-          <Label>Jingle text</Label>
-          <Textarea
-            rows={4}
-            value={jingleText}
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setJingleText(e.target.value.slice(0, 500))}
-            placeholder="You’re tuned to SUB/WAVE…"
-          />
-          <div className="text-right font-mono text-[11px] text-muted">{jingleText.length} / 500</div>
-        </div>
-      </Modal>
-
-      <Modal
-        open={modal === 'import'}
-        onOpenChange={(o) => { if (!o && !importProgress) closeImport(); }}
-        title="import jingles"
-        sub="bring your own mp3 / wav — select one or many"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={closeImport} disabled={!!importProgress}>Cancel</Button>
-            <Btn sm tone="accent" className="min-h-9 sm:min-h-0" onClick={doImport} disabled={busy || !importFiles.length}>
-              {importProgress
-                ? 'Importing…'
-                : importFiles.length > 1
-                  ? `Import ${importFiles.length} files`
-                  : 'Import'}
-            </Btn>
-          </>
-        }
-      >
-        <div className="grid gap-3.5">
-          <input
-            ref={importRef}
-            type="file"
-            multiple
-            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
-            aria-label="Import jingle audio files"
-            onChange={(e: ChangeEvent<HTMLInputElement>) => {
-              const list = Array.from(e.target.files ?? []);
-              setImportFiles(list);
-              setImportFailures([]);
-              if (list.length > 1) setImportLabel('');
-            }}
-            className="hidden"
-          />
-          <DropZone
-            label={
-              importFiles.length
-                ? `${importFiles.length} file${importFiles.length === 1 ? '' : 's'} selected — click to re-select`
-                : 'choose files…'
-            }
-            hint="mp3 · wav · ogg · flac · m4a · aac · opus — up to 25 MB each · we convert and level-match them for you"
-            onClick={() => importRef.current?.click()}
-            disabled={!!importProgress}
-          />
-
-          {importFiles.length > 0 && (
-            <div className="max-h-[180px] divide-y divide-separator-soft overflow-auto border border-separator-strong">
-              {importFiles.map((f, i) => (
-                <div
-                  key={`${f.name}-${i}`}
-                  className="flex justify-between gap-3 px-3 py-2 font-mono text-[11px]"
-                >
-                  <span className="truncate">{f.name}</span>
-                  <span className="flex-none text-muted">{fmtSize(f.size)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {importFiles.length === 1 && (
-            <div className="grid gap-1.5">
-              <Label>Label · optional</Label>
-              <Input
-                value={importLabel}
-                maxLength={200}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
-                placeholder="Defaults to the file’s own name"
-              />
-            </div>
-          )}
-
-          {importProgress && (
-            <div className="flex items-center justify-between gap-3 border border-ink px-3.5 py-2.5">
-              <span className="font-mono text-[12px] font-bold">
-                Importing {importProgress.done}/{importProgress.total}…
-              </span>
-              <Btn sm tone="danger" onClick={() => importAbort.current?.abort()}>Stop</Btn>
-            </div>
-          )}
-
-          {importFailures.length > 0 && (
-            <div className="border border-[var(--destructive)]">
-              <div className="border-b border-separator-soft px-3 py-2 font-mono text-[10px] font-bold tracking-[0.16em] text-[var(--destructive)] uppercase">
-                failed — re-select just these to retry
-              </div>
-              <div className="divide-y divide-separator-soft">
-                {importFailures.map((f, i) => (
-                  <div
-                    key={`${f.name}-${i}`}
-                    className="flex justify-between gap-3 px-3 py-2 font-mono text-[11px]"
-                  >
-                    <span className="truncate">{f.name}</span>
-                    <span className="flex-none text-[var(--destructive)]">{f.reason}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </Modal>
+      {modal === 'create' && (
+        <JingleCreateModal busy={busy} createJingle={createJingle} onClose={closeModal} />
+      )}
+      {modal === 'import' && (
+        <JingleImportModal
+          busy={busy} uploadJingle={uploadJingle}
+          importProgress={importProgress} setImportProgress={setImportProgress}
+          importFailures={importFailures} setImportFailures={setImportFailures}
+          onClose={closeModal}
+        />
+      )}
     </section>
   );
 }

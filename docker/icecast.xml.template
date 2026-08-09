@@ -6,10 +6,9 @@
         <clients>${ICECAST_MAX_CLIENTS}</clients>
         <sources>4</sources>
         <!-- queue-size: per-client backlog before Icecast drops a lagging
-             listener. Computed by broadcast-entrypoint.sh as 4x burst-size
-             (floored at 2 MB) — it must comfortably exceed the burst or a
-             client is evicted the moment it falls behind its own primed
-             buffer (issue #993). -->
+             listener. 4x burst-size (floored at 2 MB) — it must comfortably
+             exceed the burst or a client is evicted the moment it falls
+             behind its own primed buffer (issue #993). -->
         <queue-size>${ICECAST_QUEUE_SIZE}</queue-size>
         <client-timeout>30</client-timeout>
         <header-timeout>15</header-timeout>
@@ -21,12 +20,11 @@
              /now-playing publishes stream.bufferSeconds and players shift
              their displays by it (issue #1114).
 
-             Computed by broadcast-entrypoint.sh from settings.stream.
-             bufferSeconds x the live bitrate, NOT hardcoded — it's a byte
-             count, so a fixed value drifts badly across bitrates.
-
-             These <limits> values are sized for the MP3 mount and act as the
-             default; every stream mount below carries its own burst/queue. -->
+             Both values are computed by broadcast-entrypoint.sh from
+             settings.stream.bufferSeconds x bitrate, never hardcoded — they
+             are byte counts, so a fixed value drifts badly across bitrates.
+             These <limits> are sized for MP3 and act as the default; every
+             stream mount below carries its own burst/queue. -->
         <burst-size>${ICECAST_BURST_SIZE}</burst-size>
     </limits>
 

@@ -28,7 +28,6 @@ RUN cd /tmp && \
     ln -s /opt/piper/piper /usr/local/bin/piper && \
     rm piper_linux_${piper_arch}.tar.gz
 
-# British English voice
 RUN mkdir -p /opt/piper/voices && \
     wget -q ${WGET_RETRY} -O /opt/piper/voices/en_GB-alan-medium.onnx \
       https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx && \
@@ -56,9 +55,9 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 # --- Chatterbox (opt-in, --build-arg WITH_CHATTERBOX=1) ---------------------
 # Resemble AI's Chatterbox Turbo: zero-shot voice cloning + paralinguistic tags.
 # PyTorch-only (~2-3GB + slow CPU inference), so deliberately NOT in the default
-# image. The from_pretrained call doubles as a build-time smoke test and
-# pre-warms the HF cache. With the venv absent, chatterbox.isAvailable() reports
-# false and the dispatcher falls back to Piper.
+# image — with the venv absent, chatterbox.isAvailable() reports false and the
+# dispatcher falls back to Piper. The from_pretrained call below doubles as a
+# build-time smoke test and pre-warms the HF cache.
 ENV HF_HOME=/opt/chatterbox/hf-cache
 ARG WITH_CHATTERBOX=0
 ARG CHATTERBOX_PIP_PKG=chatterbox-tts
@@ -101,9 +100,8 @@ RUN if [ "$WITH_CHATTERBOX" = "1" ]; then \
 # --- PocketTTS (opt-in, --build-arg WITH_POCKETTTS=1) -----------------------
 # kyutai-labs' PocketTTS: 100M-param CPU model between Piper (fast, robotic)
 # and Chatterbox (heavy, expressive). Still drags PyTorch in, so NOT in the
-# default image; same venv-isolation pattern as Chatterbox, model preload as
-# build-time smoke test. With the venv absent, pocketTts.isAvailable() reports
-# false and the dispatcher falls back to Piper.
+# default image; same venv isolation, absence handling and preload-as-smoke-
+# test as Chatterbox above.
 # HF_TOKEN (optional) unlocks voice cloning (#238) — the cloning weights are
 # gated; without it the pre-warm loads the open weights and cloned .wav voices
 # revert to a built-in. Runtime env also works (lazy download); a build-arg

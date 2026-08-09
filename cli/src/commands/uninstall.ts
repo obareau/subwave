@@ -1,19 +1,8 @@
-// `subwave uninstall` — tear down the stack and remove the install.
-//
-// The inverse of `init` + `start`. Tiered so the common case is safe:
-//
-//   subwave uninstall            down the stack, remove the install's compose
-//                                files + .env + CLI config — but KEEP state/
-//                                (settings, secrets, sessions, jingles, tags).
-//   subwave uninstall --purge    also remove the whole install dir (incl.
-//                                state/) and named volumes. Irreversible.
-//   subwave uninstall --images   also remove the pulled ghcr images.
-//   subwave uninstall --binary   also remove the subwave binary itself.
-//   subwave uninstall --yes      skip the confirmation prompt.
-//
-// Everything destructive is confirmed unless --yes. On a cloned repo
-// (clone-mode home) we never delete files — that's the operator's source
-// tree, not a scaffolded install; we only bring the stack down.
+// `subwave uninstall` — the inverse of `init` + `start`, tiered so the default
+// is safe: the bare command keeps state/ (settings, secrets, sessions, jingles,
+// tags) and only `--purge` takes it. Everything destructive is confirmed unless
+// `--yes`. On a clone-mode home nothing is deleted at all — that's the
+// operator's source tree, not a scaffolded install, so we only bring it down.
 
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
@@ -31,9 +20,8 @@ export interface UninstallOptions {
   binary?: boolean;
 }
 
-// Generated install artifacts `init` writes into the home. Removed on a
-// default uninstall; state/ is deliberately NOT in this list. Keep this in
-// lockstep with init.ts:scaffold() (all three compose files + .env/.env.example).
+// Keep in lockstep with init.ts:scaffold(). state/ is deliberately absent — a
+// default uninstall never takes it.
 const GENERATED_FILES = [
   'docker-compose.yml',
   'docker-compose.byo.yml',
@@ -50,9 +38,8 @@ export async function runUninstallCommand(opts: UninstallOptions = {}): Promise<
   const home = resolved?.home ?? null;
   const clone = home ? isCloneMode(home) : false;
 
-  // Which compose file to bring down: prefer the one Docker says is running,
-  // else the first one that exists in the home (so we still clean up a
-  // stopped-but-present stack). Only meaningful with a resolved home.
+  // Prefer the file Docker says is running, else the first one present — a
+  // stopped-but-present stack still needs cleaning up.
   let target: ComposeFile | null = null;
   let runningEnv = 'down';
   if (home) {
@@ -61,7 +48,6 @@ export async function runUninstallCommand(opts: UninstallOptions = {}): Promise<
     target = status.file ?? getComposeFiles().find((f) => existsSync(f.abs)) ?? null;
   }
 
-  // Nothing to do at all?
   const haveConfig = existsSync(HOME_CONFIG_PATH) || existsSync(configPath());
   if (!home && !haveConfig) {
     header('Nothing to uninstall');
@@ -69,7 +55,6 @@ export async function runUninstallCommand(opts: UninstallOptions = {}): Promise<
     return;
   }
 
-  // --- plan summary ---------------------------------------------------------
   header('This will');
   if (target) {
     muted(`• docker compose down${opts.purge ? ' -v' : ''}${opts.images ? ' --rmi all' : ''}` +
@@ -88,7 +73,6 @@ export async function runUninstallCommand(opts: UninstallOptions = {}): Promise<
   if (opts.binary) muted(`• remove the subwave binary (${binaryPath() ?? 'n/a'})`);
   console.log();
 
-  // --- confirm --------------------------------------------------------------
   if (!opts.yes) {
     const yes = exitIfCancelled(await p.confirm({
       message: opts.purge
@@ -104,7 +88,6 @@ export async function runUninstallCommand(opts: UninstallOptions = {}): Promise<
     }
   }
 
-  // --- execute --------------------------------------------------------------
   header('Uninstalling');
 
   if (target) {
@@ -137,7 +120,6 @@ export async function runUninstallCommand(opts: UninstallOptions = {}): Promise<
     info('clone-mode home — left your source checkout untouched.');
   }
 
-  // CLI config pointers (home config.json + preferences cli.json).
   for (const cfg of [HOME_CONFIG_PATH, configPath()]) {
     if (existsSync(cfg)) rmSync(cfg, { force: true });
   }
@@ -153,8 +135,7 @@ export async function runUninstallCommand(opts: UninstallOptions = {}): Promise<
   }
 }
 
-// Resolve the running binary's own path, unless we're running from source
-// (tsx/node/bun dev), where there's nothing for the operator to delete.
+// null when running from source, where there's no binary to delete.
 function binaryPath(): string | null {
   const p2 = process.execPath;
   const base = basename(p2).toLowerCase();
@@ -174,7 +155,7 @@ function removeBinary(): void {
     rmSync(p2, { force: true });
     ok(`removed binary ${p2}`);
   } catch (e) {
-    // Almost always EACCES: installed under /usr/local/bin via sudo.
+    // Almost always EACCES — installed under /usr/local/bin via sudo.
     warn(`couldn't remove ${p2}: ${(e as Error).message}`);
     muted(`  remove it yourself: sudo rm ${p2}`);
   }

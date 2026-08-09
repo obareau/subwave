@@ -1,8 +1,14 @@
 // Shared "right now" context-field vocabulary for the Skills admin (#471).
+//
+// The vocabulary itself comes from the shared skill schema
+// (controller/src/schemas/skill.ts, mirrored into lib/schemas.generated.ts) —
+// this file used to carry a hand-maintained second copy of it.
+import { CONTEXT_FIELDS, type ContextField } from '@/lib/schemas.generated';
 
-// Keys are the controller's CONTEXT_FIELDS vocabulary; anything unlisted falls
-// back to the raw key.
-export const CONTEXT_FIELD_LABELS: Record<string, string> = {
+// Human labels for the chips. Typed as an EXHAUSTIVE record, so adding a field
+// to the controller's vocabulary fails the web build until it has a label
+// rather than silently rendering a raw key.
+export const CONTEXT_FIELD_LABELS: Record<ContextField, string> = {
   date: 'Date & season',
   clock: 'Clock time',
   time: 'Daypart',
@@ -12,8 +18,9 @@ export const CONTEXT_FIELD_LABELS: Record<string, string> = {
   listeners: 'Listener count',
 };
 
-// Fallback vocabulary if the controller doesn't send knownContextFields.
-export const CONTEXT_FIELDS_FALLBACK = ['date', 'clock', 'time', 'weather', 'festival', 'show', 'listeners'];
+// Used when the controller doesn't send knownContextFields (an older
+// controller, or a failed read) — the same list it would have sent.
+export const CONTEXT_FIELDS_FALLBACK: string[] = [...CONTEXT_FIELDS];
 
 export function splitContext(s?: string): string[] {
   return typeof s === 'string' ? s.split(',').map(t => t.trim()).filter(Boolean) : [];

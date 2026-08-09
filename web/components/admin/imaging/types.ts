@@ -16,13 +16,6 @@ export interface SfxData {
   generatorReady?: boolean;
 }
 
-export interface SfxForm {
-  name: string;
-  description: string;
-  prompt: string;
-  durationSec: string;
-}
-
 export interface BedEntry {
   name: string;
   description?: string;
@@ -39,12 +32,12 @@ export interface BedsData {
   generatorReady?: boolean;
 }
 
-export interface BedsForm {
-  name: string;
-  description: string;
-  prompt: string;
-  durationSec: string;
-}
+// Every create/import submitter (ImagingPanel) answers this shape rather than
+// a bare boolean, so the modal that owns the react-hook-form instance can map
+// a server-side refusal back onto the right input via applyServerFieldErrors
+// — the same fieldErrors channel POST /settings' inline toggles deliberately
+// do NOT use (see ImagingPanel.tsx's saveSettings comment).
+export type ImagingSubmitResult = { ok: true } | { ok: false; fieldErrors?: Record<string, string> };
 
 export type JingleImportFailure = { name: string; reason: string };
 export type JingleImportResult = {

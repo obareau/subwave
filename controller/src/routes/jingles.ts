@@ -5,6 +5,8 @@ import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { audioUpload } from '../middleware/upload.js';
+import { validateBody } from '../middleware/validate.js';
+import { jingleCreateSchema, jingleImportSchema } from '../schemas/imaging.js';
 import { audioContentType } from '../audio/audio-import.js';
 import { tagger, startTagger, stopTagger } from '../broadcast/tagger.js';
 
@@ -21,10 +23,8 @@ router.get('/jingles', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/jingles', requireAdmin, async (req, res) => {
-  const text = (req.body?.text || '').trim();
-  if (!text) return res.status(400).json({ error: 'text is required' });
-  if (text.length > 500) return res.status(400).json({ error: 'text too long (max 500)' });
+router.post('/jingles', requireAdmin, validateBody(jingleCreateSchema), async (req, res) => {
+  const { text } = req.body as { text: string };
   try {
     const created = await jingles.create(text);
     queue.log('scheduler', `New jingle created: "${text.slice(0, 60)}…"`);
@@ -36,12 +36,14 @@ router.post('/jingles', requireAdmin, async (req, res) => {
 
 // Import an operator-supplied mp3/wav as a jingle (multipart `file`, optional
 // `label`). Transcoded + level-matched server-side (see broadcast/jingles.js).
-router.post('/jingles/upload', requireAdmin, audioUpload('file'), async (req, res) => {
+// validateBody AFTER audioUpload — multer parses the multipart body, the
+// middleware replaces req.body only, req.file rides through untouched.
+router.post('/jingles/upload', requireAdmin, audioUpload('file'), validateBody(jingleImportSchema), async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'file is required' });
   try {
     const created = await jingles.importAudio(file.buffer, {
-      label: req.body?.label,
+      label: (req.body as { label?: string }).label,
       originalName: file.originalname,
     });
     queue.log('scheduler', `Jingle imported: "${created.text.slice(0, 60)}…"`);

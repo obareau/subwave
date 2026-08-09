@@ -4,32 +4,28 @@
 // immediately; the picker's own 30-min playlist memo catches up on its own.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validate.js';
 import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
 import { queue } from '../broadcast/queue.js';
 import { generatePlaylist, type GenerateInput } from '../music/playlist-gen.js';
 import * as genJobs from '../music/playlist-jobs.js';
 import * as recipes from '../music/playlist-recipes.js';
+import type { StoredRecipe } from '../music/playlist-recipes.js';
 import { syncRecipe } from '../music/playlist-sync.js';
+// The request bodies live in the shared schema (mirrored to the web, where the
+// builder runs the same rules for its Generate/Save gates). The middleware
+// replaces req.body with the parsed object, so the handlers below read
+// already-coerced values.
+import {
+  playlistAppendSchema,
+  playlistGenerateSchema,
+  playlistPatchSchema,
+  playlistRemoveTracksSchema,
+  playlistSaveSchema,
+} from '../schemas/playlist.js';
 
 export const router = express.Router();
-
-// A recipe body accompanies a "keep in sync" save — the same shape /generate
-// takes, minus excludeTrackIds.
-function readRecipe(body: any) {
-  return {
-    prompt: typeof body?.prompt === 'string' ? body.prompt : undefined,
-    seedTrackIds: parseIds(body?.seedTrackIds),
-    seedArtist: typeof body?.seedArtist === 'string' ? body.seedArtist : undefined,
-    knobs: body?.knobs && typeof body.knobs === 'object' ? body.knobs : {},
-    sources: body?.sources && typeof body.sources === 'object' ? body.sources : {},
-  };
-}
-
-function parseIds(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((v) => typeof v === 'string' && v.trim()).map((v) => v.trim());
-}
 
 // GET /playlists — all playlists visible to the configured Navidrome account.
 router.get('/playlists', requireAdmin, async (_req, res) => {
@@ -87,14 +83,10 @@ router.get('/playlists/:id', requireAdmin, async (req, res) => {
 // POST /playlists — { name, songIds?, playlistId? } → create in Navidrome, or
 // OVERWRITE an existing playlist's tracks + name when playlistId is present (the
 // builder's "save over an existing playlist").
-router.post('/playlists', requireAdmin, async (req, res) => {
-  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
-  if (!name) return res.status(400).json({ error: 'name is required' });
-  const songIds = parseIds(req.body?.songIds);
-  const playlistId = typeof req.body?.playlistId === 'string' && req.body.playlistId.trim()
-    ? req.body.playlistId.trim()
-    : undefined;
-  const keepInSync = req.body?.keepInSync === true;
+router.post('/playlists', requireAdmin, validateBody(playlistSaveSchema), async (req, res) => {
+  const { name, songIds, playlistId, keepInSync } = req.body as {
+    name: string; songIds: string[]; playlistId?: string; keepInSync: boolean;
+  };
   try {
     const playlist = await subsonic.createPlaylist(name, songIds, { playlistId });
     // A wholesale overwrite via createPlaylist doesn't touch the name, so patch
@@ -104,7 +96,7 @@ router.post('/playlists', requireAdmin, async (req, res) => {
     // body; toggling it off drops the entry.
     const id = playlist?.id || playlistId;
     if (id) {
-      if (keepInSync) recipes.upsert({ playlistId: id, name, recipe: readRecipe(req.body?.recipe || {}) });
+      if (keepInSync) recipes.upsert({ playlistId: id, name, recipe: req.body.recipe as StoredRecipe });
       else recipes.remove(id);
     }
     queue.log('info', `playlist "${name}" ${playlistId ? 'overwritten' : 'created'} (${songIds.length} tracks)${keepInSync ? ' [synced]' : ''}`);
@@ -130,35 +122,6 @@ router.post('/playlists/:id/sync', requireAdmin, async (req, res) => {
   }
 });
 
-function readGenerateInput(body: any): GenerateInput {
-  const b = body || {};
-  return {
-    prompt: typeof b.prompt === 'string' ? b.prompt : undefined,
-    seedTrackIds: parseIds(b.seedTrackIds),
-    seedArtist: typeof b.seedArtist === 'string' ? b.seedArtist : undefined,
-    knobs: b.knobs && typeof b.knobs === 'object' ? b.knobs : {},
-    sources: b.sources && typeof b.sources === 'object' ? b.sources : {},
-    excludeTrackIds: parseIds(b.excludeTrackIds),
-  };
-}
-
-function hasGenerateIntent(input: GenerateInput): boolean {
-  return Boolean(
-    input.prompt?.trim() ||
-    input.seedTrackIds?.length ||
-    input.seedArtist?.trim() ||
-    input.sources?.recentlyAdded ||
-    input.knobs?.moods?.length ||
-    input.knobs?.genres?.length ||
-    input.knobs?.artists?.length ||
-    input.knobs?.energies?.length ||
-    input.knobs?.eras?.length ||
-    input.knobs?.minBpm ||
-    input.knobs?.maxBpm ||
-    input.knobs?.instrumentalOnly,
-  );
-}
-
 // A finished generation, shaped for the response: empty results carry the
 // "loosen the filters" hint, non-empty ones are logged.
 function finishGenerate(result: Awaited<ReturnType<typeof generatePlaylist>>) {
@@ -175,11 +138,8 @@ function finishGenerate(result: Awaited<ReturnType<typeof generatePlaylist>>) {
 // Synchronous: the response holds until the generation lands, which can be
 // minutes — anything proxying through Cloudflare should use the jobs flow
 // below instead (CF cuts origin responses off at ~100s).
-router.post('/playlists/generate', requireAdmin, async (req, res) => {
-  const input = readGenerateInput(req.body);
-  if (!hasGenerateIntent(input)) {
-    return res.status(400).json({ error: 'give a prompt, seeds, a source, or at least one knob to generate from' });
-  }
+router.post('/playlists/generate', requireAdmin, validateBody(playlistGenerateSchema), async (req, res) => {
+  const input = req.body as GenerateInput;
   try {
     res.json(finishGenerate(await generatePlaylist(input)));
   } catch (err: any) {
@@ -190,11 +150,8 @@ router.post('/playlists/generate', requireAdmin, async (req, res) => {
 
 // POST /playlists/generate/jobs — same body as /generate, returns { jobId }
 // immediately; the run continues server-side. Poll the job to collect it.
-router.post('/playlists/generate/jobs', requireAdmin, (req, res) => {
-  const input = readGenerateInput(req.body);
-  if (!hasGenerateIntent(input)) {
-    return res.status(400).json({ error: 'give a prompt, seeds, a source, or at least one knob to generate from' });
-  }
+router.post('/playlists/generate/jobs', requireAdmin, validateBody(playlistGenerateSchema), (req, res) => {
+  const input = req.body as GenerateInput;
   const job = genJobs.create();
   if (!job) return res.status(429).json({ error: 'too many generations already running — collect or wait for one first' });
   generatePlaylist(input).then(
@@ -219,11 +176,10 @@ router.get('/playlists/generate/jobs/:id', requireAdmin, (req, res) => {
 });
 
 // POST /playlists/:id/tracks — { songIds } → append.
-router.post('/playlists/:id/tracks', requireAdmin, async (req, res) => {
-  const songIds = parseIds(req.body?.songIds);
-  if (songIds.length === 0) return res.status(400).json({ error: 'songIds is required' });
+router.post('/playlists/:id/tracks', requireAdmin, validateBody(playlistAppendSchema), async (req, res) => {
+  const { songIds } = req.body as { songIds: string[] };
   try {
-    const added = await subsonic.addToPlaylist(req.params.id, songIds);
+    const added = await subsonic.addToPlaylist(String(req.params.id), songIds);
     res.json({ added });
   } catch (err: any) {
     queue.log('error', `playlist append failed: ${err.message}`);
@@ -232,15 +188,10 @@ router.post('/playlists/:id/tracks', requireAdmin, async (req, res) => {
 });
 
 // PATCH /playlists/:id — { name?, public? } → rename / visibility.
-router.patch('/playlists/:id', requireAdmin, async (req, res) => {
-  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : undefined;
-  const isPublic = typeof req.body?.public === 'boolean' ? req.body.public : undefined;
-  if (name === undefined && isPublic === undefined) {
-    return res.status(400).json({ error: 'nothing to update — send name and/or public' });
-  }
-  if (name !== undefined && !name) return res.status(400).json({ error: 'name cannot be empty' });
+router.patch('/playlists/:id', requireAdmin, validateBody(playlistPatchSchema), async (req, res) => {
+  const { name, public: isPublic } = req.body as { name?: string; public?: boolean };
   try {
-    await subsonic.updatePlaylistMeta(req.params.id, { name, public: isPublic });
+    await subsonic.updatePlaylistMeta(String(req.params.id), { name, public: isPublic });
     res.json({ ok: true });
   } catch (err: any) {
     queue.log('error', `playlist update failed: ${err.message}`);
@@ -249,13 +200,10 @@ router.patch('/playlists/:id', requireAdmin, async (req, res) => {
 });
 
 // DELETE /playlists/:id/tracks — { indexes } → remove by position.
-router.delete('/playlists/:id/tracks', requireAdmin, async (req, res) => {
-  const indexes = Array.isArray(req.body?.indexes)
-    ? req.body.indexes.filter((n: unknown) => Number.isInteger(n) && (n as number) >= 0)
-    : [];
-  if (indexes.length === 0) return res.status(400).json({ error: 'indexes is required' });
+router.delete('/playlists/:id/tracks', requireAdmin, validateBody(playlistRemoveTracksSchema), async (req, res) => {
+  const { indexes } = req.body as { indexes: number[] };
   try {
-    await subsonic.removeFromPlaylist(req.params.id, indexes);
+    await subsonic.removeFromPlaylist(String(req.params.id), indexes);
     res.json({ removed: indexes.length });
   } catch (err: any) {
     queue.log('error', `playlist track removal failed: ${err.message}`);

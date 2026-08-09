@@ -11,6 +11,8 @@ import { config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { audioUpload } from '../middleware/upload.js';
+import { validateBody } from '../middleware/validate.js';
+import { voiceImportSchema } from '../schemas/imaging.js';
 import { audioContentType, hasFfmpeg } from '../audio/audio-import.js';
 
 export const router = express.Router();
@@ -35,11 +37,12 @@ router.get('/voices', requireAdmin, async (req, res) => {
 // Import an operator-supplied clip (multipart `file`, `name`). Transcoded to
 // the canonical mono 24 kHz WAV. Every rejection is a 400 with the module's
 // message — they're all operator-fixable (bad type, duplicate name, no ffmpeg).
-router.post('/voices/upload', requireAdmin, audioUpload('file'), async (req, res) => {
+// validateBody AFTER audioUpload — multer parses the multipart body, the
+// middleware replaces req.body only, req.file rides through untouched.
+router.post('/voices/upload', requireAdmin, audioUpload('file'), validateBody(voiceImportSchema), async (req, res) => {
   const file = req.file;
-  const name = (req.body?.name || '').trim();
+  const { name } = req.body as { name: string };
   if (!file) return res.status(400).json({ error: 'file is required' });
-  if (!name) return res.status(400).json({ error: 'name is required' });
   try {
     const created = await voices.importVoice(file.buffer, {
       name,

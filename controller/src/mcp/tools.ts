@@ -8,6 +8,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SubwaveError, type RequestStatus, type SubwaveClient } from "./client.js";
+// Zod-only module, so it resolves in the standalone stdio server's build too.
+import { REQUEST_NAME_MAX, REQUEST_TEXT_MAX } from "../schemas/request.js";
 
 /** Render any value as a text content block. */
 function text(value: unknown): { type: "text"; text: string } {
@@ -220,17 +222,21 @@ export function registerSubwaveTools(
         "pause when nobody is listening. For an exact, non-LLM pick use " +
         "subwave_search_library + subwave_queue_track instead.",
       inputSchema: {
+        // Caps come from the shared request schema, not hand-copied figures:
+        // an MCP client refused at a stale 280 would never reach the route that
+        // now accepts more. src/mcp/ is controller-side, so it imports the
+        // schema module directly.
         request: z
           .string()
           .min(1)
-          .max(280)
+          .max(REQUEST_TEXT_MAX)
           .describe(
             "What to play, in plain language. A song, an artist, a mood, or " +
-              "'more like this'. Max 280 chars.",
+              `'more like this'. Max ${REQUEST_TEXT_MAX} chars.`,
           ),
         requester: z
           .string()
-          .max(40)
+          .max(REQUEST_NAME_MAX)
           .optional()
           .describe("Name to credit the request to on-air. Defaults to 'anon'."),
       },

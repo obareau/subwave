@@ -1,8 +1,6 @@
-// `subwave stop` — `docker compose down` for the live env.
-//
-// Never `-v` (would wipe state). Confirms before tearing the stack down,
-// with the default flipped on prod (operator has to explicitly approve)
-// versus dev (operator just hits enter).
+// `subwave stop` — `docker compose down` for the live env, never with `-v`
+// (that wipes state). The confirm defaults to no on prod, where listeners are
+// on the line, and to yes on dev.
 
 import { detectCompose, isProdEnv } from '../compose.ts';
 import { composeDown } from '../docker.ts';
@@ -40,9 +38,8 @@ export async function runStopCommand(): Promise<void> {
     ok('stack stopped.');
   }
 
-  // Dev mode: the web dev server lives outside docker — kill it too, so a
-  // single `subwave stop` brings the whole rig down. In prod, web is a
-  // compose service and `composeDown` already handled it.
+  // The dev web server lives outside docker, so composeDown missed it. In prod
+  // web is a compose service and is already down.
   if (current.env === 'dev') {
     const r = stopWebDev();
     if (r.stopped) {

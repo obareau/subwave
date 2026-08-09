@@ -1,14 +1,8 @@
 // `subwave restart [service]` — encodes the rebuild-vs-restart split from
-// CLAUDE.md:
-//   - controller: COPY at build time, so `restart` reruns the same code.
-//     Always rebuild + recreate.
-//   - broadcast: radio.liq is bind-mounted in dev; plain restart picks up
-//     edits. Prod bakes radio.liq + icecast.xml.template into the image,
-//     so Dockerfile / template changes need `--build` (surfaced via a confirm).
-//   - web / caddy / others: plain restart is what you want.
-//
-// When invoked with no arg, presents a select with the per-service hint
-// so the operator doesn't have to remember which is which.
+// CLAUDE.md. The controller COPYs its source at build time, so a plain restart
+// reruns the same code and it always needs a rebuild; broadcast bind-mounts
+// radio.liq in dev but bakes it in prod, so only prod needs one. The no-arg
+// picker carries these hints so the operator doesn't have to remember them.
 
 import { detectCompose, listDeclaredServices, type ComposeFile, type ComposeEnv } from '../compose.ts';
 import { composeRestart, composeUpBuild, composeUpRecreate } from '../docker.ts';
@@ -17,10 +11,8 @@ import { getSubwaveHome } from '../util.ts';
 import { exitIfCancelled, ok, err, info, muted, p, pc, pauseForEnter, header } from '../ui.ts';
 import { maybeStartWebDev, stopWebDev } from '../web-dev.ts';
 
-// Sentinel service name for the host-side web dev server (not a compose
-// service in dev mode). Same string the operator sees in the picker.
+// Sentinels, not compose services. WEB_DEV_SERVICE doubles as its picker label.
 const WEB_DEV_SERVICE = 'web (dev)';
-// Sentinel for "bounce every service in the stack at once".
 const ALL_SERVICES = '__all__';
 
 interface ServicePolicy {
@@ -28,7 +20,7 @@ interface ServicePolicy {
   hint: string;
 }
 
-// Per-service rebuild policy. Anything not in this map gets a plain restart.
+// Anything absent from this map gets a plain restart.
 const POLICY: Record<string, ServicePolicy> = {
   controller: { rebuild: true,  hint: 'rebuild — source is COPY-d at build time' },
   broadcast:  { rebuild: false, hint: 'restart — radio.liq is bind-mounted in dev' },
@@ -53,10 +45,8 @@ export async function runRestartCommand(opts: RestartOpts = {}): Promise<void> {
   const service = opts.service ?? (await pickService(current.file, current.env));
   if (!service) return;
 
-  // Full-stack: bounce every service AND re-read .env. Uses
-  // `--force-recreate` so the operator's mental model of "restart"
-  // (everything gets a fresh process) matches the behaviour, instead of
-  // `up -d` quietly no-op'ing services whose config hasn't changed.
+  // `--force-recreate` because a plain `up -d` quietly no-ops services whose
+  // config hasn't changed, which isn't what anyone means by "restart".
   if (service === ALL_SERVICES) {
     header('Restarting full stack');
     muted(`docker compose -f ${current.file.file} up -d --force-recreate`);
@@ -68,7 +58,7 @@ export async function runRestartCommand(opts: RestartOpts = {}): Promise<void> {
     return;
   }
 
-  // Host-side web dev server — not a compose service, no docker involved.
+  // No docker involved at all here.
   if (service === WEB_DEV_SERVICE || service === 'web-dev') {
     if (current.env !== 'dev') {
       err('`web (dev)` only applies to the dev stack — in prod, restart `web` (the compose service).');
@@ -90,11 +80,9 @@ export async function runRestartCommand(opts: RestartOpts = {}): Promise<void> {
   }
 
   const policy = POLICY[service] ?? { rebuild: false, hint: 'restart' };
-  // Rebuild is only possible in clone mode — standalone installs have no
-  // source or Dockerfile to build from. On standalone, fall back to
-  // `up -d --force-recreate` instead of erroring out: that bounces the
-  // container and re-reads .env (the realistic restart intent on a
-  // standalone install), without trying to build anything.
+  // A standalone install has no source to build from, so a wanted rebuild
+  // degrades to recreate rather than erroring — bouncing the container and
+  // re-reading .env is the realistic intent there anyway.
   const cloneMode = isCloneMode(getSubwaveHome());
   const wantsBuild = opts.forceBuild || policy.rebuild;
   const action: 'build' | 'recreate' | 'restart' =
@@ -142,8 +130,8 @@ async function pickService(file: ComposeFile, env: ComposeEnv): Promise<string |
       hint: policy.hint,
     };
   });
-  // In dev, the web UI runs as a host-side `npm run dev` process (not a
-  // compose service), so it isn't in `declared`. Offer it as an extra row.
+  // The dev web server isn't a compose service, so it never appears in
+  // `declared` — add it by hand.
   if (env === 'dev') {
     options.push({
       value: WEB_DEV_SERVICE,
@@ -151,8 +139,7 @@ async function pickService(file: ComposeFile, env: ComposeEnv): Promise<string |
       hint: 'kill + respawn `npm run dev` on :7700',
     });
   }
-  // Full-stack option — bounces every service AND re-reads .env. Goes at
-  // the end so the per-service rows are the visual default.
+  // Last, so the per-service rows stay the visual default.
   options.push({
     value: ALL_SERVICES,
     label: pc.bold('all services'),

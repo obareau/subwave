@@ -1,21 +1,8 @@
-// SUB/WAVE home resolution.
-//
-// The "home" is the directory where the operator's install lives —
-// compose files at the top, state/ underneath, .env at the root. Standalone
-// CLI installs put this at ~/subwave by default; cloned-repo workflows use
-// the repo root itself.
-//
-// Resolution precedence (highest wins):
-//   1. --home <path> flag passed to the CLI
-//   2. SUBWAVE_HOME environment variable
-//   3. ~/.config/subwave/config.json `home` field
-//   4. cwd, if it contains a docker-compose.yml (the cloned-repo path)
-//   5. ~/subwave, if it exists
-//
-// If none match, resolveSubwaveHome() returns null and the calling command
-// should either prompt the operator to run `subwave init` or surface a
-// helpful error. Most lifecycle commands (start/stop/logs/etc.) require a
-// resolved home — init is the only one that doesn't.
+// The "home" is where the operator's install lives — compose files at the top,
+// state/ underneath, .env at the root. A standalone install defaults to
+// ~/subwave; a cloned repo uses its own root. See resolveSubwaveHome() for the
+// precedence. Every lifecycle command needs a resolved home; `init` is the one
+// command that doesn't.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -27,7 +14,6 @@ export const DEFAULT_SUBWAVE_HOME = resolve(homedir(), 'subwave');
 
 export interface HomeConfig {
   home?: string;
-  // Future fields: lastUpdatedAt, cliVersionAtInit, telemetryOptIn, etc.
 }
 
 export function readHomeConfig(): HomeConfig {
@@ -47,10 +33,7 @@ export function writeHomeConfig(patch: Partial<HomeConfig>): HomeConfig {
   return next;
 }
 
-// Look at process.argv for `--home <path>` or `--home=<path>` and strip it
-// out so the rest of the CLI doesn't have to know about it. Returns the
-// flag value if present, otherwise null. Mutates argv in place so command
-// dispatch sees the cleaned-up arguments.
+// Mutates argv in place, so command dispatch never sees the flag.
 export function consumeHomeFlag(argv: string[]): string | null {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
@@ -69,27 +52,23 @@ export function consumeHomeFlag(argv: string[]): string | null {
   return null;
 }
 
-// Looks like a SUB/WAVE home — i.e. has a top-level docker-compose.yml.
-// Conservative on purpose: we don't try to confirm it's the right version,
-// just that it isn't some unrelated directory.
+// Deliberately shallow: this only rules out an unrelated directory, it doesn't
+// try to confirm the install's version or shape.
 export function looksLikeHome(dir: string): boolean {
   return existsSync(resolve(dir, 'docker-compose.yml'));
 }
 
 export interface ResolveOptions {
-  // Explicit override (e.g. from a --home CLI flag). Highest priority.
-  override?: string | null;
-  // If true, fall through to ~/subwave even if it doesn't exist yet.
-  // Used by `subwave init` so it can scaffold there without an error.
-  allowMissingDefault?: boolean;
+  override?: string | null; // the --home flag; beats everything
+  allowMissingDefault?: boolean; // lets `init` resolve ~/subwave before it exists
 }
 
 export interface ResolvedHome {
   home: string;
-  // Where the resolution came from — useful for diagnostics + doctor output.
   source: 'flag' | 'env' | 'config' | 'cwd' | 'default';
 }
 
+// Precedence, highest first. null means no install was found.
 export function resolveSubwaveHome(opts: ResolveOptions = {}): ResolvedHome | null {
   if (opts.override) {
     return { home: opts.override, source: 'flag' };
@@ -111,9 +90,7 @@ export function resolveSubwaveHome(opts: ResolveOptions = {}): ResolvedHome | nu
   return null;
 }
 
-// Convenience: resolve or die. Most lifecycle commands use this — they
-// can't do anything useful without a home. Prints a pointer to `subwave init`
-// before exiting.
+// Resolve or die, for the commands that can't do anything without a home.
 export function requireSubwaveHome(opts: ResolveOptions = {}): ResolvedHome {
   const r = resolveSubwaveHome(opts);
   if (r) return r;
@@ -126,11 +103,9 @@ export function requireSubwaveHome(opts: ResolveOptions = {}): ResolvedHome {
   process.exit(2);
 }
 
-// A SUBWAVE_HOME is "clone-mode" when it has the developer-only directories
-// (controller/, web/, scripts/) alongside the compose files. The
-// standalone-CLI install only has docker-compose.yml + state/ + .env.
-// Several commands (start dev, web dev hot-reload) only make sense
-// in clone-mode.
+// Clone mode = the developer-only source dirs sit alongside the compose files.
+// A standalone install has only docker-compose.yml + state/ + .env, so anything
+// that builds or hot-reloads from source is clone-only.
 export function isCloneMode(home: string): boolean {
   return (
     existsSync(resolve(home, 'controller', 'package.json')) &&

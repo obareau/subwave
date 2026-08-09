@@ -1,16 +1,17 @@
 'use client';
 
-// The inline show editor. Edits write straight through `update` onto form state;
-// nothing is saved here — the page's "Save schedule" persists shows and schedule
-// together. Keyed by show id at the call site, so switching shows remounts it
-// (which resets the AiFill box).
+// The inline show editor. Real fields bind straight to react-hook-form via
+// `control`+`index` (`shows.${index}.<field>`); nothing is saved here — Save
+// show (ShowsPanel.saveShow) persists just this one row. Keyed by show id at
+// the call site, so switching shows remounts this component (which resets the
+// AiFill box and the local genreDraft buffer — neither is form data).
 
-import type { ChangeEvent, RefObject } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import type { ChangeEvent, ReactNode, RefObject } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
+import { useController, type Control, type FieldErrors, type UseFormTrigger } from 'react-hook-form';
 import { Input } from '../../ui/input';
-import { Textarea } from '../../ui/textarea';
 import { Label } from '../../ui/label';
-import { Field } from '../../ui/field';
+import { Field, FieldTitle, FieldDescription, FieldError } from '../../ui/field';
 import {
   Select,
   SelectTrigger,
@@ -19,12 +20,14 @@ import {
   SelectItem,
   SelectGroup,
 } from '../../ui/select';
-import { Card, Btn, Eyebrow, Toggle } from '../ui';
+import { Card, Btn, Eyebrow } from '../ui';
 import { EditorDialog, EditorFooter } from '../../ui/editor-dialog';
 import { AiFill } from '../AiFill';
 import GenreSuggest from '../GenreSuggest';
-import { PersonaPicker, GuestPersonaPicker, ThemePicker, PlaylistPicker } from './ShowPickers';
+import { GuestPersonaPicker, ThemePicker, PlaylistPicker } from './ShowPickers';
 import { cn } from '../../../lib/cn';
+import { fieldAria } from '@/lib/form';
+import { SwitchField, TextField, TextareaField, ToggleGroupField } from '@/lib/form-fields';
 import {
   ANY_SENTINEL,
   DECADES,
@@ -32,18 +35,57 @@ import {
   FILTER_VALUES_MAX,
   GUESTS_MAX,
   NAME_MAX,
+  EXCLUDED_PLAYLISTS_MAX,
   PLAYLISTS_MAX,
   TOPIC_MAX,
   VOCAL_OPTIONS,
   eraLabelOf,
   sameEra,
 } from './types';
-import type { Persona, PlaylistIndexStatus, Show, SkillOption, ThemeOption } from './types';
-import { hasAnyMusicFilter, showValid } from './lib';
+import type { EraWindow, Persona, PlaylistIndexStatus, Show, ShowsFormValues, SkillOption, ThemeOption } from './types';
+import { hasAnyMusicFilter } from './lib';
 import { ChipRow } from './ChipRow';
+
+// The footer names the field the schema objected to; the schema's own keys are
+// developer-facing, so the common ones get an operator-facing label.
+const FIELD_LABELS: Record<string, string> = {
+  name: 'name',
+  personaId: 'host',
+  guestPersonaIds: 'guests',
+  maxTrackSeconds: 'track length cap',
+  segmentSkill: 'feature skill',
+  playlistIds: 'playlists',
+  excludedPlaylistIds: 'excluded playlists',
+};
+
+// react-hook-form's per-row error object nests by field name, and a couple of
+// this show's rules root on an ARRAY field (`eras.0.fromYear`) rather than a
+// scalar — walk down to the first real message rather than assuming every key
+// is a leaf `{message}`.
+function firstFieldError(errs: FieldErrors<Show> | undefined): { key: string; message: string } | null {
+  if (!errs) return null;
+  for (const key of Object.keys(errs)) {
+    const v = errs[key as keyof Show] as { message?: string } | Record<string, unknown> | undefined;
+    if (!v) continue;
+    if (typeof v.message === 'string') return { key, message: v.message };
+    const nested = firstFieldError(v as FieldErrors<Show>);
+    if (nested) return { key, message: nested.message };
+  }
+  return null;
+}
 
 interface ShowEditorProps {
   show: Show;
+  index: number;
+  control: Control<ShowsFormValues>;
+  // Only needed by personaId's/guestPersonaIds' onChange, to force the OTHER
+  // side of the host/guest cross-field `.check()` to re-surface — see the
+  // comment on the personaId Controller below for why a plain field.onChange
+  // isn't enough here.
+  trigger: UseFormTrigger<ShowsFormValues>;
+  // This row's own slice of formState.errors.shows — sourced from ShowsPanel
+  // so this component never re-derives validity of its own.
+  errors: FieldErrors<Show> | undefined;
   editorRef: RefObject<HTMLDivElement | null>;
   personas: Persona[];
   moods: string[];
@@ -60,27 +102,87 @@ interface ShowEditorProps {
   minTrackSeconds?: number;
   busy: boolean;
   isNew: boolean;       // show the AI-draft field only while creating
-  update: (patch: Partial<Show>) => void;
+  valid: boolean;
+  // The one remaining multi-field bulk patch — the AI-draft "apply" hands back
+  // several fields at once. Every keystroke field elsewhere binds straight to
+  // `control` instead, so this is its only caller (same split Task 9 drew for
+  // PersonaIdentityCard's onUpdate).
+  onApplyDraft: (patch: Partial<Show>) => void;
   onSave: () => void;   // Save show — persists just this show (POST /shows)
   onClose: () => void;
   onRemove: () => void;
 }
 
 export function ShowEditor({
-  show, editorRef, personas, moods, themes, skills, activeThemeId, genres, playlists,
+  show, index, control, trigger, errors, editorRef, personas, moods, themes, skills, activeThemeId, genres, playlists,
   playlistsStatus, apiBase,
-  adminFetch, minTrackSeconds, busy, isNew,
-  update, onSave, onClose, onRemove,
+  adminFetch, minTrackSeconds, busy, isNew, valid, onApplyDraft,
+  onSave, onClose, onRemove,
 }: ShowEditorProps) {
-  // Save show gates on THIS show only — other unsaved shows don't block it.
-  const valid = showValid(show);
-  // The editor is remounted per show, so this resets on switch.
+  const uid = useId();
+  // `index` is a runtime number, not a literal, so a plain template-literal
+  // expression widens to `string` — cast to the template-literal type
+  // FieldPath<ShowsFormValues> actually needs so every call site below
+  // typechecks against the real field name it names.
+  const path = <K extends string>(field: K) => `shows.${index}.${field}` as `shows.${number}.${K}`;
+
+  // What the schema actually objected to. The footer used to hard-code "needs
+  // a name and a persona", which was a wrong diagnosis for every OTHER reason
+  // the gate can now fail (a mood retired on /admin/moods, a track cap under a
+  // raised crossfade floor, a backwards era window) — a dead end for the
+  // operator, since both named fields were already set.
+  const gateIssue = (() => {
+    if (valid) return null;
+    const first = firstFieldError(errors);
+    if (!first) return 'this show fails validation';
+    const root = first.key.split('.')[0] ?? first.key;
+    const label = FIELD_LABELS[root] ?? root;
+    return label ? `${label}: ${first.message}` : first.message;
+  })();
+
+  // Bound to the exact object/array the control writes: `update` (the pre-RHF
+  // patch helper) is gone, and TextField/SwitchField cover the plain-value
+  // fields directly (name, topic, programme, banter). Everything with real
+  // cross-field/array work — a Radix Select empty-value sentinel, a clamping
+  // onChange, a chip input, and (below) a manual re-trigger — stays on a raw
+  // useController per lib/form-fields.tsx's own header rule.
+  //
+  // personaId (host) is a raw Controller too, NOT SelectField, even though
+  // it's otherwise plain-value-shaped: react-hook-form's lazy error
+  // population (formState.errors populates a field only once THAT field has
+  // been "seen" by a validation run that resolves an issue for it) turned out
+  // to apply per-PATH, not per-touch the way Task 9 characterised it for a
+  // freshly-appended row — confirmed empirically here by a live console trace
+  // (see the task report): switching the host to a persona already picked as
+  // a guest correctly flips `formState.isValid` to false immediately, but
+  // `formState.errors.shows[i].guestPersonaIds` stayed `{}` — the empty-array
+  // guest-check `.check()` issue is rooted at `guestPersonaIds`, a SIBLING of
+  // the field that actually changed (`personaId`), and nothing re-validated
+  // that sibling's own error entry until it was touched directly. A plain
+  // field.onChange (what SelectField gives you) can't fire that re-trigger,
+  // so Save would read as enabled off a stale `errors` tree even though
+  // `isValid` already knows better. The fix is the same one degree removed:
+  // trigger() the sibling explicitly on every change that can invalidate it.
+  const personaIdCtl = useController({ control, name: path('personaId') });
+  const personaIdAria = fieldAria(`${uid}-${path('personaId')}`, personaIdCtl.fieldState.error, { hasDescription: true });
+  const guestsCtl = useController({ control, name: path('guestPersonaIds') });
+  const themeCtl = useController({ control, name: path('themeId') });
+  const segmentSkillCtl = useController({ control, name: path('segmentSkill') });
+  const moodsCtl = useController({ control, name: path('moods') });
+  const erasCtl = useController({ control, name: path('eras') });
+  const vocalsCtl = useController({ control, name: path('vocals') });
+  const genresCtl = useController({ control, name: path('genres') });
+  const maxTrackSecondsCtl = useController({ control, name: path('maxTrackSeconds') });
+
+  // The editor is remounted per show (keyed by id at the call site), so this
+  // resets on switch — it's a text buffer, not form data.
   const [genreDraft, setGenreDraft] = useState('');
   const addGenre = (g: string) => {
     const v = g.trim().slice(0, 64);
-    if (!v || show.genres.length >= FILTER_VALUES_MAX) return;
-    if (show.genres.some(x => x.toLowerCase() === v.toLowerCase())) { setGenreDraft(''); return; }
-    update({ genres: [...show.genres, v] });
+    const current = genresCtl.field.value ?? [];
+    if (!v || current.length >= FILTER_VALUES_MAX) return;
+    if (current.some((x: string) => x.toLowerCase() === v.toLowerCase())) { setGenreDraft(''); return; }
+    genresCtl.field.onChange([...current, v]);
     setGenreDraft('');
   };
   // Genres no track carries. The controller resolves free text onto the nearest
@@ -90,8 +192,9 @@ export function ShowEditor({
   // the endpoint failed — never warn on a fetch failure.
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
   const knownGenres = useMemo(() => new Set(genres.map(norm)), [genres]);
+  const showGenres: string[] = genresCtl.field.value ?? [];
   const unknownGenres = genres.length
-    ? show.genres.filter(g => !knownGenres.has(norm(g)))
+    ? showGenres.filter(g => !knownGenres.has(norm(g)))
     : [];
   // Discoverability hint only: blocklist rules scoped to this show are edited
   // on Library → Blocked, not here — but a filter that silently loses to a rule
@@ -110,6 +213,22 @@ export function ShowEditor({
     })();
     return () => { cancelled = true; };
   }, [adminFetch, show.id]);
+
+  const guestIds: string[] = guestsCtl.field.value ?? [];
+  const eras: EraWindow[] = erasCtl.field.value ?? [];
+
+  // Guests group — a chip/card multi-select has no single labelable element,
+  // so it names itself via aria-labelledby/groupProps, same convention as
+  // BlockRulesCard's chip/checkbox fields.
+  const guestsAria = fieldAria(`${uid}-${path('guestPersonaIds')}`, guestsCtl.fieldState.error, { hasDescription: true });
+  const themeAria = fieldAria(`${uid}-${path('themeId')}`, themeCtl.fieldState.error, { hasDescription: true });
+  const segmentSkillAria = fieldAria(`${uid}-${path('segmentSkill')}`, segmentSkillCtl.fieldState.error, { hasDescription: true });
+  const moodsAria = fieldAria(`${uid}-${path('moods')}`, moodsCtl.fieldState.error, { hasDescription: true });
+  const erasAria = fieldAria(`${uid}-${path('eras')}`, erasCtl.fieldState.error, { hasDescription: true });
+  const vocalsAria = fieldAria(`${uid}-${path('vocals')}`, vocalsCtl.fieldState.error, { hasDescription: true });
+  const genresAria = fieldAria(`${uid}-${path('genres')}`, genresCtl.fieldState.error, { hasDescription: true });
+  const maxTrackSecondsAria = fieldAria(`${uid}-${path('maxTrackSeconds')}`, maxTrackSecondsCtl.fieldState.error, { hasDescription: true });
+
   return (
     <EditorDialog
       open
@@ -127,8 +246,8 @@ export function ShowEditor({
                 )}
               />
               <span className="min-w-0">
-                {!valid
-                  ? <span className="text-[var(--danger)]">this show needs a name and a persona</span>
+                {gateIssue
+                  ? <span className="text-[var(--danger)]">{gateIssue}</span>
                   : 'saves this show · schedule it on the grid, then Save schedule'}
               </span>
             </>
@@ -157,106 +276,95 @@ export function ShowEditor({
               resultKey="show"
               adminFetch={adminFetch}
               placeholder="e.g. a Sunday-morning gospel hour, warm and uplifting"
-              onApply={(s) => update({
+              onApply={(s) => onApplyDraft({
                 ...s,
                 personaId: s.personaId ?? show.personaId ?? '',
                 themeId: s.themeId ?? '',
               })}
             />
           )}
-          <Field>
-            <Label htmlFor="show-name">show name</Label>
-            <Input
-              id="show-name"
-              type="text" value={show.name} maxLength={NAME_MAX}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => update({ name: e.target.value })}
-              placeholder="e.g. The Late Shift"
-              className="text-[15px] font-bold"
-            />
-            <span className="field-hint">{show.name.trim().length}/{NAME_MAX}</span>
-          </Field>
+          <TextField control={control} name={path('name')} label="show name" placeholder="e.g. The Late Shift" maxLength={NAME_MAX} />
+          <span className="field-hint -mt-2">{show.name.trim().length}/{NAME_MAX}</span>
 
-          <Field>
-            <Label>persona owner</Label>
-            <PersonaPicker
-              personas={personas}
-              value={show.personaId}
-              onChange={id => update({
-                personaId: id,
-                // The new host can't also sit in the guest chairs.
-                guestPersonaIds: (show.guestPersonaIds || []).filter(g => g !== id),
-              })}
-              apiBase={apiBase}
-            />
-          </Field>
+          {/* Raw Controller, not SelectField — see the comment on personaIdCtl
+              above: switching the host has to re-trigger `guestPersonaIds`'
+              own error entry, a side effect SelectField's plain
+              field.onChange passthrough can't express. */}
+          <div className="field">
+            <Label {...personaIdAria.labelProps}>persona owner</Label>
+            <Select
+              value={personaIdCtl.field.value || ''}
+              onValueChange={val => {
+                personaIdCtl.field.onChange(val);
+                void trigger(path('guestPersonaIds'));
+              }}
+            >
+              <SelectTrigger {...personaIdAria.controlProps} onBlur={personaIdCtl.field.onBlur} ref={personaIdCtl.field.ref} aria-label="Persona owner">
+                <SelectValue placeholder="Pick a host" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {personas.map(p => (
+                    <SelectItem key={p.id} value={p.id}>{p.name?.trim() || 'Unnamed'}</SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <FieldDescription {...personaIdAria.descriptionProps}>
+              Who hosts this show. Changing the host after guests are picked can
+              leave a guest who is also the new host — Save will refuse and name
+              the guests field until you remove the overlap.
+            </FieldDescription>
+            <FieldError {...personaIdAria.errorProps} errors={personaIdCtl.fieldState.error ? [personaIdCtl.fieldState.error] : undefined} />
+          </div>
 
           {personas.length > 1 && (
-            <Field>
-              <Label>guest co-hosts</Label>
-              <GuestPersonaPicker
-                personas={personas.filter(p => p.id !== show.personaId)}
-                value={show.guestPersonaIds || []}
-                onChange={ids => update({ guestPersonaIds: ids })}
-                apiBase={apiBase}
-                max={GUESTS_MAX}
-              />
-              <span className="field-hint">
+            <Field data-invalid={guestsAria.invalid || undefined}>
+              <FieldTitle {...guestsAria.labelledByProps}>guest co-hosts</FieldTitle>
+              <div {...guestsAria.groupProps}>
+                <GuestPersonaPicker
+                  personas={personas.filter(p => p.id !== show.personaId)}
+                  value={guestIds}
+                  onChange={guestsCtl.field.onChange}
+                  apiBase={apiBase}
+                  max={GUESTS_MAX}
+                />
+              </div>
+              <FieldDescription {...guestsAria.descriptionProps}>
                 Optional, up to {GUESTS_MAX}. While this show airs, guests take
                 some of the talk breaks (station IDs, time checks, weather and
                 news) in their own voice. The host still drives the music and
                 track intros.
-              </span>
+              </FieldDescription>
+              <FieldError {...guestsAria.errorProps} errors={guestsCtl.fieldState.error ? [guestsCtl.fieldState.error] : undefined} />
 
-              <div className="mt-1 flex items-start gap-3">
-                <div className="pt-0.5">
-                  <Toggle
-                    on={show.banter && (show.guestPersonaIds?.length ?? 0) > 0}
-                    disabled={(show.guestPersonaIds?.length ?? 0) === 0}
-                    onClick={() => update({ banter: !show.banter })}
-                    ariaLabel="Banter breaks"
-                  />
-                </div>
-                <div className="grid gap-0.5">
-                  <Label className={(show.guestPersonaIds?.length ?? 0) === 0 ? 'opacity-40' : undefined}>
-                    Banter breaks
-                  </Label>
-                  <span className="field-hint">
-                    Short scripted back-and-forth between the host and guests,
-                    each voice rendered separately. Up to twice an hour,
-                    depending on the persona&apos;s talk frequency. Needs at
-                    least one guest.
-                  </span>
-                </div>
+              <div className="mt-1">
+                <SwitchField
+                  control={control}
+                  name={path('banter')}
+                  label="Banter breaks"
+                  disabled={guestIds.length === 0}
+                  description="Short scripted back-and-forth between the host and guests, each voice rendered separately. Up to twice an hour, depending on the persona's talk frequency. Needs at least one guest."
+                />
               </div>
             </Field>
           )}
 
           <Field>
-            <div className="flex items-start gap-3">
-              <div className="pt-0.5">
-                <Toggle
-                  on={show.programme}
-                  onClick={() => update({ programme: !show.programme })}
-                  ariaLabel="Programme (produced episode)"
-                />
-              </div>
-              <div className="grid gap-0.5">
-                <Label>Programme (produced episode)</Label>
-                <span className="field-hint">
-                  The DJ produces each airing as a full episode from the topic
-                  brief: an intro up top, a planned feature mid-hour, and a
-                  sign-off in the closing minutes. Fresh angle every episode.
-                </span>
-              </div>
-            </div>
+            <SwitchField
+              control={control}
+              name={path('programme')}
+              label="Programme (produced episode)"
+              description="The DJ produces each airing as a full episode from the topic brief: an intro up top, a planned feature mid-hour, and a sign-off in the closing minutes. Fresh angle every episode."
+            />
             {show.programme && (
               <div className="mt-2 grid gap-1">
-                <Label>feature segment skill</Label>
+                <Label {...segmentSkillAria.labelProps}>feature segment skill</Label>
                 <Select
-                  value={show.segmentSkill || ANY_SENTINEL}
-                  onValueChange={val => update({ segmentSkill: val === ANY_SENTINEL ? '' : val })}
+                  value={segmentSkillCtl.field.value || ANY_SENTINEL}
+                  onValueChange={val => segmentSkillCtl.field.onChange(val === ANY_SENTINEL ? '' : val)}
                 >
-                  <SelectTrigger aria-label="Feature segment skill">
+                  <SelectTrigger {...segmentSkillAria.controlProps} onBlur={segmentSkillCtl.field.onBlur} ref={segmentSkillCtl.field.ref} aria-label="Feature segment skill">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -268,162 +376,178 @@ export function ShowEditor({
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-                <span className="field-hint">
+                <FieldDescription {...segmentSkillAria.descriptionProps}>
                   Optional. Pin the mid-hour feature to one skill, like news for
                   a morning roundup. Producer&apos;s choice lets each episode
                   decide.
-                </span>
+                </FieldDescription>
+                <FieldError {...segmentSkillAria.errorProps} errors={segmentSkillCtl.fieldState.error ? [segmentSkillCtl.fieldState.error] : undefined} />
               </div>
             )}
           </Field>
 
-          <Field>
-            <Label>theme override (applied while this show is on air)</Label>
-            <ThemePicker
-              themes={themes}
-              activeThemeId={activeThemeId}
-              value={show.themeId}
-              onChange={id => update({ themeId: id })}
-            />
-            <span className="field-hint">
+          {/* Raw Controller, not SelectField: ThemePicker renders real colour
+              swatches per theme (a card grid, not a text dropdown) — chrome
+              SelectField's plain <select> can't express, the same reasoning
+              Task 9 kept the custom TTS engine/voice card for. No Radix
+              sentinel issue here either way; ThemePicker is plain buttons. */}
+          <Field data-invalid={themeAria.invalid || undefined}>
+            <FieldTitle {...themeAria.labelledByProps}>theme override (applied while this show is on air)</FieldTitle>
+            <div {...themeAria.groupProps}>
+              <ThemePicker
+                themes={themes}
+                activeThemeId={activeThemeId}
+                value={themeCtl.field.value || ''}
+                onChange={id => themeCtl.field.onChange(id)}
+              />
+            </div>
+            <FieldDescription {...themeAria.descriptionProps}>
               Optional. The player switches to this palette while the show airs,
               then back to the station default. Manage themes in
               Settings → Theme.
-            </span>
+            </FieldDescription>
+            <FieldError {...themeAria.errorProps} errors={themeCtl.fieldState.error ? [themeCtl.fieldState.error] : undefined} />
           </Field>
         </Card>
 
         <Card flat title="Music" bodyClass="grid gap-3.5">
-          <Field>
-            <Label>music moods</Label>
-            <ChipRow
-              options={moods.map(m => ({ key: m, label: m }))}
-              selected={show.moods}
-              onToggle={m => update({
-                moods: show.moods.includes(m)
-                  ? show.moods.filter(x => x !== m)
-                  : [...show.moods, m],
-              })}
-            />
-            <span className="field-hint">
+          <Field data-invalid={moodsAria.invalid || undefined}>
+            <FieldTitle {...moodsAria.labelledByProps}>music moods</FieldTitle>
+            <div {...moodsAria.groupProps}>
+              <ChipRow
+                options={moods.map(m => ({ key: m, label: m }))}
+                selected={moodsCtl.field.value ?? []}
+                onToggle={m => {
+                  const cur: string[] = moodsCtl.field.value ?? [];
+                  moodsCtl.field.onChange(cur.includes(m) ? cur.filter(x => x !== m) : [...cur, m]);
+                }}
+              />
+            </div>
+            <FieldDescription {...moodsAria.descriptionProps}>
               Pick any that fit; a track matching any of them qualifies. None
               selected = Any (auto), following the station&apos;s own mood.
-            </span>
+            </FieldDescription>
+            <FieldError {...moodsAria.errorProps} errors={moodsCtl.fieldState.error ? [moodsCtl.fieldState.error] : undefined} />
           </Field>
 
-          <Field>
-            <Label>eras</Label>
-            <ChipRow
-              options={DECADES.map(d => ({ key: d.key, label: d.label }))}
-              selected={DECADES.filter(d => show.eras.some(e => sameEra(e, d))).map(d => d.key)}
-              onToggle={key => {
-                const d = DECADES.find(x => x.key === key)!;
-                const existing = show.eras.find(e => sameEra(e, d));
-                update({
-                  eras: existing
-                    ? show.eras.filter(e => e !== existing)
-                    : [...show.eras, { fromYear: d.from, toYear: d.to }],
-                });
-              }}
-            />
-            {/* Custom windows (set via the API — no preset matches) stay
-                visible and removable so they can't silently constrain picks. */}
-            {show.eras.some(e => !DECADES.some(d => sameEra(e, d))) && (
-              <div className="flex flex-wrap gap-1">
-                {show.eras.filter(e => !DECADES.some(d => sameEra(e, d))).map((e, i) => (
-                  <button
-                    key={`${e.fromYear ?? ''}-${e.toYear ?? ''}-${i}`}
-                    type="button"
-                    onClick={() => update({ eras: show.eras.filter(x => x !== e) })}
-                    className="min-h-9 border border-ink bg-ink px-2 py-0.5 text-[12px] text-bg sm:min-h-0"
-                    title="Remove this custom era window"
-                  >
-                    {eraLabelOf(e)} ×
-                  </button>
-                ))}
-              </div>
-            )}
-            <span className="field-hint">
+          <Field data-invalid={erasAria.invalid || undefined}>
+            <FieldTitle {...erasAria.labelledByProps}>eras</FieldTitle>
+            <div {...erasAria.groupProps}>
+              <ChipRow
+                options={DECADES.map(d => ({ key: d.key, label: d.label }))}
+                selected={DECADES.filter(d => eras.some(e => sameEra(e, d))).map(d => d.key)}
+                onToggle={key => {
+                  const d = DECADES.find(x => x.key === key)!;
+                  const existing = eras.find(e => sameEra(e, d));
+                  erasCtl.field.onChange(
+                    existing
+                      ? eras.filter(e => e !== existing)
+                      : [...eras, { fromYear: d.from, toYear: d.to }],
+                  );
+                }}
+              />
+              {/* Custom windows (set via the API — no preset matches) stay
+                  visible and removable so they can't silently constrain picks. */}
+              {eras.some(e => !DECADES.some(d => sameEra(e, d))) && (
+                <div className="flex flex-wrap gap-1">
+                  {eras.filter(e => !DECADES.some(d => sameEra(e, d))).map((e, i) => (
+                    <button
+                      key={`${e.fromYear ?? ''}-${e.toYear ?? ''}-${i}`}
+                      type="button"
+                      onClick={() => erasCtl.field.onChange(eras.filter(x => x !== e))}
+                      className="min-h-9 border border-ink bg-ink px-2 py-0.5 text-[12px] text-bg sm:min-h-0"
+                      title="Remove this custom era window"
+                    >
+                      {eraLabelOf(e)} ×
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <FieldDescription {...erasAria.descriptionProps}>
               Pick any decades, even non-adjacent ones ({'"'}90s + 2010s{'"'}).
               None selected = any era.
-            </span>
+            </FieldDescription>
+            <FieldError {...erasAria.errorProps} errors={erasCtl.fieldState.error ? [erasCtl.fieldState.error] : undefined} />
           </Field>
 
-          <Field>
-            <Label>energy</Label>
-            <ChipRow
-              options={ENERGY_OPTIONS.map(e => ({ key: e, label: e }))}
-              selected={show.energies}
-              onToggle={e => update({
-                energies: show.energies.includes(e)
-                  ? show.energies.filter(x => x !== e)
-                  : [...show.energies, e],
-              })}
-              cap={ENERGY_OPTIONS.length}
-            />
-          </Field>
+          <ToggleGroupField
+            control={control}
+            name={path('energies')}
+            label="energy"
+            multiple
+            options={ENERGY_OPTIONS.map(e => ({ value: e, label: e }))}
+          />
 
-          <Field>
-            <Label>vocals</Label>
+          <Field data-invalid={vocalsAria.invalid || undefined}>
+            <FieldTitle {...vocalsAria.labelledByProps}>vocals</FieldTitle>
             {/* Single-valued, unlike the filters around it: instrumental and
                 vocal are mutually exclusive, and wanting both is wanting
                 neither. Picking one REPLACES the other rather than capping at
-                one selection, which would grey out the chip you're switching
-                to; clicking the selected chip clears back to any. */}
-            <ChipRow
-              options={VOCAL_OPTIONS}
-              selected={show.vocals ? [show.vocals] : []}
-              onToggle={v => update({ vocals: show.vocals === v ? '' : (v as Show['vocals']) })}
-              cap={VOCAL_OPTIONS.length}
-            />
-            <span className="field-hint">
+                one selection; clicking the selected chip clears back to any —
+                exactly the behaviour ToggleGroupField's single-select branch
+                deliberately BLOCKS (it never lets onValueChange clear to ''),
+                so this stays a raw ChipRow/Controller rather than that wrapper. */}
+            <div {...vocalsAria.groupProps}>
+              <ChipRow
+                options={VOCAL_OPTIONS}
+                selected={vocalsCtl.field.value ? [vocalsCtl.field.value] : []}
+                onToggle={v => vocalsCtl.field.onChange(vocalsCtl.field.value === v ? '' : v)}
+                cap={VOCAL_OPTIONS.length}
+              />
+            </div>
+            <FieldDescription {...vocalsAria.descriptionProps}>
               None selected = any. Backed by vocal-activity analysis, so it only
               steers tracks that have had a vocal pass — on a library without
               one it simply doesn&apos;t apply, and the show plays as before.
-            </span>
+            </FieldDescription>
+            <FieldError {...vocalsAria.errorProps} errors={vocalsCtl.fieldState.error ? [vocalsCtl.fieldState.error] : undefined} />
           </Field>
 
-          <Field>
-            <Label htmlFor="show-genre">genre leans</Label>
-            {show.genres.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {show.genres.map(g => (
-                  <button
-                    key={g}
-                    type="button"
-                    onClick={() => update({ genres: show.genres.filter(x => x !== g) })}
-                    className="min-h-9 border border-ink bg-ink px-2 py-0.5 text-[12px] text-bg sm:min-h-0"
-                    title="Remove this genre"
-                  >
-                    {g} ×
-                  </button>
-                ))}
+          <Field data-invalid={genresAria.invalid || undefined}>
+            <FieldTitle {...genresAria.labelledByProps}>genre leans</FieldTitle>
+            <div {...genresAria.groupProps}>
+              {showGenres.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {showGenres.map(g => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => genresCtl.field.onChange(showGenres.filter(x => x !== g))}
+                      className="min-h-9 border border-ink bg-ink px-2 py-0.5 text-[12px] text-bg sm:min-h-0"
+                      title="Remove this genre"
+                    >
+                      {g} ×
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="flex min-w-0 gap-2">
+                <Input
+                  id={`${uid}-show-genre`}
+                  type="text" value={genreDraft} maxLength={64}
+                  list={`${uid}-show-genre-options`}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setGenreDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addGenre(genreDraft); } }}
+                  placeholder={showGenres.length ? 'add another genre' : 'e.g. Jazz (optional)'}
+                  disabled={showGenres.length >= FILTER_VALUES_MAX}
+                />
+                <Btn
+                  className="min-h-9 flex-none sm:min-h-0"
+                  onClick={() => addGenre(genreDraft)}
+                  disabled={!genreDraft.trim() || showGenres.length >= FILTER_VALUES_MAX}
+                >
+                  Add
+                </Btn>
               </div>
-            )}
-            <div className="flex min-w-0 gap-2">
-              <Input
-                id="show-genre"
-                type="text" value={genreDraft} maxLength={64}
-                list="show-genre-options"
-                onChange={(e: ChangeEvent<HTMLInputElement>) => setGenreDraft(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addGenre(genreDraft); } }}
-                placeholder={show.genres.length ? 'add another genre' : 'e.g. Jazz (optional)'}
-                disabled={show.genres.length >= FILTER_VALUES_MAX}
-              />
-              <Btn
-                className="min-h-9 flex-none sm:min-h-0"
-                onClick={() => addGenre(genreDraft)}
-                disabled={!genreDraft.trim() || show.genres.length >= FILTER_VALUES_MAX}
-              >
-                Add
-              </Btn>
+              <datalist id={`${uid}-show-genre-options`}>
+                {[...genres].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })).map(g => <option key={g} value={g} />)}
+              </datalist>
             </div>
-            <datalist id="show-genre-options">
-              {[...genres].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })).map(g => <option key={g} value={g} />)}
-            </datalist>
-            <span className="field-hint">
+            <FieldDescription {...genresAria.descriptionProps}>
               Up to {FILTER_VALUES_MAX}; a track matching any of them qualifies.
-            </span>
+            </FieldDescription>
+            <FieldError {...genresAria.errorProps} errors={genresCtl.fieldState.error ? [genresCtl.fieldState.error] : undefined} />
             {unknownGenres.length > 0 && (
               <span role="alert" className="field-hint text-vermilion">
                 No track in your library is tagged{' '}
@@ -444,27 +568,13 @@ export function ShowEditor({
             onSelect={addGenre}
           />
 
-          <div className="flex items-start gap-3">
-            <div className="pt-0.5">
-              <Toggle
-                on={show.filtersStrict}
-                disabled={!hasAnyMusicFilter(show)}
-                onClick={() => update({ filtersStrict: !show.filtersStrict })}
-                ariaLabel="Strict filter"
-              />
-            </div>
-            <div className="grid gap-0.5">
-              <Label className={!hasAnyMusicFilter(show) ? 'opacity-40' : undefined}>
-                Strict filter
-              </Label>
-              <span className="field-hint">
-                Hard-enforces every filter set above (mood, era, energy,
-                genre); off-filter tracks play only as a last resort. When off,
-                they&apos;re soft leans the DJ can break for flow. Needs at
-                least one filter set.
-              </span>
-            </div>
-          </div>
+          <SwitchField
+            control={control}
+            name={path('filtersStrict')}
+            label="Strict filter"
+            disabled={!hasAnyMusicFilter(show)}
+            description="Hard-enforces every filter set above (mood, era, energy, genre); off-filter tracks play only as a last resort. When off, they're soft leans the DJ can break for flow. Needs at least one filter set."
+          />
 
           <span className="field-hint -mt-1.5">
             Optional steer for this show: mood, genre, era, energy, or any mix.
@@ -474,58 +584,48 @@ export function ShowEditor({
           </span>
 
           <Field>
-            <Label>playlist anchor</Label>
-            <span className="field-hint">
-              Pin one or more Navidrome playlists and their combined tracks
-              become this show&apos;s pool. The AI DJ still sequences and talks
-              over them. Pick none to let genre/era/mood drive selection
-              (up to 10).
-            </span>
-            <PlaylistPicker
+            <PlaylistIdsField
+              control={control}
+              name={path('playlistIds')}
               playlists={playlists}
               status={playlistsStatus}
-              selected={show.playlistIds}
               max={PLAYLISTS_MAX}
-              onChange={playlistIds => update({ playlistIds })}
-            />
+              label="playlist anchor"
+            >
+              <span className="field-hint">
+                Pin one or more Navidrome playlists and their combined tracks
+                become this show&apos;s pool. The AI DJ still sequences and talks
+                over them. Pick none to let genre/era/mood drive selection
+                (up to 10).
+              </span>
+            </PlaylistIdsField>
           </Field>
 
           {show.playlistIds.length > 0 && (
-            <div className="flex items-start gap-3">
-              <div className="pt-0.5">
-                <Toggle
-                  on={show.playlistStrict}
-                  onClick={() => update({ playlistStrict: !show.playlistStrict })}
-                  ariaLabel="Playlist only (strict)"
-                />
-              </div>
-              <div className="grid gap-0.5">
-                <Label>Playlist only (strict)</Label>
-                <span className="field-hint">
-                  On: play only the pinned playlist(s); off-playlist tracks air
-                  only as a last resort. Off: the playlist dominates but the DJ
-                  can still wander for variety. Listener requests always get
-                  through, either way.
-                </span>
-              </div>
-            </div>
+            <SwitchField
+              control={control}
+              name={path('playlistStrict')}
+              label="Playlist only (strict)"
+              description="On: play only the pinned playlist(s); off-playlist tracks air only as a last resort. Off: the playlist dominates but the DJ can still wander for variety. Listener requests always get through, either way."
+            />
           )}
 
           <Field>
-            <Label>excluded playlists</Label>
-            <span className="field-hint">
-              Tracks from these playlists never play during this show, whatever
-              the other filters say. Handy for blocking genres or moods that
-              don&apos;t fit: gather them in a Navidrome playlist and exclude it
-              here (up to 10).
-            </span>
-            <PlaylistPicker
+            <PlaylistIdsField
+              control={control}
+              name={path('excludedPlaylistIds')}
               playlists={playlists}
               status={playlistsStatus}
-              selected={show.excludedPlaylistIds}
-              max={PLAYLISTS_MAX}
-              onChange={excludedPlaylistIds => update({ excludedPlaylistIds })}
-            />
+              max={EXCLUDED_PLAYLISTS_MAX}
+              label="excluded playlists"
+            >
+              <span className="field-hint">
+                Tracks from these playlists never play during this show, whatever
+                the other filters say. Handy for blocking genres or moods that
+                don&apos;t fit: gather them in a Navidrome playlist and exclude it
+                here (up to 10).
+              </span>
+            </PlaylistIdsField>
           </Field>
 
           {scopedRuleCount > 0 && (
@@ -538,48 +638,82 @@ export function ShowEditor({
         </Card>
 
         <Card flat title="Brief" bodyClass="grid gap-3.5">
-          <Field>
-            <Label htmlFor="show-topic">topic (fed to the DJ as the show theme)</Label>
-            <span className="field-hint">
-              The brief the AI DJ works from. The more you describe, the better
-              it picks music and writes links: genres, eras, moods, artists to
-              lean into or avoid, time of day, the listener, how the host should
-              sound. Write it like you&apos;re briefing a real DJ before their
-              slot.
-            </span>
-            <Textarea
-              id="show-topic"
-              rows={7} value={show.topic} maxLength={TOPIC_MAX}
-              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => update({ topic: e.target.value })}
-              placeholder="e.g. Slow ambient, modern classical and downtempo for the late shift. Think Nils Frahm, Hammock, Bonobo's quieter side, nothing with a hard beat. Keep the host calm and unhurried, like a friend talking you down at 1am."
-            />
-            <span className="field-hint">{show.topic.trim().length}/{TOPIC_MAX}</span>
-          </Field>
+          <TextareaField
+            control={control}
+            name={path('topic')}
+            label="topic (fed to the DJ as the show theme)"
+            rows={7}
+            placeholder="e.g. Slow ambient, modern classical and downtempo for the late shift. Think Nils Frahm, Hammock, Bonobo's quieter side, nothing with a hard beat. Keep the host calm and unhurried, like a friend talking you down at 1am."
+            description="The brief the AI DJ works from. The more you describe, the better it picks music and writes links: genres, eras, moods, artists to lean into or avoid, time of day, the listener, how the host should sound. Write it like you're briefing a real DJ before their slot."
+            maxLength={TOPIC_MAX}
+          />
+          <span className="field-hint -mt-2">{show.topic.trim().length}/{TOPIC_MAX}</span>
 
-          <Field>
-            <Label htmlFor="show-maxlen">max track length (seconds)</Label>
+          {/* Raw Controller: a clamping onChange (floors at 0, coerces a bad
+              parseInt to 0) is real work TextField's plain field.onChange
+              passthrough doesn't expose. */}
+          <div className="field">
+            <Label {...maxTrackSecondsAria.labelProps}>max track length (seconds)</Label>
             <Input
-              id="show-maxlen"
+              {...maxTrackSecondsAria.controlProps}
               type="number"
               min={0}
               max={36000}
               placeholder="inherit"
-              value={show.maxTrackSeconds ?? ''}
+              value={maxTrackSecondsCtl.field.value ?? ''}
               onChange={(e: ChangeEvent<HTMLInputElement>) => {
                 const raw = e.target.value.trim();
-                update({ maxTrackSeconds: raw === '' ? null : Math.max(0, parseInt(raw, 10) || 0) });
+                maxTrackSecondsCtl.field.onChange(raw === '' ? null : Math.max(0, parseInt(raw, 10) || 0));
               }}
+              onBlur={maxTrackSecondsCtl.field.onBlur}
+              ref={maxTrackSecondsCtl.field.ref}
             />
-            <span className="field-hint">
+            <FieldDescription {...maxTrackSecondsAria.descriptionProps}>
               The longest a single track plays during this show; anything longer
               fades out at the limit. Blank uses the station limit, 0 means no
               limit (good for long mixes or DJ sets), or set at
               least {minTrackSeconds ?? 30}s to cap it here.
-            </span>
-          </Field>
+            </FieldDescription>
+            <FieldError {...maxTrackSecondsAria.errorProps} errors={maxTrackSecondsCtl.fieldState.error ? [maxTrackSecondsCtl.fieldState.error] : undefined} />
+          </div>
         </Card>
       </div>
     </EditorDialog>
   );
 }
 
+// Shared shape for the two playlist checkbox groups (anchor + exclusions) —
+// same PlaylistPicker, different field path and cap, each with its own group
+// ARIA. A tiny local component rather than repeating the useController +
+// fieldAria boilerplate twice inline.
+function PlaylistIdsField({
+  control, name, playlists, status, max, label, children,
+}: {
+  control: Control<ShowsFormValues>;
+  name: `shows.${number}.playlistIds` | `shows.${number}.excludedPlaylistIds`;
+  playlists: { id: string; name: string; songCount: number | null }[];
+  status: PlaylistIndexStatus;
+  max: number;
+  label: string;
+  children?: ReactNode;
+}) {
+  const uid = useId();
+  const { field, fieldState } = useController({ control, name });
+  const aria = fieldAria(`${uid}-${name}`, fieldState.error);
+  return (
+    <>
+      <FieldTitle {...aria.labelledByProps}>{label}</FieldTitle>
+      {children}
+      <div {...aria.groupProps}>
+        <PlaylistPicker
+          playlists={playlists}
+          status={status}
+          selected={field.value ?? []}
+          max={max}
+          onChange={field.onChange}
+        />
+        <FieldError {...aria.errorProps} errors={fieldState.error ? [fieldState.error] : undefined} />
+      </div>
+    </>
+  );
+}

@@ -1,14 +1,19 @@
 'use client';
-import type { Persona, SkillCatalogEntry } from './types';
+// A checklist, not one of the five bound shapes — wired through its own
+// `useController` on the whole `skills` array field.
+import { useController, type Control } from 'react-hook-form';
+import type { PersonasFormValues, SkillCatalogEntry } from './types';
 import { Card, Toggle } from '../ui';
 
 interface PersonaSkillsCardProps {
-  persona: Persona;
+  index: number;
+  control: Control<PersonasFormValues>;
   skillCatalog: SkillCatalogEntry[];
-  setSkills: (skills: string[]) => void;
 }
 
-export function PersonaSkillsCard({ persona, skillCatalog, setSkills }: PersonaSkillsCardProps) {
+export function PersonaSkillsCard({ index, control, skillCatalog }: PersonaSkillsCardProps) {
+  const { field } = useController({ control, name: `personas.${index}.skills` });
+  const skills = field.value;
   // Skills switched off station-wide can never fire regardless of the ticks
   // here, so listing them only invites toggles that do nothing. Older
   // controllers omit `enabled` — treat absent as on.
@@ -26,7 +31,7 @@ export function PersonaSkillsCard({ persona, skillCatalog, setSkills }: PersonaS
       ) : (
         <div className="grid gap-x-8 sm:grid-cols-2">
           {enabledSkills.map(s => {
-            const on = persona.skills.includes(s.name);
+            const on = skills.includes(s.name);
             return (
               <div
                 key={s.name}
@@ -40,10 +45,8 @@ export function PersonaSkillsCard({ persona, skillCatalog, setSkills }: PersonaS
                 </div>
                 <Toggle
                   on={on}
-                  onClick={() => setSkills(
-                    on
-                      ? persona.skills.filter(n => n !== s.name)
-                      : [...persona.skills, s.name],
+                  onClick={() => field.onChange(
+                    on ? skills.filter(n => n !== s.name) : [...skills, s.name],
                   )}
                   ariaLabel={`Allow ${s.label || s.name}`}
                 />

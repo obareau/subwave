@@ -11,6 +11,11 @@
 // truncates a published show on the way in. Nothing else catches those — the
 // symptom is silent, not a crash.
 //
+// NOTE on the regexes below: the field name now arrives as a dotted PREFIX
+// ('shows.0.genres: must have at most 15 entries') rather than inline in the
+// message, because the shared schema's errors go through firstMessage(). The
+// patterns pin the FIELD and the RULE without pinning the separator between
+// them — wording was never the contract here, accept-vs-reject is.
 // Run: npm test -- show-filter-cap
 
 import assert from 'node:assert/strict';
@@ -58,7 +63,7 @@ test('validator accepts exactly the cap and rejects one over — genres', () => 
   assert.equal(ok[0].genres.length, SHOW_FILTER_VALUES_MAX);
   assert.throws(
     () => validateShowsStrict(showWith({ genres: genreList(SHOW_FILTER_VALUES_MAX + 1) }), personas, themes),
-    /genres must have at most/,
+    /genres.*must have at most/,
   );
 });
 
@@ -70,7 +75,7 @@ test('validator accepts exactly the cap and rejects one over — eras', () => {
   assert.equal(ok[0].eras.length, SHOW_FILTER_VALUES_MAX);
   assert.throws(
     () => validateShowsStrict(showWith({ eras }), personas, themes),
-    /eras must have at most/,
+    /eras.*must have at most/,
   );
 });
 
@@ -83,7 +88,7 @@ test('validator rejects one over the cap — moods', () => {
   }
   assert.throws(
     () => validateShowsStrict(showWith({ moods: SHOW_MOODS.slice(0, SHOW_FILTER_VALUES_MAX + 1) }), personas, themes),
-    /moods must have at most/,
+    /moods.*must have at most/,
   );
 });
 
@@ -98,14 +103,21 @@ test('the loader truncates at the same cap it validates against', () => {
   assert.equal(moods.length, SHOW_FILTER_VALUES_MAX);
 });
 
-test('web admin mirror (FILTER_VALUES_MAX) matches the controller cap', () => {
+test('the admin UI derives the cap from the schema mirror, not a copy', () => {
+  // This used to scrape a hardcoded number out of the web file and compare it.
+  // The cap now comes from the shared show schema, mirrored into
+  // web/lib/schemas.generated.ts and drift-checked by CI, so equality is
+  // structural and there is nothing left to compare. What IS still worth
+  // pinning is that nobody reintroduces a literal — the failure mode the
+  // original test existed for.
   const src = readFileSync(resolve(here, '../../web/components/admin/shows/types.ts'), 'utf8');
-  const m = src.match(/export const FILTER_VALUES_MAX = (\d+);/);
+  const m = src.match(/export const FILTER_VALUES_MAX = (.+);/);
   assert.ok(m, 'FILTER_VALUES_MAX not found in web/components/admin/shows/types.ts');
   assert.equal(
-    Number(m![1]), SHOW_FILTER_VALUES_MAX,
-    `web mirror is ${m![1]}, controller cap is ${SHOW_FILTER_VALUES_MAX}`,
+    m![1], 'SHOW_FILTER_VALUES_MAX',
+    `FILTER_VALUES_MAX is "${m![1]}" — it must be the schema mirror's constant, not a copy`,
   );
+  assert.match(src, /from '@\/lib\/schemas\.generated'/);
 });
 
 test('community-catalog import does not truncate below the cap', () => {

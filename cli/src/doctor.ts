@@ -1,12 +1,8 @@
-// Diagnostic engine. Pure data — no rendering, no prompts. Returns a
-// structured report that commands/doctor.ts (and, later, the watch
-// dashboard) can render however they want.
-//
-// Scope is deliberately the "first hour" of operator concerns: is Docker
-// alive, is the stack up, is the controller responding, is Icecast serving
-// audio, are the bind-mounted state dirs OK. Deeper checks (Subsonic auth,
-// Ollama responsiveness, library coverage) come in v2 once we've added
-// supporting controller endpoints.
+// Diagnostic engine. Pure data — no rendering, no prompts, so callers own the
+// presentation. Scope is deliberately the "first hour" of operator concerns:
+// Docker alive, stack up, controller answering, Icecast serving, state dirs
+// writable. Deeper checks (Subsonic auth, Ollama responsiveness, library
+// coverage) need controller endpoints that don't exist yet.
 
 import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -46,8 +42,7 @@ export async function runDoctor(): Promise<DoctorReport> {
   sections.push({ name: 'Compose', findings: checkCompose(compose) });
   sections.push({ name: 'Controller', findings: await checkController(compose) });
   sections.push({ name: 'Icecast', findings: await checkIcecast(compose) });
-  // Web dev server only exists in dev mode (in prod it's a compose service
-  // and Compose section already covers it).
+  // In prod the web server is a compose service, already covered above.
   if (compose.env === 'dev') {
     sections.push({ name: 'Web (dev)', findings: await checkWebDev() });
   }
@@ -62,8 +57,6 @@ export async function runDoctor(): Promise<DoctorReport> {
 
   return { sections, compose, counts };
 }
-
-// --- individual sections ----------------------------------------------------
 
 function checkHost(): Finding[] {
   const out: Finding[] = [];
@@ -90,9 +83,8 @@ function checkHost(): Finding[] {
 function checkCompose(compose: ComposeStatus): Finding[] {
   const out: Finding[] = [];
 
-  // Compose freshness runs regardless of up/down — the files live on disk
-  // whether or not the stack is running, and a standalone install can drift
-  // behind the binary's embedded copies (see #1043).
+  // Runs whether or not the stack is up — the files are on disk either way, and
+  // a standalone install can drift behind the binary's embedded copies (#1043).
   const freshness = composeFreshnessFinding();
   if (freshness) out.push(freshness);
 
@@ -112,8 +104,7 @@ function checkCompose(compose: ComposeStatus): Finding[] {
     detail: `${compose.env} — ${compose.file?.file}`,
   });
 
-  // Per-service status. "running" is green; "restarting" is a warn (could be
-  // healthy boot-up, could be a crash loop); anything else fails.
+  // "restarting" only warns — it's a healthy boot-up as often as a crash loop.
   const entries = Object.entries(compose.services);
   if (entries.length === 0) {
     out.push({
@@ -134,10 +125,9 @@ function checkCompose(compose: ComposeStatus): Finding[] {
   return out;
 }
 
-// Are the on-disk compose files + .env.example still what this CLI would
-// write? Only `subwave sync` re-materialises them, so an install scaffolded
-// before a service was added stays behind until the operator syncs (#1043).
-// Clone/dev installs (git-owned compose) and undeterminable shapes are skipped.
+// Only `subwave sync` re-materialises these, so an install scaffolded before a
+// service was added stays behind until the operator syncs (#1043). Skipped for
+// clone/dev installs, where git owns the compose files.
 function composeFreshnessFinding(): Finding | null {
   const home = getSubwaveHome();
   if (isCloneMode(home)) return null;
@@ -209,11 +199,10 @@ async function checkController(compose: ComposeStatus): Promise<Finding[]> {
       });
     }
 
-    // Setup status. When operators install via `subwave init` → `start`
-    // they reach a running stack without ever connecting Navidrome + LLM,
-    // which leaves the picker starved and produces a cascade of downstream
-    // warnings (empty auto.m3u, /stream.mp3 404, stream offline). Surface
-    // the root cause directly so the summary points at setup, not symptoms.
+    // `init` → `start` reaches a running stack with no Navidrome or LLM, which
+    // starves the picker and cascades into unrelated-looking warnings (empty
+    // auto.m3u, /stream.mp3 404, stream offline). Name the root cause so the
+    // summary points at setup rather than at the symptoms.
     const needsSetup = await checkNeedsSetup(compose.env);
     if (needsSetup === true) {
       out.push({
@@ -229,10 +218,9 @@ async function checkController(compose: ComposeStatus): Promise<Finding[]> {
     }
   }
 
-  // Admin creds. Required in prod (controller exits without them); just a
-  // warn in dev (auth is optional there). Root .env is the source of truth;
-  // we also check the legacy controller/.env so an upgrader with old config
-  // doesn't get a confusing "missing" warning while their stack is still up.
+  // Required in prod (the controller exits without them), optional in dev. The
+  // legacy controller/.env is checked too, so an upgrader running on old config
+  // isn't told they're "missing" while their stack is plainly up.
   const rootEnv = parseEnvFile(getRootEnv());
   const legacyEnv = parseEnvFile(getLegacyControllerEnv());
   const credSource =
@@ -261,18 +249,14 @@ async function checkIcecast(compose: ComposeStatus): Promise<Finding[]> {
   if (compose.env === 'down') {
     return [{ label: '/stream.mp3', status: 'skip', detail: 'stack down' }];
   }
-  // In prod the stream is exposed via Caddy on :7700; in dev and prod-byo
-  // Icecast itself listens on its mapped host port. streamUrlFor() honours
-  // the BYO ICECAST_PORT override transparently.
   const url = streamUrlFor(compose.env);
   try {
-    // HEAD wouldn't tell us much (Icecast streams forever); GET with a tight
-    // abort once we see the response headers is enough.
+    // Icecast streams forever, so HEAD tells us little and the body never ends:
+    // GET, read the headers, hang up.
     const res = await fetch(url, {
       method: 'GET',
       signal: AbortSignal.timeout(3000),
     });
-    // Don't await the body — it never ends. Just consume the headers.
     try { await res.body?.cancel(); } catch { /* ignore */ }
     const ct = res.headers.get('content-type') ?? '';
     if (res.ok && ct.includes('audio/mpeg')) {
@@ -284,14 +268,11 @@ async function checkIcecast(compose: ComposeStatus): Promise<Finding[]> {
       detail: `${res.status} · ${ct || 'no content-type'}`,
     }];
   } catch (e) {
-    // AbortError after the response headers arrived is fine — that's how we
-    // hang up on the infinite stream body. fetch surfaces it as a generic
-    // abort with no response, but if it aborts that quickly we already got
-    // a connection so let's check whether headers were available... we
-    // can't, so just report fail with the reason.
+    // An abort is ambiguous here: fetch reports it with no response, so we
+    // can't tell "hung up on the endless body" (fine) from a real stall. Warn
+    // rather than fail — a connection did open.
     const reason = fetchErrorReason(e);
     if (reason === 'TimeoutError' || reason === 'AbortError') {
-      // Treat timeout-during-stream as a "probably-ok-but-couldn't-confirm".
       return [{
         label: '/stream.mp3',
         status: 'warn',
@@ -310,9 +291,8 @@ async function checkIcecast(compose: ComposeStatus): Promise<Finding[]> {
 async function checkWebDev(): Promise<Finding[]> {
   const out: Finding[] = [];
 
-  // Port holder. ControlCenter on :7700 is the macOS AirPlay Receiver — the
-  // single most common false collision; call it out explicitly so operators
-  // don't waste time guessing.
+  // ControlCenter on :7700 is the macOS AirPlay Receiver — by far the most
+  // common false collision, so name it rather than let operators guess.
   const holder = whoHolds7700();
   if (!holder) {
     out.push({
@@ -342,9 +322,8 @@ async function checkWebDev(): Promise<Finding[]> {
     return out;
   }
 
-  // Cross-check the pid file. If the CLI started this dev server, the pid
-  // file should match — otherwise it's an outside-spawned next dev (fine,
-  // but worth noting because `subwave stop` won't have a pid to consult).
+  // A mismatch means an outside-spawned `next dev` — fine, but worth saying,
+  // because `subwave stop` will have no pid to consult.
   const trackedPid = readWebDevPid();
   out.push({
     label: ':7700',
@@ -354,8 +333,7 @@ async function checkWebDev(): Promise<Finding[]> {
       : `node pid ${holder.pid} · not started by this CLI`,
   });
 
-  // HTTP probe — proves Next is actually compiled and serving, not just
-  // bound to the socket.
+  // Proves Next actually compiled and is serving, not just holding the socket.
   try {
     const res = await fetch('http://localhost:7700', {
       signal: AbortSignal.timeout(3000),
@@ -457,8 +435,8 @@ function checkContent(): Finding[] {
     if (lines.length === 0) {
       out.push({ label: 'jingles.m3u', status: 'warn', detail: 'empty — no station idents' });
     } else {
-      // Sanity-check that each line resolves to an existing file. The M3U
-      // points at /var/sub-wave/jingles/<file>; we map that to state/jingles.
+      // The M3U holds container paths (/var/sub-wave/jingles/…) — map them back
+      // to the host's state/jingles to check the files exist.
       const missing: string[] = [];
       for (const line of lines) {
         const file = line.replace(/^\/var\/sub-wave\/jingles\//, '');
@@ -483,12 +461,9 @@ function checkContent(): Finding[] {
 
 function checkLogs(compose: ComposeStatus): Finding[] {
   const radioLog = resolve(getStateDir(), 'logs', 'radio.log');
-  // 64 KB of tail is plenty for "errors in the last few minutes" —
-  // Liquidsoap is chatty but not absurdly so.
-  const TAIL_BYTES = 64 * 1024;
+  const TAIL_BYTES = 64 * 1024; // Liquidsoap is chatty; this covers minutes
   let tail: string | null = null;
 
-  // Fast path: read the host-side file directly.
   try {
     if (existsSync(radioLog)) {
       const size = statSync(radioLog).size;
@@ -496,13 +471,10 @@ function checkLogs(compose: ComposeStatus): Finding[] {
       tail = fd.subarray(fd.length - Math.min(size, TAIL_BYTES)).toString('utf8');
     }
   } catch {
-    // Liquidsoap creates radio.log mode 0600 owned by its in-container uid
-    // (10000), so the host operator hits EACCES reading it directly. Fall
-    // through to reading it from inside the container, where `exec` runs as
-    // that same uid and can read its own file.
+    // radio.log is mode 0600 owned by Liquidsoap's in-container uid, so the
+    // host read can EACCES. `exec` runs as that uid and can read its own file.
   }
 
-  // Fallback: tail it from inside the liquidsoap container.
   if (tail === null && compose.env !== 'down' && compose.file) {
     const r = composeExec(compose.file, 'broadcast', [
       'tail', '-c', String(TAIL_BYTES), '/var/log/liquidsoap/radio.log',
@@ -547,8 +519,7 @@ function isWritable(path: string): boolean {
   }
 }
 
-// Convenience for the future watch dashboard: scan state/sessions for the
-// most recent archive. Not used by v1 doctor but cheap to expose.
+// Unused today — kept for the planned watch dashboard.
 export function newestSessionFile(): { id: string; mtime: number } | null {
   const dir = resolve(getStateDir(), 'sessions');
   if (!existsSync(dir)) return null;

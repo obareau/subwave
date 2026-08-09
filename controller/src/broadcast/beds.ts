@@ -23,6 +23,7 @@
 
 import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
+import { BED_MIN_SEC } from '../schemas/imaging.js';
 import { transcodeAudio, hasFfmpeg, extOf, isAcceptedAudio, probeDurationSec } from '../audio/audio-import.js';
 import { generateBed, BED_GEN_MAX_SEC } from '../audio/bed-gen.js';
 import { escAnnotate } from '../music/subsonic.js';
@@ -33,8 +34,9 @@ import { slugify } from '../util/slug.js';
 // never looped, so it has to outlast the script it carries — bed-policy filters
 // per-link on the real number, and this is the upload-time footgun guard. 30s
 // covers a typical link with room; anything shorter is almost certainly a
-// stinger that wandered into the wrong library.
-export const MIN_DURATION_SEC = 30;
+// stinger that wandered into the wrong library. The figure lives in the shared
+// imaging schema so the admin form and this module can't disagree.
+export const MIN_DURATION_SEC = BED_MIN_SEC;
 
 const DIR = `${STATE_DIR}/beds`;
 const META = `${STATE_DIR}/beds.json`;

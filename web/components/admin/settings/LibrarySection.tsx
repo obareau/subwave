@@ -51,7 +51,7 @@ interface LibrarySectionProps extends SectionProps {
   refresh: () => void;
 }
 
-export function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: LibrarySectionProps) {
+export function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LibrarySectionProps) {
   const e = form.embedding;
   const [embeddingKeyInput, setEmbeddingKeyInput] = useState('');
   const [compatEmbedKeyInput, setCompatEmbedKeyInput] = useState('');
@@ -857,6 +857,8 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         busy={busy}
         onSave={save}
         saveLabel="Save library tagger"
+        errors={fieldErrors}
+        ownedKeys={['embedding', 'audio']}
       />
     </>
   );

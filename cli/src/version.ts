@@ -1,25 +1,17 @@
-// Version-pin helpers shared by `subwave init` (writes the pin) and
-// `subwave update` (moves it).
-//
-// Why pin at all: the compose files embedded in the CLI binary are frozen at
-// its build tag, but every image ref in them resolves `${SUBWAVE_VERSION:-latest}`
-// — so an un-pinned install floats on `:latest`, which can drift ahead of the
-// frozen compose files the binary carries. Pinning SUBWAVE_VERSION to the
-// CLI's own release keeps the images and the compose files in lockstep.
+// Version-pin helpers, shared by `subwave init` (writes the pin) and
+// `subwave update` (moves it). The compose files embedded in the binary are
+// frozen at its build tag while their image refs resolve
+// `${SUBWAVE_VERSION:-latest}`, so an unpinned install floats on :latest and can
+// drift ahead of the very compose files it's running. Pinning to the CLI's own
+// release keeps the two in lockstep.
 
 import { CLI_VERSION } from './assets.ts';
 
-// The GHCR image tag published for this CLI's release, or null for a dev build.
-//
-// publish-images.yml tags images via docker/metadata-action `{{version}}`,
-// which is semver WITHOUT the leading `v` (git tag `v0.35.0` → image tag
-// `0.35.0`). CLI_VERSION is baked from cli/package.json#version by
-// embed-assets, which is already that bare semver — so it maps 1:1.
-//
-// Dev/placeholder guard: a source build without a release-please bump can
-// carry `0.0.0` (or some non-semver string). We must never pin to a tag that
-// was never published, so anything that doesn't look like a real release
-// returns null and callers fall back to the historical `:latest` behaviour.
+// publish-images.yml tags images with bare semver — git tag `v0.35.0` becomes
+// image tag `0.35.0` — and CLI_VERSION is that same bare semver, so they map
+// 1:1. A source build with no release-please bump carries `0.0.0` or worse:
+// never pin to a tag that was never published, so anything that doesn't look
+// like a real release returns null and the caller stays on :latest.
 export function cliImageTag(): string | null {
   const v = CLI_VERSION.trim().replace(/^v/, '');
   if (!/^\d+\.\d+\.\d+/.test(v)) return null;
@@ -27,13 +19,10 @@ export function cliImageTag(): string | null {
   return v;
 }
 
-// Rewrite an uncommented `SUBWAVE_VERSION=` pin to `target`, editing ONLY that
-// one line and leaving the rest of the file byte-for-byte intact. Returns the
-// new text + the previous value on a move, or null when there's nothing to do:
-//   - no uncommented SUBWAVE_VERSION line (fresh pre-pin install → stays on :latest)
-//   - the pin already equals `target`
-//   - the pin follows a non-version tag (`latest`, `sha-…`, empty) — a
-//     deliberate follow mode we must not silently convert into a fixed pin.
+// Edits ONLY the pin line, leaving the rest of the file byte-for-byte intact.
+// null means nothing to do — no pin line, the pin already equals `target`, or
+// the pin follows a non-version tag (`latest`, `sha-…`), which is a deliberate
+// follow mode and must never be silently converted into a fixed pin.
 export function movePinInEnv(
   envText: string,
   target: string,

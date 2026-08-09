@@ -5,18 +5,20 @@
 
 import type { ChangeEvent } from 'react';
 import { useRef, useState } from 'react';
+import { Controller, useWatch, type Control } from 'react-hook-form';
 import { Trash2 } from 'lucide-react';
 import { fmtSize } from '../../../lib/format';
 import { Modal } from '../../ui/modal';
-import { Input } from '../../ui/input';
-import { Label } from '../../ui/label';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
 import { V3Alert } from '../../ui/alert';
 import { SkeletonCards } from '@/components/ui/skeleton';
 import { Btn } from '../ui';
 import { PreviewButton } from '../settings/shared';
-import type { VoiceData } from './types';
+import { IMAGING_NAME_MAX, voiceImportSchema } from '@/lib/schemas.generated';
+import { useZodForm, applyServerFieldErrors } from '@/lib/form';
+import { TextField } from '@/lib/form-fields';
+import type { VoiceData, ImagingSubmitResult } from './types';
 import {
   SectionMasthead, PanelBox, PanelHead, EmptyState, DropZone, MetaLine, TabMetric, pad2,
 } from './parts';
@@ -24,7 +26,7 @@ import {
 interface VoicesSectionProps {
   voicesData: VoiceData | null;
   busy: boolean;
-  uploadVoice: (file: File, name: string) => Promise<boolean>;
+  uploadVoice: (file: File, values: { name: string }) => Promise<ImagingSubmitResult>;
   onDelete: (file: string | null) => void;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
@@ -32,29 +34,118 @@ interface VoicesSectionProps {
 // Mirrors ACCEPTED_AUDIO_EXTS in controller/src/audio/audio-import.ts.
 const ACCEPT = '.wav,.mp3,.ogg,.oga,.flac,.m4a,.aac,.opus,audio/*';
 
+// `name` is imagingName underneath (z.preprocess-wrapped, unknown z.input) —
+// cast once, same as SfxSection/BedsSection. `file` rides alongside it but
+// isn't part of voiceImportSchema (a File isn't something the zod-only shared
+// schema module can describe), so it's read via useWatch, not handleSubmit's
+// validated `values` — the file picker is the raw-Controller case lib/form-
+// fields.tsx's header calls out.
+interface VoiceImportFormValues {
+  name: string;
+  file: File | null;
+}
+
+function VoiceImportModal({
+  busy, noFfmpeg, dir, uploadVoice, onClose,
+}: {
+  busy: boolean;
+  noFfmpeg: boolean;
+  dir: string;
+  uploadVoice: VoicesSectionProps['uploadVoice'];
+  onClose: () => void;
+}) {
+  const form = useZodForm(voiceImportSchema, { name: '' });
+  const control = form.control as unknown as Control<VoiceImportFormValues>;
+  const file = useWatch({ control, name: 'file' }) as File | null;
+  const nameValue = (useWatch({ control, name: 'name' }) as string | undefined) || '';
+  const importRef = useRef<HTMLInputElement>(null);
+
+  const onSubmit = form.handleSubmit(async (values) => {
+    if (!file) return; // Save is disabled without one — see below
+    const res = await uploadVoice(file, values);
+    if (res.ok) onClose();
+    else applyServerFieldErrors(form, res.fieldErrors);
+  });
+
+  return (
+    <Modal
+      open
+      onOpenChange={(o) => { if (!o) onClose(); }}
+      title="import voice"
+      sub="a short recording of the voice you want to clone"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={onClose}>Cancel</Button>
+          <Btn
+            sm
+            tone="accent"
+            className="min-h-9 sm:min-h-0"
+            onClick={() => void onSubmit()}
+            disabled={busy || !file || !form.formState.isValid}
+          >
+            {busy ? 'Importing…' : 'Import'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="grid gap-3.5">
+        {noFfmpeg && (
+          <V3Alert title="wav only on this host">
+            ffmpeg isn’t installed here, so other formats can’t be converted. Upload a{' '}
+            <code className="font-mono text-[12px]">.wav</code>, or run the Docker image —
+            it ships ffmpeg.
+          </V3Alert>
+        )}
+        <div>
+          <Controller
+            control={control}
+            name="file"
+            defaultValue={null}
+            render={({ field }) => (
+              <>
+                <DropZone
+                  label={field.value ? field.value.name : 'choose an audio file'}
+                  hint={noFfmpeg ? 'wav' : 'wav · mp3 · m4a · ogg · flac · opus'}
+                  onClick={() => importRef.current?.click()}
+                  disabled={busy}
+                />
+                <input
+                  ref={importRef}
+                  type="file"
+                  accept={ACCEPT}
+                  className="hidden"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                    const f = e.target.files?.[0] || null;
+                    field.onChange(f);
+                    // Default the name field from the picked filename, same as before —
+                    // only when the operator hasn't already typed one.
+                    if (f && !nameValue.trim()) {
+                      form.setValue('name', f.name.replace(/\.[^.]+$/, ''), { shouldValidate: true });
+                    }
+                  }}
+                />
+              </>
+            )}
+          />
+        </div>
+        <div>
+          <TextField
+            control={control}
+            name="name"
+            label="Name"
+            placeholder="late-night-dj"
+            maxLength={IMAGING_NAME_MAX}
+            description={`Becomes the filename personas pick from. Stored as a mono .wav in ${dir}, so you can also drop files there by hand.`}
+          />
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export function VoicesSection({ voicesData, busy, uploadVoice, onDelete, adminFetch }: VoicesSectionProps) {
   // Hooks must run before the early "loading…" return — keep them at the top.
   const [modal, setModal] = useState(false);
-  const [importFile, setImportFile] = useState<File | null>(null);
-  const [importName, setImportName] = useState('');
-  const importRef = useRef<HTMLInputElement>(null);
-
-  const onPick = (e: ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0] || null;
-    setImportFile(f);
-    if (f && !importName.trim()) setImportName(f.name.replace(/\.[^.]+$/, ''));
-  };
-
-  const doImport = async () => {
-    if (!importFile || !importName.trim()) return;
-    const ok = await uploadVoice(importFile, importName);
-    if (ok) {
-      setImportFile(null);
-      setImportName('');
-      if (importRef.current) importRef.current.value = '';
-      setModal(false);
-    }
-  };
 
   if (!voicesData) {
     return <SkeletonCards cards={4} />;
@@ -140,66 +231,12 @@ export function VoicesSection({ voicesData, busy, uploadVoice, onDelete, adminFe
         )}
       </PanelBox>
 
-      <Modal
-        open={modal}
-        onOpenChange={(o) => { if (!o) setModal(false); }}
-        title="import voice"
-        sub="a short recording of the voice you want to clone"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={() => setModal(false)}>Cancel</Button>
-            <Btn
-              sm
-              tone="accent"
-              className="min-h-9 sm:min-h-0"
-              onClick={doImport}
-              disabled={busy || !importFile || !importName.trim()}
-            >
-              {busy ? 'Importing…' : 'Import'}
-            </Btn>
-          </>
-        }
-      >
-        <div className="grid gap-3.5">
-          {noFfmpeg && (
-            <V3Alert title="wav only on this host">
-              ffmpeg isn’t installed here, so other formats can’t be converted. Upload a{' '}
-              <code className="font-mono text-[12px]">.wav</code>, or run the Docker image —
-              it ships ffmpeg.
-            </V3Alert>
-          )}
-          <div>
-            <DropZone
-              label={importFile ? importFile.name : 'choose an audio file'}
-              hint={noFfmpeg ? 'wav' : 'wav · mp3 · m4a · ogg · flac · opus'}
-              onClick={() => importRef.current?.click()}
-              disabled={busy}
-            />
-            <input
-              ref={importRef}
-              type="file"
-              accept={ACCEPT}
-              className="hidden"
-              onChange={onPick}
-            />
-          </div>
-          <div>
-            <Label htmlFor="voice-import-name">Name</Label>
-            <Input
-              id="voice-import-name"
-              value={importName}
-              onChange={e => setImportName(e.target.value)}
-              placeholder="late-night-dj"
-            />
-            <p className="mt-1.5 text-[11px] leading-[1.55] text-muted">
-              Becomes the filename personas pick from. Stored as a mono{' '}
-              <code className="font-mono text-[12px]">.wav</code> in{' '}
-              <code className="font-mono text-[12px]">{dir}</code>, so you can also drop files
-              there by hand.
-            </p>
-          </div>
-        </div>
-      </Modal>
+      {modal && (
+        <VoiceImportModal
+          busy={busy} noFfmpeg={noFfmpeg} dir={dir}
+          uploadVoice={uploadVoice} onClose={() => setModal(false)}
+        />
+      )}
     </section>
   );
 }

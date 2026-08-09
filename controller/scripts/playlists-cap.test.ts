@@ -4,17 +4,22 @@
 //
 // Why this needs a test rather than "it's just a number": the cap is enforced in
 // three independent layers that each hardcoded it at some point. The validator
-// throws above it, the loader (coercePlaylistIds / coerceExcludedPlaylistIds)
-// silently truncates at it, and the admin UI disables the checkboxes at its own
-// copy. A UI copy ABOVE the controller's turns a legal-looking save into a 400;
-// one BELOW hides anchors the operator is allowed to add. Nothing else catches
-// that — the symptom is silent, not a crash. This is the playlist twin of
-// show-filter-cap.test.ts.
+// throws above it, the loader (normalizeShows, via schemas/show.ts
+// repairShowForLoad) silently truncates at it, and the admin UI disables the
+// checkboxes at its own copy. A UI copy ABOVE the controller's turns a
+// legal-looking save into a 400; one BELOW hides anchors the operator is
+// allowed to add. Nothing else catches that — the symptom is silent, not a
+// crash. This is the playlist twin of show-filter-cap.test.ts.
 //
 // The web mirror is a single PLAYLISTS_MAX because the two controller constants
 // are the same figure, so the test also fails if they ever diverge — at which
 // point the UI needs two constants, not a re-pointed regex.
 //
+// NOTE on the regexes below: the field name now arrives as a dotted PREFIX
+// ('shows.0.genres: must have at most 15 entries') rather than inline in the
+// message, because the shared schema's errors go through firstMessage(). The
+// patterns pin the FIELD and the RULE without pinning the separator between
+// them — wording was never the contract here, accept-vs-reject is.
 // Run: npm test -- playlists-cap
 
 import assert from 'node:assert/strict';
@@ -24,10 +29,9 @@ import { dirname, resolve } from 'node:path';
 import {
   PLAYLISTS_PER_SHOW,
   EXCLUDED_PLAYLISTS_PER_SHOW,
-  coercePlaylistIds,
-  coerceExcludedPlaylistIds,
 } from '../src/settings/vocab.js';
 import { validateShowsStrict } from '../src/settings/validate.js';
+import { normalizeShows } from '../src/settings/normalize.js';
 
 let failures = 0;
 function test(name: string, fn: () => void) {
@@ -53,7 +57,7 @@ test('validator accepts exactly the cap and rejects one over — playlistIds', (
   assert.equal(ok[0].playlistIds.length, PLAYLISTS_PER_SHOW);
   assert.throws(
     () => validateShowsStrict(showWith({ playlistIds: ids(PLAYLISTS_PER_SHOW + 1) }), personas, themes),
-    /playlistIds must have at most/,
+    /playlistIds.*must have at most/,
   );
 });
 
@@ -66,19 +70,25 @@ test('validator accepts exactly the cap and rejects one over — excludedPlaylis
     () => validateShowsStrict(
       showWith({ excludedPlaylistIds: ids(EXCLUDED_PLAYLISTS_PER_SHOW + 1) }), personas, themes,
     ),
-    /excludedPlaylistIds must have at most/,
+    /excludedPlaylistIds.*must have at most/,
   );
 });
 
 test('the loader truncates at the same cap it validates against', () => {
   // The LOAD path (settings.json written by an older build, or by hand). It
   // truncates silently, so a cap here below the validator's would quietly drop a
-  // legally-saved show's anchors on the next boot.
-  assert.equal(coercePlaylistIds(ids(PLAYLISTS_PER_SHOW + 5)).length, PLAYLISTS_PER_SHOW);
-  assert.equal(
-    coerceExcludedPlaylistIds(ids(EXCLUDED_PLAYLISTS_PER_SHOW + 5)).length,
-    EXCLUDED_PLAYLISTS_PER_SHOW,
+  // legally-saved show's anchors on the next boot — and an over-cap list must
+  // cost the extra anchors, never the show.
+  const [s] = normalizeShows(
+    showWith({
+      playlistIds: ids(PLAYLISTS_PER_SHOW + 5),
+      excludedPlaylistIds: ids(EXCLUDED_PLAYLISTS_PER_SHOW + 5),
+    }),
+    ['p1'],
   );
+  assert.ok(s, 'over-cap playlist lists must not drop the show on load');
+  assert.equal(s.playlistIds.length, PLAYLISTS_PER_SHOW);
+  assert.equal(s.excludedPlaylistIds.length, EXCLUDED_PLAYLISTS_PER_SHOW);
 });
 
 test('a stale id still counts against the cap', () => {
@@ -93,18 +103,24 @@ test('a stale id still counts against the cap', () => {
   assert.equal(ok[0].playlistIds.length, PLAYLISTS_PER_SHOW);
 });
 
-test('web admin mirror (PLAYLISTS_MAX) matches both controller caps', () => {
+test('the admin UI derives both caps from the schema mirror, not a copy', () => {
+  // Previously this scraped one hardcoded PLAYLISTS_MAX and compared it to both
+  // controller caps, with a note that the UI would need two constants if they
+  // ever diverged. Both now come from the shared schema — and they are two
+  // separate constants on the UI side as well, so a future divergence is a
+  // no-op here instead of a silent mis-cap on the exclusions picker.
   const src = readFileSync(resolve(here, '../../web/components/admin/shows/types.ts'), 'utf8');
-  const m = src.match(/export const PLAYLISTS_MAX = (\d+);/);
-  assert.ok(m, 'PLAYLISTS_MAX not found in web/components/admin/shows/types.ts');
-  assert.equal(
-    PLAYLISTS_PER_SHOW, EXCLUDED_PLAYLISTS_PER_SHOW,
-    'the two controller caps diverged — the web mirror can no longer be one constant',
-  );
-  assert.equal(
-    Number(m![1]), PLAYLISTS_PER_SHOW,
-    `web mirror is ${m![1]}, controller cap is ${PLAYLISTS_PER_SHOW}`,
-  );
+  for (const [local, schemaName] of [
+    ['PLAYLISTS_MAX', 'PLAYLISTS_PER_SHOW'],
+    ['EXCLUDED_PLAYLISTS_MAX', 'EXCLUDED_PLAYLISTS_PER_SHOW'],
+  ]) {
+    const m = src.match(new RegExp(`export const ${local} = (.+);`));
+    assert.ok(m, `${local} not found in web/components/admin/shows/types.ts`);
+    assert.equal(
+      m![1], schemaName,
+      `${local} is "${m![1]}" — it must be the schema mirror's ${schemaName}, not a copy`,
+    );
+  }
 });
 
 if (failures) {

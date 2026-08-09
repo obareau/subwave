@@ -9,6 +9,7 @@
 
 import { readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
 import { config } from '../config.js';
+import { normalizeRecipeRow } from '../schemas/playlist.js';
 import type { Knobs, Sources } from './playlist-gen.js';
 
 export interface StoredRecipe {
@@ -47,9 +48,19 @@ function read(): RecipeStore {
   try {
     if (!existsSync(FILE)) { cache = empty(); return cache; }
     const parsed = JSON.parse(readFileSync(FILE, 'utf8'));
+    // Rows repair through the shared schema's normalizeRecipeRow rather than a
+    // bare playlistId check: the old filter kept any row carrying a string
+    // playlistId and NOTHING else, so a hand-edited entry missing its `recipe`
+    // reached syncRecipe and threw on `entry.recipe.prompt` — POST
+    // /playlists/:id/sync answered 500 where a repaired row syncs fine.
     cache = {
       version: 1,
-      recipes: Array.isArray(parsed?.recipes) ? parsed.recipes.filter((r: any) => r && typeof r.playlistId === 'string') : [],
+      recipes: Array.isArray(parsed?.recipes)
+        ? parsed.recipes
+            .map((r: unknown) => normalizeRecipeRow(r))
+            .filter((r: ReturnType<typeof normalizeRecipeRow>): r is NonNullable<typeof r> => r != null)
+            .map((r: NonNullable<ReturnType<typeof normalizeRecipeRow>>) => r as PlaylistRecipeEntry)
+        : [],
     };
   } catch (err: any) {
     console.warn(`[playlist-recipes] could not read store, starting empty: ${err?.message || err}`);

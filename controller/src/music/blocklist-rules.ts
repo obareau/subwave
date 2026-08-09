@@ -16,19 +16,28 @@ import {
   trackMoods,
   type FilterTrack,
 } from './show-filter.js';
+// The rule's SHAPE — field vocabulary, caps, the season window and the
+// add/update validator — lives in the shared schema so the admin card runs the
+// same rules. Imported and re-exported here so no call site moved. This module
+// keeps the half a mirrored module cannot have: the MATCHING, which needs
+// show-filter's genre/tag normalisers.
+import {
+  RULES_MAX as RULES_MAX_VALUE,
+  RULE_FIELDS as RULE_FIELD_VALUES,
+  RULE_TEXT_MAX as RULE_TEXT_MAX_VALUE,
+  RULE_VALUES_MAX as RULE_VALUES_MAX_VALUE,
+  blockRuleSchema,
+  normText as normTextFn,
+  type RuleField,
+  type SeasonWindow,
+} from '../schemas/blocklist.js';
 
-export type RuleField = 'genre' | 'tag' | 'mood' | 'artist' | 'album' | 'title' | 'playlist';
-
-export const RULE_FIELDS: RuleField[] = ['genre', 'tag', 'mood', 'artist', 'album', 'title', 'playlist'];
-
-// Seasonal ALLOW-window: inclusive month/day bounds. from > to wraps the year
-// end (Dec 1 → Jan 6). While "in season" the rule does NOT block; a rule with
-// no season always blocks. Fixed month/day like settings.festivals — lunar
-// dates need per-year edits there too.
-export interface SeasonWindow {
-  from: { month: number; day: number };
-  to: { month: number; day: number };
-}
+export type { RuleField, SeasonWindow };
+export const RULE_FIELDS: readonly RuleField[] = RULE_FIELD_VALUES;
+export const RULES_MAX = RULES_MAX_VALUE;
+export const RULE_VALUES_MAX = RULE_VALUES_MAX_VALUE;
+export const RULE_TEXT_MAX = RULE_TEXT_MAX_VALUE;
+export const normText = normTextFn;
 
 export interface BlockRule {
   id: string;            // unique, generated server-side — logs and DELETE key
@@ -42,72 +51,23 @@ export interface BlockRule {
   addedAt: string;
 }
 
-export const RULES_MAX = 50;
-export const RULE_VALUES_MAX = 12;
-export const RULE_TEXT_MAX = 64;
-
-// Same normalisation as the blocklist's name fallback — trim, lowercase,
-// collapse whitespace — so a `tag`/`artist` rule value compares the way an
-// id entry's name snapshot does.
-export const normText = (s: unknown) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
-
 // ── Validation ───────────────────────────────────────────────────────────────
 
-function parseMonthDay(raw: unknown, where: string): { month: number; day: number } {
-  const o = (raw ?? {}) as Record<string, unknown>;
-  const month = Number(o.month);
-  const day = Number(o.day);
-  if (!Number.isInteger(month) || month < 1 || month > 12) throw new Error(`${where}.month must be 1-12`);
-  if (!Number.isInteger(day) || day < 1 || day > 31) throw new Error(`${where}.day must be 1-31`);
-  return { month, day };
-}
-
-// Validate an add/update payload into the persisted shape (minus id/addedAt,
-// which the store owns). Throws descriptive errors — the route surfaces the
-// message verbatim, same convention as validateShowsStrict.
+/**
+ * Validate an add/update payload into the persisted shape (minus id/addedAt,
+ * which the store owns).
+ *
+ * A thin wrapper over the shared schema — the store's chokepoint, reached by
+ * POST and PUT alike, so a rule that arrives any other way still meets the same
+ * rules the route middleware applied. Throws a plain Error with the message
+ * VERBATIM: every one already names its own `rule.<field>` path, so routing it
+ * through firstMessage would double the location.
+ */
 export function validateRulePatch(raw: unknown): Omit<BlockRule, 'id' | 'addedAt'> {
   if (!raw || typeof raw !== 'object') throw new Error('rule must be an object');
-  const o = raw as Record<string, unknown>;
-
-  const label = String(o.label ?? '').trim();
-  if (!label) throw new Error('rule.label is required');
-  if (label.length > RULE_TEXT_MAX) throw new Error(`rule.label must be at most ${RULE_TEXT_MAX} chars`);
-
-  const field = o.field as RuleField;
-  if (!RULE_FIELDS.includes(field)) throw new Error(`rule.field must be one of: ${RULE_FIELDS.join(', ')}`);
-
-  if (!Array.isArray(o.values)) throw new Error('rule.values must be an array');
-  const values: string[] = [];
-  const seen = new Set<string>();
-  for (const v of o.values) {
-    if (typeof v !== 'string') throw new Error('rule.values entries must be strings');
-    const t = v.trim();
-    if (!t) continue;
-    if (t.length > RULE_TEXT_MAX) throw new Error(`rule.values entries must be at most ${RULE_TEXT_MAX} chars`);
-    const key = normText(t);
-    if (seen.has(key)) continue; // silent dedupe — same value twice is one value
-    seen.add(key);
-    values.push(t);
-  }
-  if (!values.length) throw new Error('rule.values must have at least one entry');
-  if (values.length > RULE_VALUES_MAX) throw new Error(`rule.values must have at most ${RULE_VALUES_MAX} entries`);
-
-  let season: SeasonWindow | null = null;
-  if (o.season != null) {
-    const s = o.season as Record<string, unknown>;
-    season = {
-      from: parseMonthDay(s.from, 'rule.season.from'),
-      to: parseMonthDay(s.to, 'rule.season.to'),
-    };
-  }
-
-  let showIds: string[] = [];
-  if (o.showIds != null) {
-    if (!Array.isArray(o.showIds)) throw new Error('rule.showIds must be an array of strings');
-    showIds = [...new Set(o.showIds.filter((v): v is string => typeof v === 'string' && !!v.trim()))];
-  }
-
-  return { label, field, values, season, showIds };
+  const parsed = blockRuleSchema.safeParse(raw);
+  if (!parsed.success) throw new Error(parsed.error.issues[0]?.message || 'invalid rule');
+  return parsed.data;
 }
 
 // ── Season / scope activity ──────────────────────────────────────────────────

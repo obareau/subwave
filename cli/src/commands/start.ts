@@ -1,16 +1,5 @@
-// `subwave start [dev|prod|prod-byo]` — bring the stack up.
-//
-// Behaviour:
-//   - If a stack is already running, refuse (use `subwave restart` / `stop` instead).
-//   - Otherwise resolve the target env silently (no prompt) via this cascade:
-//       1. explicit positional arg
-//       2. cli.json:preferredEnv  (set by `init`, or by the previous `start`)
-//       3. filesystem heuristic   (clone → dev; single compose file → its env)
-//     and error out if undecidable (effectively unreachable — an init install
-//     hits step 2 and a clone hits step 3).
-//   - Shell out to `docker compose up -d` (dev builds locally; prod/prod-byo
-//     pull the published GHCR images).
-//   - Poll /health for up to 30 s and report when the stream comes on-air.
+// `subwave start [dev|prod|prod-byo]` — bring the stack up. The target env is
+// resolved silently rather than prompted for; see resolveEnv().
 
 import {
   getComposeFiles,
@@ -28,8 +17,6 @@ import { parseEnvFile, getRootEnv } from '../util.ts';
 import { ok, warn, err, info, muted, p, pc, pauseForEnter, header } from '../ui.ts';
 import { maybeStartWebDev } from '../web-dev.ts';
 
-// Subset of ComposeEnv the operator can pick — excludes 'down' (no stack
-// to start) and matches what the wizard offers in `subwave setup`.
 export type StartableEnv = Exclude<ComposeEnv, 'down'>;
 
 export interface StartOpts {
@@ -50,19 +37,16 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
   const target = resolveEnv(opts.envArg);
   if (!target) return;
 
-  // Remember the operator's choice so future no-arg invocations default to it.
+  // Future no-arg invocations default to this.
   const cfg = loadConfig();
   if (cfg.preferredEnv !== target.env) {
     cfg.preferredEnv = target.env;
     saveConfig(cfg);
   }
 
-  // Dev compose tags `sub-wave-broadcast:local` and has no `image:` on the
-  // controller, so it must build locally. Prod / prod-byo reference
-  // published `ghcr.io/perminder-klair/subwave-*` images — pull them
-  // instead of rebuilding. `--pull always` on prod forces a fresh pull so
-  // a stale locally-tagged image doesn't mask the upstream release.
-  // Operators can force a rebuild per-service via `subwave restart <svc> --build`.
+  // Dev has no `image:` on the controller, so it must build locally. The prods
+  // reference published GHCR images, and `--pull always` keeps a stale
+  // locally-tagged image from masking the upstream release.
   const wantBuild = target.env === 'dev';
   const wantPull = target.env === 'dev' ? undefined : ('always' as const);
   header(`Starting ${target.env} stack`);
@@ -74,10 +58,8 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
   console.log();
   if (code !== 0) {
     err(`docker compose exited ${code}`);
-    // Most common cause we can detect cheaply: the operator's user isn't in
-    // the `docker` group, so docker.sock returns EACCES. Without this hint
-    // they have to find it themselves (see #156, where the operator ended up
-    // `sudo su`-ing as a workaround).
+    // A user not in the `docker` group gets EACCES on docker.sock. Worth
+    // detecting: without the hint, #156's operator resorted to `sudo su`.
     if (dockerSocketPermissionDenied()) {
       console.log();
       warn(`can't talk to /var/run/docker.sock — your user isn't in the docker group`);
@@ -91,8 +73,7 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
     return;
   }
 
-  // Readiness wait. The controller can take a few seconds to connect to
-  // Icecast on cold boot, so 30s is generous.
+  // Generous: the controller takes a few seconds to reach Icecast on cold boot.
   const sp = p.spinner();
   sp.start('Waiting for controller to report on-air…');
   const healthy = await waitForHealth(target.env, 30_000, (ms) => {
@@ -103,9 +84,8 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
   if (healthy) ok('stack ready');
   else warn('stack started but /health is not yet returning on-air');
 
-  // Dev mode: web is a host-side `npm run dev` process, not a compose
-  // service. Bring it up here so `start` matches `setup` and the operator
-  // doesn't have to remember a second command.
+  // In dev the web UI is a host-side `npm run dev`, not a compose service —
+  // start it here so the operator doesn't need a second command.
   let webDevState: 'running' | 'skipped' = 'skipped';
   if (target.env === 'dev') {
     webDevState = await maybeStartWebDev();
@@ -126,11 +106,8 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
     }
   }
 
-  // If the controller reports the operator hasn't finished configuration
-  // yet, surface the two paths prominently. Without this, fresh installs
-  // see the "stack ready" URL and miss that no music will actually play
-  // until Navidrome + LLM are connected. Skipped silently once setup is
-  // done, so returning operators don't get nagged on every start.
+  // Otherwise a fresh install reads "stack ready" and misses that nothing will
+  // play until Navidrome + LLM are connected. Silent once setup is done.
   const needsSetup = healthy ? await checkNeedsSetup(target.env) : null;
   if (needsSetup === true) {
     console.log();
@@ -145,17 +122,10 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
   await pauseForEnter();
 }
 
-// Resolve the env to start, silently. Cascade:
-//   1. Explicit positional arg (`subwave start dev|prod|prod-byo`).
-//   2. cli.json:preferredEnv — set either by `init` at install time or by
-//      the previous `start` invocation (see save block above).
-//   3. Filesystem heuristic — clones map to dev, single-prod-file installs
-//      map to that prod variant. See inferEnvFromFilesystem().
-// If none of the three decide, we error out with a clear pointer rather
-// than falling back to an interactive prompt — that branch is effectively
-// unreachable in practice (init writes preferredEnv, clones hit step 3).
+// Explicit arg → persisted preferredEnv → filesystem heuristic. An undecidable
+// install errors out rather than prompting; in practice that branch is
+// unreachable, since init writes preferredEnv and clones infer as dev.
 function resolveEnv(arg?: StartableEnv): ComposeFile | null {
-  // 1. Explicit arg wins.
   if (arg) {
     const match = getComposeFiles().find((f) => f.env === arg);
     if (!match) {
@@ -165,14 +135,12 @@ function resolveEnv(arg?: StartableEnv): ComposeFile | null {
     return match;
   }
 
-  // 2. Persisted preference.
   const cfg = loadConfig();
   if (cfg.preferredEnv) {
     const match = getComposeFiles().find((f) => f.env === cfg.preferredEnv);
     if (match) return match;
   }
 
-  // 3. Filesystem heuristic.
   const inferred = inferEnvFromFilesystem();
   if (inferred) {
     const match = getComposeFiles().find((f) => f.env === inferred);
@@ -184,12 +152,9 @@ function resolveEnv(arg?: StartableEnv): ComposeFile | null {
   return null;
 }
 
-// When a stack is already up, flag if its image tags don't match the version
-// this install expects (process.env.SUBWAVE_VERSION → root .env → 'latest').
-// Catches a stale or different-version stack — e.g. a leftover `:pocket`
-// build — silently occupying the container names a fresh install reuses, so
-// the operator doesn't mistake it for their new install (see the v0.1.30
-// install where a 44-min-old `:pocket` stack masked a fresh scaffold).
+// Catches an old stack silently occupying the container names a fresh install
+// reuses — in v0.1.30 a 44-minute-old `:pocket` build masked a fresh scaffold
+// and read as the new one. Expected version: env → root .env → 'latest'.
 function warnIfVersionMismatch(file: ComposeFile | null): void {
   if (!file) return;
   let expected = process.env.SUBWAVE_VERSION?.trim();

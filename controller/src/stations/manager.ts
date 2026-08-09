@@ -10,9 +10,11 @@ import {
 import { cp } from 'node:fs/promises';
 import { join, resolve as pathResolve, sep } from 'node:path';
 import {
-  MAX_STATIONS, STATION_ID_RE, conversionAction, duplicateAction,
-  parseActivePointer, slugifyStationName,
+  STATION_ID_RE, conversionAction, duplicateAction, parseActivePointer,
 } from './pure.js';
+import { stationCreateSchema, stationRenameSchema } from '../schemas/station.js';
+import { stationCapMessage, uniqueStationId } from '../schemas/station-server.js';
+import { firstMessage } from '../util/zod-error.js';
 
 // Thrown by createStation() when the failure happens AFTER the legacy-root
 // conversion already completed. Conversion is durable the moment it returns
@@ -23,10 +25,23 @@ import {
 // create failure.
 export class StationCreateError extends Error {
   readonly converted: boolean;
-  constructor(message: string, converted: boolean) {
+  /**
+   * Dotted path of the request field at fault, when there is one — the route
+   * turns it into the `fieldErrors` payload that lands the message on that
+   * input instead of in a toast. Carried as a property rather than recovered
+   * by matching the message text downstream, which is the sort of coupling
+   * that survives exactly until someone rewords the string.
+   *
+   * Only set for a failure a FIELD caused. A full rack isn't one: nothing the
+   * operator can type in the create dialog fixes it, so it stays a flat error
+   * beside the rack-full banner the panel already shows.
+   */
+  readonly field?: string;
+  constructor(message: string, converted: boolean, field?: string) {
     super(message);
     this.name = 'StationCreateError';
     this.converted = converted;
+    this.field = field;
   }
 }
 
@@ -193,23 +208,22 @@ export function convertToMultiStation(
   return id;
 }
 
-function uniqueStationId(root: string, name: string): string {
-  const base = slugifyStationName(name);
-  let id = base;
-  for (let n = 2; existsSync(join(stationsDir(root), id)); n++) {
-    id = `${base.slice(0, 38)}-${n}`;
-  }
-  return id;
-}
-
 export async function createStation(root: string, opts: {
   name: string;
-  mode: 'fresh' | 'duplicate';
+  mode?: 'fresh' | 'duplicate';
   currentName: string;
   backupLibraryDb?: (dest: string) => Promise<void>;
 }): Promise<{ id: string; converted: boolean }> {
-  const name = String(opts.name || '').trim().slice(0, 80);
-  if (!name) throw new Error('station name required');
+  // The same schema the route boundary and the admin form run. This is the
+  // chokepoint — POST /stations is not the only way in (tests call it
+  // directly, and a future import/restore path would too) — so it validates
+  // here rather than trusting whatever the caller assembled. Rethrown as a
+  // plain Error: a raw ZodError's .message is a multi-line JSON blob and the
+  // route answers `{ error: err.message }`.
+  const parsed = stationCreateSchema.safeParse({ name: opts.name, mode: opts.mode });
+  if (!parsed.success) throw new Error(firstMessage(parsed.error));
+  const { name, mode } = parsed.data;
+
   let converted = false;
   if (!isMultiStation(root)) {
     convertToMultiStation(root, opts.currentName);
@@ -218,19 +232,20 @@ export async function createStation(root: string, opts: {
   // Cap check counts real station dirs, post-conversion (a fresh conversion
   // yields exactly one, so `converted` can never coincide with a full rack —
   // the flag is carried anyway so the route's restart guarantee holds).
-  const count = readdirSync(stationsDir(root), { withFileTypes: true })
-    .filter(e => e.isDirectory() && STATION_ID_RE.test(e.name)).length;
-  if (count >= MAX_STATIONS) {
-    throw new StationCreateError(`this install is capped at ${MAX_STATIONS} stations`, converted);
-  }
+  const entries = readdirSync(stationsDir(root), { withFileTypes: true });
+  const count = entries.filter(e => e.isDirectory() && STATION_ID_RE.test(e.name)).length;
+  const capped = stationCapMessage(count);
+  if (capped) throw new StationCreateError(capped, converted);
+
   const sourceId = activeIdOnDisk(root);
   // A duplicate with nothing to duplicate FROM (multi-station dir present but
   // the pointer corrupt/missing) must refuse loudly, not silently degrade to
-  // a fresh station.
-  if (opts.mode === 'duplicate' && !sourceId) {
-    throw new StationCreateError('no active station to duplicate from', converted);
+  // a fresh station. Attributed to `mode`: it's the mode choice that can't be
+  // honoured, and the operator's way out is to pick Fresh instead.
+  if (mode === 'duplicate' && !sourceId) {
+    throw new StationCreateError('no active station to duplicate from', converted, 'mode');
   }
-  const id = uniqueStationId(root, name);
+  const id = uniqueStationId(entries.map(e => e.name), name);
   const dest = stationPath(root, id);
   // Everything from here is wrapped: if it throws, the new-station dir is
   // best-effort removed, but a completed conversion above must never be
@@ -245,7 +260,7 @@ export async function createStation(root: string, opts: {
     mkdirSync(dest);
     destCreated = true;
     writeCard(dest, name);
-    if (opts.mode === 'duplicate' && sourceId) {
+    if (mode === 'duplicate' && sourceId) {
       const src = join(stationsDir(root), sourceId);
       for (const entry of readdirSync(src)) {
         const action = duplicateAction(entry);
@@ -285,7 +300,13 @@ export async function createStation(root: string, opts: {
 export function renameStation(root: string, id: string, name: string): string {
   const dir = stationPath(root, id);
   if (!existsSync(dir)) throw new Error('no such station');
-  const resolved = String(name || '').trim().slice(0, 80) || id;
+  // Same chokepoint reasoning as createStation. This REPLACES a fallback that
+  // silently renamed the station to its own slug on an empty name and truncated
+  // an over-long one — both now refuse, so the operator sees what happened
+  // instead of finding a station called "night-shift" later.
+  const check = stationRenameSchema.safeParse({ name });
+  if (!check.success) throw new Error(firstMessage(check.error));
+  const resolved = check.data.name;
   const card = readCard(dir);
   writeFileSync(
     join(dir, 'station.json'),

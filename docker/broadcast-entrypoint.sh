@@ -9,30 +9,26 @@
 set -eu
 
 # ---- Shared state bootstrap -------------------------------------------------
-# Creates the dirs the controller, analyzer and liquidsoap share and opens them
-# to mode 777: those containers write here as OTHER uids, so an operator would
-# otherwise have to chown every bind-mount source before first boot.
+# Mode 777 because the controller, analyzer and liquidsoap write here as OTHER
+# uids; without it an operator must chown every bind-mount source by hand.
 #
 # NOTHING in here is fatal (#1300 bug 10). Under `set -eu` the old bulk
 # `mkdir -p a b c` / `chmod 777 a b c` made every state path load-bearing: one
-# on a mount that refuses the change — a read-only bind, an NFS export without
-# the right perms, the exFAT/NTFS disk people move the stem cache to — aborted
-# this script BEFORE icecast started, and compose surfaced that as
-# `dependency failed to start: container sub-wave-broadcast is unhealthy`,
-# naming neither the path nor the chmod. A station that refuses to boot over a
-# permission convenience is strictly worse than one running on a degraded
-# mount: icecast still serves and the dead-air guard still airs the emergency
-# loop, but an exited container airs nothing.
+# on a mount that refuses the change (read-only bind, NFS export, the
+# exFAT/NTFS disk people move the stem cache to) aborted this script BEFORE
+# icecast started, and compose reported only `dependency failed to start:
+# container sub-wave-broadcast is unhealthy` — naming neither path nor cause.
+# A station running on a degraded mount still serves and still airs the
+# emergency loop; an exited container airs nothing.
 #
-# Kept byte-for-byte in step with docker/aio/supervisor.sh's copy (same
-# function, same list, same messages) — scripts/state-bootstrap.test.ts drives
-# both through one table.
+# docker/aio/supervisor.sh keeps the same functions, list and messages;
+# scripts/state-bootstrap.test.ts drives both through one table.
 state_warn() { echo "broadcast: WARNING $*" >&2; }
 
-# True when `other` can write the dir. This — not chmod's exit status — is
-# what the warning keys on: a mount that is already world-writable and simply
-# refuses chmod is a WORKING configuration, and a line printed on every boot of
-# a healthy station is a line operators learn to skip past.
+# True when `other` can write the dir. The warning keys on this rather than on
+# chmod's exit status: a mount that is already world-writable and merely
+# refuses chmod is a WORKING config, and a line printed on every healthy boot
+# is a line operators learn to skip.
 state_writable_by_others() {
     case "$(stat -c %a "$1" 2>/dev/null || echo 0)" in
         *[2367]) return 0 ;;
@@ -72,13 +68,11 @@ bootstrap_state_dirs() {
     local sub
     state_prepare_dir "$root"
     state_prepare_dir "$dir"
-    # stems + transitions belong to the analyzer (uid 10001) — the stem cache
-    # and the rendered transition clips. They are also the only two dirs worth
-    # relocating to a bigger disk, and the ONLY way to do that is a bind mount
-    # at <state>/stems (music/stem-cache.ts stemsRoot() is <stateDir>/stems,
-    # with no setting behind it). A fresh bind mount lands root-owned 755, so
-    # without the same 777 treatment the rest of the state dir gets, the
-    # analyzer cannot write the cache it was just pointed at.
+    # stems + transitions are the analyzer's (uid 10001), and the only two
+    # dirs worth relocating to a bigger disk — the ONLY way to do that being a
+    # bind mount at <state>/stems (music/stem-cache.ts stemsRoot() has no
+    # setting behind it). A fresh bind mount lands root-owned 755, which the
+    # analyzer cannot write without the same 777 treatment as the rest.
     for sub in voice voices archive jingles logs sessions sfx stems transitions; do
         state_prepare_dir "$dir/$sub"
     done
@@ -120,7 +114,6 @@ SECRETS=$STATE_ROOT/icecast-secrets.env
 TEMPLATE=/etc/icecast2/icecast.xml.template
 RENDERED=/etc/icecast2/icecast.xml
 
-# ---- Bootstrap shared state dirs --------------------------------------------
 bootstrap_state_dirs "$STATE_ROOT" "$STATE_DIR"
 
 # The compose logs bind mount lands owned by root on first boot; liquidsoap
@@ -175,8 +168,8 @@ export ICECAST_SOURCE_PASSWORD ICECAST_ADMIN_PASSWORD ICECAST_RELAY_PASSWORD
 export ICECAST_HOST=localhost
 
 # ---- Render icecast.xml -----------------------------------------------------
-# Plain sed with `|` delimiters — the secrets are hex and the caps numeric, so
-# there's no escaping risk.
+# Substitution is plain sed with `|` delimiters — the secrets are hex and every
+# other value numeric, so there's no escaping risk.
 
 # Concurrent-listener ceiling. A non-numeric value would render invalid XML and
 # fail icecast at boot, so fall back to 100 with a warning instead.
@@ -190,9 +183,9 @@ esac
 
 # Listener buffer depth (<burst-size>, #993/#1114). Sized in SECONDS and
 # converted per bitrate here, because burst-size is a byte count — a fixed one
-# means wildly different depths per mount (512 KB was ~22s at 192k but ~66s at
-# 64k). Sources: env override > settings files (written by the controller) >
-# default; read from state so a settings change applies on the next bounce.
+# means wildly different depths per mount (512 KB is ~22s at 192k, ~66s at
+# 64k). Env override > controller-written settings files > default; read from
+# state so a settings change applies on the next bounce.
 read_state_num() {
     # $1 = filename, $2 = fallback. Non-numeric or missing → fallback.
     _v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)
@@ -276,14 +269,14 @@ emit_mount /stream.aac  "$AAC_BITRATE"
 # Trusted reverse proxies — real listener IPs in admin → Listeners instead of
 # the edge's container address. icecast-KH matches an EXACT IP only (a CIDR is
 # accepted and then silently never matches), so the address must be resolved.
-# Precedence: ICECAST_TRUSTED_PROXY_IPS (explicit, wins) > DNS for
+# ICECAST_TRUSTED_PROXY_IPS (explicit) wins over DNS for
 # ICECAST_TRUSTED_PROXY_HOSTS (default 'caddy', the bundled edge).
 #
-# The DNS path is deliberately best-effort: on a COLD `compose up` caddy can't
-# be running yet (it depends_on this container being healthy), so the name
-# doesn't resolve — every later restart picks it up. A miss degrades to the old
-# behaviour (proxy IP shown), never to a wrong IP. Operators who want first-boot
-# accuracy pin the edge and set ICECAST_TRUSTED_PROXY_IPS (docs/deployment.md).
+# The DNS path is deliberately best-effort and misses the first cold boot:
+# caddy depends_on this container being healthy, so the name cannot resolve
+# yet — every later restart picks it up. A miss degrades to the old behaviour
+# (proxy IP shown), never to a wrong IP. For first-boot accuracy, pin the edge
+# and set ICECAST_TRUSTED_PROXY_IPS (docs/deployment.md).
 TRUSTED_XML=/etc/icecast2/trusted-proxies.xml
 : > "$TRUSTED_XML"
 TRUSTED_LIST=""
@@ -335,7 +328,7 @@ sed \
     "$TEMPLATE" > "$RENDERED"
 chown icecast2 "$RENDERED" 2>/dev/null || true
 
-# ---- Launch icecast in the background --------------------------------------
+# ---- Launch the pair, then wait for either to die ---------------------------
 
 echo "broadcast: starting icecast2" >&2
 sudo -E -u icecast2 icecast2 -n -c "$RENDERED" &
@@ -351,8 +344,6 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
     sleep 1
 done
 
-# ---- Launch liquidsoap in the background -----------------------------------
-
 echo "broadcast: starting liquidsoap" >&2
 # TEMPORARY (re-harden later): run liquidsoap as root instead of dropping to
 # the `liquidsoap` user. The savonet base bump 2.2.5 → 2.4.4 changed that
@@ -362,8 +353,6 @@ echo "broadcast: starting liquidsoap" >&2
 # (needs settings.init.allow_root reverted in radio.liq too).
 liquidsoap /etc/liquidsoap/radio.liq &
 LIQ_PID=$!
-
-# ---- Wait for either to die, then exit -------------------------------------
 
 trap 'kill -TERM "$ICECAST_PID" "$LIQ_PID" 2>/dev/null || true' INT TERM
 

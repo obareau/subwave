@@ -41,24 +41,20 @@ resolve_state_dir() {
 log() { echo "[subwave-aio] $*" >&2; }
 
 # ---------------------------------------------------------------------------
-# Shared state bootstrap. Mode 777 because the services run under different
-# uids (icecast2 / liquidsoap / root) and, in compose, in other containers.
+# Shared state bootstrap — same functions, list and messages as
+# docker/broadcast-entrypoint.sh, which carries the full rationale (#1300 bug
+# 10); scripts/state-bootstrap.test.ts drives both through one table, because
+# them drifting apart is how the bug returns.
 #
-# Nothing here is fatal (#1300 bug 10): a state path on a mount that refuses
-# mkdir/chmod — a read-only bind, an NFS export, the exFAT/NTFS disk people
-# move the stem cache to — warns and the boot continues. This script runs
-# under `set -u` (not -e), so its copy of the old bulk chmod merely printed a
-# raw `chmod:` line naming no cause; the broadcast entrypoint's identical
-# block ran under `set -eu` and aborted the container outright. Same block,
-# same list, same messages in both — scripts/state-bootstrap.test.ts drives
-# the two through one table, because them drifting apart is how this returns.
+# Nothing here is fatal. This script runs under `set -u` (not -e), so its copy
+# of the old bulk chmod merely printed a raw `chmod:` line naming no cause;
+# the entrypoint's identical block ran under `set -eu` and aborted the
+# container outright.
 # ---------------------------------------------------------------------------
 state_warn() { log "WARNING $*"; }
 
-# True when `other` can write the dir. This — not chmod's exit status — is
-# what the warning keys on: a mount that is already world-writable and simply
-# refuses chmod is a WORKING configuration, and a line printed on every boot of
-# a healthy station is a line operators learn to skip past.
+# True when `other` can write the dir — see the entrypoint on why the warning
+# keys on this rather than on chmod's exit status.
 state_writable_by_others() {
 	case "$(stat -c %a "$1" 2>/dev/null || echo 0)" in
 		*[2367]) return 0 ;;
@@ -98,13 +94,9 @@ bootstrap_state_dirs() {
 	local sub
 	state_prepare_dir "$root"
 	state_prepare_dir "$dir"
-	# stems + transitions belong to the analyzer — the stem cache and the
-	# rendered transition clips. They are also the only two dirs worth
-	# relocating to a bigger disk, and the ONLY way to do that is a bind mount
-	# at <state>/stems (music/stem-cache.ts stemsRoot() is <stateDir>/stems,
-	# with no setting behind it). A fresh bind mount lands root-owned 755, so
-	# without the same 777 treatment the rest of the state dir gets, the
-	# analyzer cannot write the cache it was just pointed at.
+	# stems + transitions are the analyzer's, and the only two dirs worth
+	# relocating to a bigger disk — a bind mount at <state>/stems lands
+	# root-owned 755, which the analyzer cannot write without this chmod.
 	for sub in voice voices archive jingles logs sessions sfx stems transitions; do
 		state_prepare_dir "$dir/$sub"
 	done
@@ -141,11 +133,10 @@ init_state() {
 # degraded log. Every branch below must end in a path liquidsoap can open,
 # verified by probe.
 #
-# The original #1196 fix created the link unconditionally and guarded on -L
-# only. If <state>/logs was itself a symlink back at /var/log/liquidsoap (a
-# natural pre-#1196 host-side workaround), the two links closed an ELOOP cycle
-# ("Too many levels of symbolic links") that the guard then never repaired —
-# an unbreakable crash loop the "Restart mixer" button couldn't touch.
+# #1196's original fix linked unconditionally and guarded on -L only. If
+# <state>/logs was itself a symlink back at /var/log/liquidsoap (a natural
+# pre-#1196 host-side workaround), the two closed an ELOOP cycle the guard
+# never repaired — an unbreakable crash loop "Restart mixer" couldn't touch.
 # ---------------------------------------------------------------------------
 link_liquidsoap_log() {
 	local target="$STATE_ROOT/logs"
@@ -269,21 +260,16 @@ warn_if_state_unmounted() {
 }
 
 # ---------------------------------------------------------------------------
-# ANALYZER_HEAVY selects an IMAGE TAG, and it does so by docker-compose variable
-# interpolation (`subwave-analyzer${ANALYZER_HEAVY:+-heavy}` in
-# docker-compose.yml). The all-in-one image has no analyzer service to select:
-# CLAP and Demucs are baked into the venv at build time or they are not, decided
-# entirely by which tag was pulled. So the variable is inert here by
-# construction — not unsupported, unreachable.
+# ANALYZER_HEAVY selects an IMAGE TAG by compose variable interpolation
+# (`subwave-analyzer${ANALYZER_HEAVY:+-heavy}`). The AIO has no analyzer
+# service to select — CLAP and Demucs are baked into the venv at build time or
+# they are not — so the variable is inert here by construction. Operators set
+# it, see no stem-transitions card, and conclude the feature is broken (#1300
+# bug 9); the caveat was documented (docs/unraid.md, the doctor) but nothing
+# said it at the boot right after they set it.
 #
-# Operators set it, see no stem-transitions card appear, and reasonably conclude
-# the feature is broken (#1300 bug 9). The caveat was written down (docs/unraid.md,
-# the doctor) but nothing said it at the moment they were actually looking: the
-# boot right after setting it.
-#
-# Probed rather than read from a baked marker, because torch in the venv IS what
-# makes the heavy tier work — a probe cannot disagree with the thing it describes,
-# a marker can.
+# Probed rather than read from a baked marker: torch in the venv IS what makes
+# the heavy tier work, so a probe cannot disagree with what it describes.
 # ---------------------------------------------------------------------------
 ANALYZER_VENV="${SUBWAVE_ANALYZER_VENV:-/opt/analyzer/venv}"
 
@@ -490,8 +476,6 @@ run_broadcast() {
 	# by init_state at boot; a non-root station dir needs its own here).
 	bootstrap_state_dirs "$STATE_DIR" "$STATE_DIR"
 
-	# Re-render on every pair launch so a flipped listener-auth flag lands
-	# after a restart-mixer (which bounces this pair, not the container).
 	render_icecast
 	log "starting icecast2"
 	sudo -E -u icecast2 icecast2 -n -c "$RENDERED" &
@@ -510,10 +494,8 @@ run_broadcast() {
 
 	log "starting liquidsoap"
 	# TEMPORARY (re-harden later): run liquidsoap as root — same reason as
-	# docker/broadcast-entrypoint.sh (savonet base bump changed the liquidsoap
-	# uid 10000 → 100, making persisted state files unwritable). Restore the
-	# privilege drop once state files are chowned to the new uid
-	# (radio.liq's settings.init.allow_root is set for the same reason).
+	# docker/broadcast-entrypoint.sh (the savonet base bump changed the
+	# liquidsoap uid, making persisted state files unwritable).
 	liquidsoap /etc/liquidsoap/radio.liq &
 	local lq=$!
 

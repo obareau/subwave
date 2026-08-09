@@ -15,8 +15,10 @@ const ENDPOINT = 'https://api.elevenlabs.io/v1/music?output_format=mp3_44100_128
 // Ceiling on a generated bed. A bed is trimmed per-link (liq_cue_out), so a clip
 // longer than the DJ's longest script is never heard in full — past ~2 min it
 // only burns Music credits. The floor lives in broadcast/beds.ts
-// (MIN_DURATION_SEC); the caller clamps to [floor, this] before calling.
-export const BED_GEN_MAX_SEC = 120;
+// (MIN_DURATION_SEC); the caller clamps to [floor, this] before calling. The
+// figure itself lives in the shared imaging schema (re-exported here) so the
+// admin form and this module can't disagree.
+export { BED_GEN_MAX_SEC } from '../schemas/imaging.js';
 
 // The Music API's own absolute bounds, in ms — a defensive clamp so a bad caller
 // can't send an out-of-range length.

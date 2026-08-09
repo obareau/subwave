@@ -1,10 +1,7 @@
-// Launch the Next.js web dev server as a detached background process.
-//
-// Only used in dev mode. The dev server is a long-running foreground process
-// (`next dev -p 7700`) — we spawn it detached with stdout/stderr redirected to
-// state/logs/web-dev.log and record the pid in state/logs/web-dev.pid so the
-// operator can kill it later. `lsof :7700` is the canonical source of truth
-// for "is it running?"; the pid file is a convenience, not authoritative.
+// The Next.js web dev server, dev mode only. `next dev` is a long-running
+// foreground process, so it's spawned detached with output redirected to
+// state/logs/web-dev.log. Whoever holds :7700 is the source of truth for "is it
+// running?" — the pid file is a convenience and can go stale.
 
 import { existsSync, openSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -12,10 +9,8 @@ import { resolve } from 'node:path';
 import { getSubwaveHome, getStateDir } from './util.ts';
 import { p, pc, accent, exitIfCancelled, header, ok, warn, muted } from './ui.ts';
 
-// Lazy path accessors. These all resolve under SUBWAVE_HOME / state/, so
-// evaluating them at module load would force home resolution even on
-// `subwave --version`. Functions defer until the operator actually invokes
-// a dev-mode command.
+// Functions, not constants: evaluating these at module load would force home
+// resolution even on `subwave --version`.
 function webDir(): string { return resolve(getSubwaveHome(), 'web'); }
 function logDir(): string { return resolve(getStateDir(), 'logs'); }
 export function getWebDevLog(): string { return resolve(logDir(), 'web-dev.log'); }
@@ -26,18 +21,16 @@ export interface PortHolder {
   command: string;
 }
 
-// Returns the PID/command listening on :7700, or null.
-// Prefers `lsof` (default on macOS) and falls back to `ss` (default on Linux,
-// where `lsof` is often not installed — e.g. base Arch / Debian).
+// Prefers `lsof` (present on macOS), falling back to `ss` — base Arch/Debian
+// ship the latter and often not the former.
 export function whoHolds7700(): PortHolder | null {
-  // --- lsof path (macOS, and Linux hosts where the operator installed it) ---
   const lsof = spawnSync(
     'lsof',
     ['-nP', '-iTCP:7700', '-sTCP:LISTEN', '-F', 'pc'],
     { encoding: 'utf8' },
   );
   if (lsof.status === 0 && lsof.stdout) {
-    // -F output: lines start with field tag — 'p' = pid, 'c' = command.
+    // -F output tags each line: 'p' = pid, 'c' = command.
     let pid = 0;
     let command = '';
     for (const line of lsof.stdout.split('\n')) {
@@ -46,8 +39,8 @@ export function whoHolds7700(): PortHolder | null {
     }
     if (pid) return { pid, command };
   }
-  // lsof missing (ENOENT → error set) or empty → try ss before giving up.
-  // Anything else (lsof present + non-zero) means the port is genuinely free.
+  // lsof missing or silent → try ss. lsof present and non-zero means the port
+  // is genuinely free, so don't second-guess it.
   if (lsof.error || (lsof.status === 0 && !lsof.stdout)) {
     const ss = spawnSync(
       'ss',
@@ -55,11 +48,9 @@ export function whoHolds7700(): PortHolder | null {
       { encoding: 'utf8' },
     );
     if (ss.status === 0 && ss.stdout) {
-      // Sample line:
-      //   LISTEN 0 511 *:7700 *:* users:(("next-server (v1",pid=3295,fd=22))
-      // The command field is truncated to ~15 chars by ss — "next-server (v1"
-      // for next dev — so we strip the parenthesised version suffix and
-      // surrounding quotes to give status.ts something stable to match on.
+      // ss truncates the command to ~15 chars, so next dev arrives as
+      // `next-server (v1`. Strip the half-eaten version suffix to leave
+      // something stable for isWebDevCommand() to match.
       const match = ss.stdout.match(/users:\(\("([^"]+)",pid=(\d+),/);
       if (match) {
         const command = match[1].replace(/\s*\(v\d.*$/, '').trim();
@@ -71,9 +62,8 @@ export function whoHolds7700(): PortHolder | null {
   return null;
 }
 
-// Process names we accept as "our web dev server" — used by status and stop.
-// macOS `lsof` reports the launching node interpreter as `node`; Linux `ss`
-// reports the actual binary, which for `next dev` is `next-server`.
+// Two entries because the probes disagree: macOS `lsof` names the launching
+// node interpreter, Linux `ss` names the actual `next-server` binary.
 const WEB_DEV_COMMANDS = new Set(['node', 'next-server']);
 export function isWebDevCommand(command: string): boolean {
   return WEB_DEV_COMMANDS.has(command);
@@ -83,7 +73,7 @@ export function webDepsInstalled(): boolean {
   return existsSync(resolve(webDir(), 'node_modules'));
 }
 
-// `npm install` in web/, inheriting stdio so the operator sees progress.
+// stdio inherited so the operator sees progress.
 export function installWebDeps(): Promise<number> {
   return new Promise((resolveP) => {
     const child = spawn('npm', ['install'], { cwd: webDir(), stdio: 'inherit' });
@@ -91,13 +81,11 @@ export function installWebDeps(): Promise<number> {
   });
 }
 
-// Spawn `npm run dev` detached. Returns the pid of the npm wrapper; npm
-// forwards SIGTERM to its child `next dev`, so killing this pid stops the
-// whole tree cleanly.
+// Returns the npm wrapper's pid. npm forwards SIGTERM to `next dev`, so killing
+// it stops the whole tree cleanly.
 export function spawnWebDevDetached(): { pid: number; logFile: string } {
   mkdirSync(logDir(), { recursive: true });
-  // Append, not truncate — repeated setup runs share one log; the operator
-  // can rotate or delete it themselves if it grows.
+  // Append — repeated runs share one log, and rotation is the operator's call.
   const fd = openSync(getWebDevLog(), 'a');
   const child = spawn('npm', ['run', 'dev'], {
     cwd: webDir(),
@@ -114,8 +102,6 @@ export function spawnWebDevDetached(): { pid: number; logFile: string } {
   return { pid: child.pid, logFile: getWebDevLog() };
 }
 
-// Poll http://localhost:7700 until it returns any HTTP response, or timeout.
-// next dev's first compile takes a few seconds on cold start; 30s is generous.
 export async function waitForWebDev(
   timeoutMs: number,
   onTick?: (ms: number) => void,
@@ -127,7 +113,7 @@ export async function waitForWebDev(
       const r = await fetch('http://localhost:7700', {
         signal: AbortSignal.timeout(1500),
       });
-      // Any HTTP status (including 404 / 500) proves the server is up.
+      // Any status, 404 and 500 included, proves the server is up.
       if (r.status > 0) return true;
     } catch {
       // not up yet
@@ -137,10 +123,9 @@ export async function waitForWebDev(
   return false;
 }
 
-// Stop whatever is listening on :7700, if it's a node process we can claim.
-// Source of truth is `lsof`, not the pid file (which can go stale if the
-// operator killed `npm run dev` themselves). Returns true if we sent SIGTERM,
-// false if there was nothing (or only non-node holders) to stop.
+// Keyed off the port holder rather than the pid file, which goes stale when the
+// operator kills `npm run dev` themselves. Refuses to kill anything that isn't
+// recognisably a dev server.
 export function stopWebDev(): { stopped: boolean; reason?: string } {
   const holder = whoHolds7700();
   if (!holder) {
@@ -155,8 +140,7 @@ export function stopWebDev(): { stopped: boolean; reason?: string } {
   } catch (e) {
     return { stopped: false, reason: `kill ${holder.pid}: ${(e as Error).message}` };
   }
-  // Give next dev a moment to release the port; SIGTERM → graceful shutdown
-  // is usually <500 ms but Next can take a beat on a busy compile.
+  // Graceful shutdown is usually <500ms, but Next takes a beat mid-compile.
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     if (!whoHolds7700()) break;
@@ -170,10 +154,8 @@ function cleanupPidFile(): void {
   try { unlinkSync(getWebDevPid()); } catch { /* ignore */ }
 }
 
-// Interactive flow: detect → confirm → install if needed → spawn → wait.
-// Used by `setup` and `start`. Returns 'running' if a dev server is on :7700
-// at the end (whether we started it or reused a pre-existing node one),
-// 'skipped' otherwise.
+// 'running' covers reusing a server that was already up, not just one we
+// started.
 export type WebDevState = 'running' | 'skipped';
 
 export async function maybeStartWebDev(opts: { askFirst?: boolean } = {}): Promise<WebDevState> {
@@ -234,7 +216,7 @@ export async function maybeStartWebDev(opts: { askFirst?: boolean } = {}): Promi
   return 'running';
 }
 
-// Read the pid file (best-effort). Returns 0 if absent or unparseable.
+// 0 when absent or unparseable.
 export function readWebDevPid(): number {
   try {
     const n = Number(readFileSync(getWebDevPid(), 'utf8').trim());

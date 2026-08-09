@@ -10,6 +10,7 @@ import type { EngineAvailability } from '../tts/engineMeta';
 import { Play } from 'lucide-react';
 import { Btn, Eyebrow, Metric } from '../ui';
 import { Button } from '../../ui/button';
+import { FieldError } from '../../ui/field';
 
 export const KEY_HINTS: Record<string, string> = {
   ANTHROPIC_API_KEY: 'sk-ant-...',
@@ -437,12 +438,85 @@ export type SaveSettings = (patch: Patch) => Promise<boolean>;
 
 export type FormUpdater = (updater: (f: FormState) => FormState) => void;
 
+/**
+ * Server-side validation errors from the last `/settings` save, keyed by the
+ * controller's dotted path ('beds.crossSec', 'personas.0.name').
+ *
+ * `POST /settings` has answered with a `fieldErrors` payload since the patch
+ * registry landed, and until now the panel threw it away and showed a toast
+ * instead — which lib/notify's own header calls out as the wrong surface for
+ * field-level validation. This is the channel that fixes that.
+ *
+ * There is deliberately NO client-side pre-flight for these. The registry that
+ * maps a settings key to its schema is not itself a schema module, so it is not
+ * in the mirror, and hand-rebuilding that map in the browser would be exactly
+ * the drift the mirror exists to prevent. The server is the one source, and its
+ * answer lands on the input.
+ */
+export type SettingsFieldErrors = Record<string, string>;
+
+export type FormUpdaterOrErrors = SettingsFieldErrors;
+
 export interface SectionProps {
   data: SettingsData;
   form: FormState;
   setForm: FormUpdater;
   busy: boolean;
   saveSettings: SaveSettings;
+  fieldErrors: SettingsFieldErrors;
+}
+
+/**
+ * ARIA + rendering for one settings input's server error.
+ *
+ * Mirrors lib/form.ts's `fieldAria` — deliberately, since these sections are
+ * NOT react-hook-form shaped (each control owns its own save button posting a
+ * one-key patch, so there is no single submit to bind) and cannot use it
+ * directly. The ids and the `-error` suffix follow the same convention, so an
+ * operator gets the same behaviour whichever admin form they are on.
+ */
+/**
+ * One settings input's server error, or nothing.
+ *
+ * Wraps the same vendored `FieldError` primitive the react-hook-form-bound
+ * panels use, so the message looks and announces identically (`role="alert"`)
+ * whichever admin form the operator is on — these sections just get their error
+ * shape from the controller instead of from a resolver.
+ *
+ * `path` is the controller's dotted key, so the JSX names the exact string the
+ * server sends and a rename on either side is visible at the call site.
+ */
+export function SettingsFieldError({
+  path,
+  errors,
+  id,
+}: {
+  path: string;
+  errors: SettingsFieldErrors;
+  id?: string;
+}) {
+  const message = errors[path];
+  if (!message) return null;
+  return <FieldError id={id} errors={[{ message }]} />;
+}
+
+export function settingsFieldAria(baseId: string, message?: string) {
+  const invalid = !!message;
+  return {
+    invalid,
+    message,
+    labelProps: { htmlFor: baseId },
+    controlProps: {
+      id: baseId,
+      // Absent rather than aria-invalid="false" — the attribute only carries
+      // meaning when set.
+      'aria-invalid': invalid || undefined,
+      // Reference the id only when it is really in the DOM: a dangling
+      // aria-describedby is handled inconsistently across screen readers.
+      'aria-describedby': invalid ? `${baseId}-error` : undefined,
+    },
+    errorProps: { id: `${baseId}-error` },
+  } as const;
 }
 
 interface MetricSpec {
@@ -515,13 +589,52 @@ interface SaveBarProps {
   onSave: () => void;
   saveLabel: ReactNode;
   extra?: ReactNode;
+  /** Server errors from the last save, keyed by dotted path. */
+  errors?: SettingsFieldErrors;
+  /** The top-level settings keys this bar's save owns, e.g. ['search']. */
+  ownedKeys?: readonly string[];
 }
 
-// No inline status: success/failure goes through the global toaster (lib/notify).
-export function SaveBar({ note, busy, onSave, saveLabel, extra }: SaveBarProps) {
+/**
+ * Filter a fieldErrors map down to the paths a given save owns.
+ *
+ * Exported so a section can reuse the same scoping rule if it renders an error
+ * somewhere other than its save bar.
+ */
+export function ownedFieldErrors(
+  errors: SettingsFieldErrors | undefined,
+  ownedKeys: readonly string[] | undefined,
+): Array<[string, string]> {
+  if (!errors || !ownedKeys?.length) return [];
+  return Object.entries(errors).filter(([path]) =>
+    ownedKeys.some((key) => path === key || path.startsWith(`${key}.`)),
+  );
+}
+
+/**
+ * Success/failure still goes through the global toaster, but a VALIDATION
+ * failure now also lands here, beside the button that caused it.
+ *
+ * These sections save a whole block at once, so a per-input error would be the
+ * wrong shape: the operator pressed one button and several fields could have
+ * failed. Listing them at the save point names every one, and each message
+ * already carries its own dotted field (that is the settings registry's
+ * verbatim-message rule), so the path is not lost by grouping them here.
+ */
+export function SaveBar({ note, busy, onSave, saveLabel, extra, errors, ownedKeys }: SaveBarProps) {
+  const owned = ownedFieldErrors(errors, ownedKeys);
   return (
     <div className="flex flex-wrap items-center gap-3 border border-ink bg-[var(--ink-softer)] p-3">
       <span className="size-1.5 shrink-0 rounded-full bg-vermilion" />
+      {owned.length > 0 && (
+        // Full width so it sits on its own row above the note/button cluster,
+        // which is where a wrapped flex child lands anyway.
+        <div className="order-first w-full">
+          {owned.map(([path, message]) => (
+            <FieldError key={path} errors={[{ message }]} />
+          ))}
+        </div>
+      )}
       {/* min-w-0 + break-words: notes carry unbroken values (an
           `openai-compatible:Qwen3…gguf` model id) that would otherwise set the
           flex item's min-content and push the bar past a phone viewport. */}

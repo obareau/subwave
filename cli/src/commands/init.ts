@@ -1,14 +1,7 @@
-// `subwave init` — scaffold a fresh SUB/WAVE install directory.
-//
-// The standalone-CLI entry point. Unlike `subwave setup` (which assumes the
-// stack is already installed somewhere and runs the configuration wizard),
-// `init` is the very first command — it asks where to install, materialises
-// the embedded compose files + a 3-var .env into that directory, and records
-// the home in ~/.config/subwave/config.json so subsequent commands know
-// where to look.
-//
-// After init, the operator runs `subwave start` (which brings docker up)
-// and `subwave setup` (the full wizard for Navidrome / LLM / TTS / DJ).
+// `subwave init` — scaffold a fresh install directory. The standalone-CLI entry
+// point, and the only command that runs before a home exists: it materialises
+// the embedded compose files + a 3-var .env, then records the home in
+// ~/.config/subwave/config.json so every later command can resolve it.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -36,34 +29,25 @@ interface InitAnswers {
   tz: string;
 }
 
-// Auto-detect the host's IANA timezone so the DJ announces local time out of
-// the box. The controller reads the clock via date.getHours(), which keys off
-// the container's TZ env var; without it the container runs in UTC and time
-// announcements drift by the host's offset (see issue #205). Bun/Node expose
-// the host zone through Intl; we fall back to the compose default so a host
-// with no resolvable zone keeps the historical behaviour rather than UTC.
+// Without TZ the container runs in UTC and the DJ's time announcements drift by
+// the host's offset (#205). The fallback is the compose default rather than UTC
+// so a host with no resolvable zone keeps the historical behaviour.
 function detectTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/London';
 }
 
-// Options for non-interactive init (`subwave init --yes`). Used by the curl|sh
-// installer, which must NOT drive an interactive Clack prompt through the pipe:
-// on macOS Bun doesn't deliver stdin bytes when launched from a piped parent
-// (oven-sh/bun#13374), so the first prompt would hang un-killably. `--yes`
-// skips every prompt, applies sane defaults (overridable via the flags below),
-// and is therefore immune to that bug.
+// `--yes` exists for the curl|sh installer, which must NOT drive an interactive
+// Clack prompt through the pipe: on macOS Bun doesn't deliver stdin bytes when
+// launched from a piped parent (oven-sh/bun#13374), so the first prompt would
+// hang un-killably. Skipping every prompt is what makes it immune.
 export interface InitOptions {
   yes?: boolean;
   mode?: Mode;
   adminUser?: string;
   adminPass?: string;
   siteUrl?: string;
-  // IANA timezone for the DJ clock. Defaults to the auto-detected host zone;
-  // the installer / `--yes` callers can override it explicitly.
-  tz?: string;
-  // Whether to bring the stack up after scaffolding. Defaults to true; the
-  // installer's `--no-start` maps to false.
-  start?: boolean;
+  tz?: string; // defaults to the detected host zone
+  start?: boolean; // default true; the installer's `--no-start` maps to false
 }
 
 export async function runInitCommand(opts: InitOptions = {}): Promise<void> {
@@ -75,7 +59,6 @@ export async function runInitCommand(opts: InitOptions = {}): Promise<void> {
   const answers = opts.yes ? defaultAnswers(opts) : await collectAnswers();
   await scaffold(answers);
 
-  // Non-interactive (`--yes`): no "start now?" prompt — `opts.start` decides.
   if (opts.yes) {
     if (opts.start !== false) {
       await runStartCommand();
@@ -88,12 +71,8 @@ export async function runInitCommand(opts: InitOptions = {}): Promise<void> {
     return;
   }
 
-  // Offer to chain straight into `start` so the curl|sh → init → on-air flow
-  // is one decision long. preferredEnv was just persisted by scaffold(), so
-  // runStartCommand() resolves the env silently — no second prompt. A no
-  // here is non-fatal: operators who want to inspect/tweak the .env before
-  // first boot fall through to pauseForEnter(); `subwave start` is the
-  // obvious next command and `subwave --help` lists everything else.
+  // scaffold() just persisted preferredEnv, so runStartCommand() resolves the
+  // env silently rather than asking a second question.
   console.log();
   const startNow = exitIfCancelled(await p.confirm({
     message: 'Bring the stack up now?',
@@ -106,11 +85,8 @@ export async function runInitCommand(opts: InitOptions = {}): Promise<void> {
   await pauseForEnter();
 }
 
-// Build InitAnswers from defaults + flag overrides, no prompts. Mirrors the
-// defaults baked into collectAnswers() (home = SUBWAVE_HOME or ~/subwave, prod
-// mode, admin user "admin", generated password, blank site URL). Refuses to
-// clobber an existing install — destroying compose files non-interactively is
-// never the right default.
+// Mirrors collectAnswers()'s defaults, minus the prompts. Refuses to clobber an
+// existing install — destroying compose files non-interactively is never right.
 function defaultAnswers(opts: InitOptions): InitAnswers {
   const envHome = process.env.SUBWAVE_HOME?.trim();
   const homeRaw = envHome || DEFAULT_SUBWAVE_HOME;
@@ -133,7 +109,6 @@ function defaultAnswers(opts: InitOptions): InitAnswers {
 }
 
 async function collectAnswers(): Promise<InitAnswers> {
-  // 1. Install directory.
   const home = exitIfCancelled(await p.text({
     message: 'Install directory',
     initialValue: DEFAULT_SUBWAVE_HOME,
@@ -146,7 +121,6 @@ async function collectAnswers(): Promise<InitAnswers> {
   }), { backOnCancel: false });
   const homeAbs = home.startsWith('~/') ? resolve(homedir(), home.slice(2)) : resolve(home);
 
-  // If the directory already has a compose file, refuse to clobber it.
   if (existsSync(resolve(homeAbs, 'docker-compose.yml'))) {
     warn(`${homeAbs} already contains a docker-compose.yml.`);
     const overwrite = exitIfCancelled(await p.confirm({
@@ -160,8 +134,7 @@ async function collectAnswers(): Promise<InitAnswers> {
     }
   }
 
-  // 2. Mode. Dev isn't an init option — devs use `git clone` + `npm start`,
-  // which doesn't need an init step.
+  // Dev isn't an option here — devs use `git clone` + `npm start`, no init step.
   const mode = exitIfCancelled(await p.select<Mode>({
     message: 'Deployment shape',
     initialValue: 'prod',
@@ -179,10 +152,7 @@ async function collectAnswers(): Promise<InitAnswers> {
     ],
   }), { backOnCancel: false });
 
-  // 3. Admin credentials. ADMIN_USER + ADMIN_PASS are mandatory in prod
-  // (controller exits without them). Generate ADMIN_PASS for the operator
-  // if they leave it blank — easier to copy from the wizard output than to
-  // remember to `openssl rand -hex 16`.
+  // Mandatory in prod — the controller exits without them.
   const adminUser = exitIfCancelled(await p.text({
     message: 'Admin username (gates /admin and /onboarding)',
     initialValue: 'admin',
@@ -193,42 +163,34 @@ async function collectAnswers(): Promise<InitAnswers> {
     message: 'Admin password (leave blank to generate a random one)',
   }), { backOnCancel: false }) || crypto.randomBytes(16).toString('hex');
 
-  // 4. SITE_URL. Cosmetic but recommended in prod (drives OG / Twitter
-  // share cards, canonical URLs, sitemap, manifest). Blank is fine — it'll
-  // fall back to a localhost origin, which just means social previews are
-  // broken until the operator sets it.
+  // Cosmetic — drives OG cards, canonical URLs, sitemap, manifest. Blank falls
+  // back to a localhost origin, so only social previews suffer.
   const siteUrl = exitIfCancelled(await p.text({
     message: 'Public site URL (https://radio.example.com — blank to defer)',
     initialValue: '',
     placeholder: 'https://radio.example.com',
   }), { backOnCancel: false });
 
-  // TZ is auto-detected, not prompted: init stays lean (the editable timezone
-  // prompt lives in `subwave setup`), and skipping a prompt keeps init safe to
-  // drive over a pipe on macOS, where Bun's stdin hangs (oven-sh/bun#13374).
+  // TZ is detected rather than prompted — `subwave setup` owns the editable
+  // timezone prompt, and every prompt skipped is one less pipe hazard on macOS.
   return { home: homeAbs, mode, adminUser, adminPass, siteUrl, tz: detectTimezone() };
 }
 
 async function scaffold(a: InitAnswers): Promise<void> {
   header('Scaffolding install');
 
-  // 1. Create the home directory + state/ subtree. State is created with
-  // the operator's UID so broadcast/controller containers (which mount it)
+  // state/ is created with the operator's UID so the containers that mount it
   // don't need a chown dance on first boot.
   mkdirSync(a.home, { recursive: true });
   mkdirSync(resolve(a.home, 'state'), { recursive: true });
   mkdirSync(resolve(a.home, 'state', 'logs'), { recursive: true });
   ok(`created ${a.home}/ (state/, state/logs/)`);
 
-  // 2. Write the compose file the operator chose. Both modes get a copy of
-  // docker-compose.byo.yml alongside the default so operators can switch
-  // later without re-running init.
+  // Both modes also get the BYO variant and the GPU overlays (docs/gpu-tts.md,
+  // #1099) so switching later needs neither a re-init nor a trip to the repo.
   const composeMainSrc = a.mode === 'prod-byo' ? COMPOSE_BYO_YML : COMPOSE_YML;
   writeFileSync(resolve(a.home, 'docker-compose.yml'), composeMainSrc);
   writeFileSync(resolve(a.home, 'docker-compose.byo.yml'), COMPOSE_BYO_YML);
-  // Also drop the GPU opt-in overlays so operators can layer them on later
-  // (Chatterbox TTS on CUDA — docs/gpu-tts.md — and the CUDA analyzer for
-  // CLAP/Demucs, #1099) without fetching files from the repo.
   writeFileSync(resolve(a.home, 'docker-compose.tts-heavy-gpu.yml'), COMPOSE_TTS_HEAVY_GPU_YML);
   writeFileSync(resolve(a.home, 'docker-compose.analyzer-gpu.yml'), COMPOSE_ANALYZER_GPU_YML);
   if (a.mode === 'prod-byo') {
@@ -237,13 +199,9 @@ async function scaffold(a: InitAnswers): Promise<void> {
     ok('wrote docker-compose.yml (bundled Caddy) + docker-compose.byo.yml + GPU overlays');
   }
 
-  // 3. Write .env from the embedded template, filling in the operator's
-  // answers. writeEnvFile() preserves the template's comments + key order,
-  // which keeps the file friendly to hand-edit later.
-  //
-  // Trick: the template lives inside the install dir as .env.example so
-  // writeEnvFile() can read it back. We write .env.example first, then
-  // call writeEnvFile() against it as the templateFallback.
+  // writeEnvFile() reads its template off disk, so .env.example has to land
+  // first; going through it (rather than writing .env directly) is what keeps
+  // the shipped comments and key order in the operator's file.
   const envExamplePath = resolve(a.home, '.env.example');
   writeFileSync(envExamplePath, ENV_EXAMPLE);
   const envValues: Record<string, string> = {
@@ -253,13 +211,12 @@ async function scaffold(a: InitAnswers): Promise<void> {
   };
   if (a.siteUrl) envValues.SITE_URL = a.siteUrl;
   const envPath = resolve(a.home, '.env');
-  writeEnvFileAt(envPath, envValues, envExamplePath);
+  writeEnvFile(envPath, envValues, { templateFallback: envExamplePath });
   ok(`wrote .env (ADMIN_USER, ADMIN_PASS, TZ=${a.tz}${a.siteUrl ? ', SITE_URL' : ''})`);
 
-  // Pin the stack to this CLI's release. Without a pin every compose image ref
-  // resolves `${SUBWAVE_VERSION:-latest}` and floats on :latest, which can
-  // drift ahead of the frozen compose files this binary carries. A dev build
-  // (no real release) has no published tag to pin to — leave it on :latest.
+  // Unpinned, every image ref floats on :latest and can drift ahead of the
+  // frozen compose files this binary carries. A dev build has no published tag
+  // to pin to, so it stays on :latest.
   const pinTag = cliImageTag();
   if (pinTag) {
     applyVersionPin(envPath, pinTag);
@@ -268,20 +225,14 @@ async function scaffold(a: InitAnswers): Promise<void> {
     warn('CLI has no published release version — leaving SUBWAVE_VERSION unset (images follow :latest).');
   }
 
-  // 4. Persist the home in ~/.config/subwave/config.json so subsequent
-  // `subwave …` commands resolve to this directory without --home or
-  // SUBWAVE_HOME being set.
+  // Lets later commands resolve this install without --home or SUBWAVE_HOME.
   writeHomeConfig({ home: a.home });
   ok('recorded install path in ~/.config/subwave/config.json');
 
-  // Persist the chosen deployment shape as preferredEnv so future
-  // `subwave start` invocations skip the env prompt — operators who chose
-  // prod here will never be asked again. (Dev isn't an init option; clones
-  // get inferred from the filesystem.)
+  // preferredEnv is what makes future `subwave start` skip the env prompt.
   saveConfig({ ...loadConfig(), preferredEnv: a.mode });
 
-  // 5. If the operator let us generate a password, surface it now — once.
-  // No persistence beyond the .env we just wrote.
+  // A generated password is shown once and lives only in the .env just written.
   if (!process.env.SUBWAVE_QUIET_GENERATED_PASS) {
     console.log();
     info(`admin user: ${pc.bold(a.adminUser)}`);
@@ -290,22 +241,10 @@ async function scaffold(a: InitAnswers): Promise<void> {
   }
 }
 
-// Local copy of writeEnvFile that doesn't go through util.ts's getRootEnv()
-// (which requires a resolved home — chicken-and-egg during init). The
-// existing util.ts:writeEnvFile takes an explicit path, so we just call it
-// directly; this wrapper is here in case we ever want init-specific behaviour.
-function writeEnvFileAt(path: string, values: Record<string, string>, templateFallback: string): void {
-  // Just delegate. Kept as a separate function so future init-only quirks
-  // have somewhere obvious to land without touching util.ts.
-  return writeEnvFile(path, values, { templateFallback });
-}
-
-// Write the SUBWAVE_VERSION pin into a freshly-scaffolded .env, with a comment
-// explaining it. writeEnvFile() can't carry a comment for an appended key, so
-// we edit the file directly here. The .env.example template ships a commented
-// `# SUBWAVE_VERSION=latest` example line — replace that in place so the active
-// pin lands exactly where operators look for it. If some future template has an
-// uncommented pin, rewrite its value; otherwise append a fresh block.
+// Written by hand rather than through writeEnvFile(), which can't carry a
+// comment for an appended key. Preference order: rewrite an active pin, else
+// replace the template's commented `# SUBWAVE_VERSION=` line in place (so the
+// pin lands where operators look for it), else append a fresh block.
 function applyVersionPin(envPath: string, tag: string): void {
   const lines = readFileSync(envPath, 'utf8').split('\n');
   const block = [

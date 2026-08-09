@@ -6,23 +6,17 @@ import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { requireSubwaveHome } from './home.ts';
 
-// SUBWAVE_HOME — where the operator's install lives.
-//
-// Lazy + memoised: resolution only happens the first time a path is read,
-// so `subwave init` (which doesn't yet have a home) and `subwave --version`
-// can short-circuit before triggering the resolver. cli.ts strips any
-// `--home <path>` flag from argv and parks it on process.env.SUBWAVE_HOME
-// before any consumer code runs, so the resolver sees a single source of
-// truth.
+// Resolved lazily so `subwave init` (no home yet) and `subwave --version` can
+// short-circuit before the resolver runs. cli.ts has already folded any
+// `--home` flag into process.env.SUBWAVE_HOME, so there's one source of truth.
 let _subwaveHome: string | null = null;
 export function getSubwaveHome(): string {
   if (_subwaveHome === null) _subwaveHome = requireSubwaveHome().home;
   return _subwaveHome;
 }
 
-// Path accessors. Always call these — never cache the return value at
-// module load time, since that would force home resolution at import time
-// (which breaks `subwave init`, where there's no home yet).
+// Call these rather than caching their results at module load — that would
+// force home resolution at import time and break `subwave init`.
 export function getScriptsDir(): string { return resolve(getSubwaveHome(), 'scripts'); }
 export function getRootEnv(): string { return resolve(getSubwaveHome(), '.env'); }
 export function getRootEnvExample(): string { return resolve(getSubwaveHome(), '.env.example'); }
@@ -39,13 +33,11 @@ export function expandHome(p: string): string {
 }
 
 export function have(bin: string): boolean {
-  // Plain POSIX `which`. Good enough for the operator CLI; we don't ship
-  // anywhere `which` isn't available (macOS, Linux, WSL).
+  // We only ship where `which` exists (macOS, Linux, WSL).
   return spawnSync('which', [bin], { stdio: 'ignore' }).status === 0;
 }
 
-// Open a URL in the operator's default browser. Detached and best-effort —
-// returns false if the platform opener can't be spawned.
+// Best-effort — false if the platform opener can't be spawned.
 export function openUrl(url: string): boolean {
   const [cmd, args]: [string, string[]] =
     process.platform === 'darwin' ? ['open', [url]]
@@ -60,8 +52,6 @@ export function openUrl(url: string): boolean {
   }
 }
 
-// Parse a .env file into { KEY: VALUE }. Comments and blank lines skipped.
-// Values with surrounding quotes (single or double) are unwrapped.
 export function parseEnvFile(path: string): Record<string, string> {
   if (!existsSync(path)) return {};
   const out: Record<string, string> = {};
@@ -80,22 +70,14 @@ export function parseEnvFile(path: string): Record<string, string> {
   return out;
 }
 
-// Quote a .env value so docker compose reads it literally.
-//
-// Docker Compose's `.env` parser does variable interpolation on **both**
-// unquoted and double-quoted values — `$VAR` / `${VAR}` get expanded. Only
-// single-quoted values are taken as-is. A password like `pre$word` written
-// raw becomes a reference to a non-existent variable `$word`, mangling the
-// value silently (see #156).
-//
-// Single quotes can't themselves contain a literal single quote (the
-// compose-spec parser has no escape inside `'...'`). Rather than try to
-// double-quote-with-escapes (which can't escape `$` either), we throw on
-// embedded `'` so the caller can surface a clear validation error up-front.
+// Quote a .env value so docker compose reads it literally. Compose interpolates
+// `$VAR` in BOTH unquoted and double-quoted values — only single quotes are
+// taken as-is, so a password like `pre$word` written raw silently mangles into
+// a reference to a nonexistent `$word` (#156). There is no escape for `'` inside
+// `'...'` and double quotes can't escape `$` either, so an embedded single quote
+// throws and lets the caller surface a validation error up front.
 function envEscape(value: string): string {
-  // Conservative "looks safe" set — alphanumerics plus a handful of
-  // punctuation characters that have no special meaning in a .env value
-  // and don't trigger interpolation. Everything else gets quoted.
+  // Conservative safe set: nothing here triggers interpolation.
   if (/^[A-Za-z0-9_./:@,+\-]*$/.test(value)) return value;
   if (value.includes("'")) {
     throw new Error(
@@ -107,14 +89,10 @@ function envEscape(value: string): string {
   return `'${value}'`;
 }
 
-// Template-aware .env writer. Preserves comments and key order from the
-// existing file (or the .env.example template, if the file doesn't exist
-// yet). Keys present in `values` but absent from the template are appended
-// at the end. Keys present in the template but not in `values` keep their
-// existing value untouched.
-//
-// Pattern lifted from the legacy scripts/setup.mjs:61–77 — the operator
-// expects their `.env` to keep its layout across re-runs of the wizard.
+// Rewrites values in place against the existing file (or the .env.example
+// template when there isn't one), so the operator's `.env` keeps its comments
+// and key order across repeated wizard runs. Keys absent from the template are
+// appended; keys absent from `values` are left alone.
 export function writeEnvFile(
   path: string,
   values: Record<string, string>,
@@ -139,15 +117,13 @@ export function writeEnvFile(
     if (!seen.has(k)) out.push(`${k}=${envEscape(v)}`);
   }
 
-  // Always end with exactly one trailing newline.
   let content = out.join('\n');
   if (!content.endsWith('\n')) content += '\n';
   writeFileSync(path, content);
 }
 
-// ─── Wizard overlay helpers (state/setup-config.json + state/secrets.env) ───
-// Mirror the controller-side helpers in controller/src/setup/{config,secrets}.ts
-// so the CLI wizard and the web wizard write the same files in the same shape.
+// Wizard overlay helpers. Mirror controller/src/setup/{config,secrets}.ts so the
+// CLI and web wizards write the same files in the same shape.
 
 export interface SetupConfig {
   navidrome?: { url?: string; user?: string; pass?: string };
@@ -177,12 +153,9 @@ export function writeSetupConfig(patch: Partial<SetupConfig>): SetupConfig {
   return next;
 }
 
-// Wrap writeFileSync with auto-recovery for the common case of root-owned
-// state files. If the browser wizard ran first (or any Docker container
-// touched the file), it'll be owned by uid 0 with mode 0644 — readable from
-// the host but not writable. Detect EACCES, chown the whole state tree to
-// the current host UID via a one-shot Docker container, retry once. If
-// Docker isn't available, surface a clear error with the manual fix.
+// A state file the browser wizard (or any container) touched first is uid 0
+// mode 0644 — readable from the host but not writable. Recover by chowning the
+// tree back through a one-shot Docker container, then retry once.
 function writeFileWithRecover(path: string, contents: string): void {
   try {
     writeFileSync(path, contents);
@@ -196,16 +169,12 @@ function writeFileWithRecover(path: string, contents: string): void {
         `Fix manually: docker run --rm -v "$PWD/state:/state" alpine chown -R $(id -u):$(id -g) /state`,
       );
     }
-    // Retry. If it still fails, propagate (the chown didn't help — bigger
-    // problem like a read-only mount).
+    // Still failing means the chown wasn't the problem (read-only mount, say).
     writeFileSync(path, contents);
   }
 }
 
-// Shell out to a one-shot Docker container that chowns the state/ tree to
-// the current host UID:GID. Idempotent and safe to call when nothing needs
-// fixing — chown -R on already-owned files is a no-op. Returns true on
-// success, false if Docker isn't on PATH or the chown failed.
+// Idempotent — chown -R over already-owned files is a no-op.
 function chownStateDirToCurrentUser(): boolean {
   if (!have('docker')) return false;
   const uid = process.getuid?.();
@@ -219,9 +188,8 @@ function chownStateDirToCurrentUser(): boolean {
   return r.status === 0;
 }
 
-// Keys the wizard is allowed to write to state/secrets.env. Mirrors
-// controller/src/setup/secrets.ts SECRET_ENV_KEYS — anything else passed
-// in gets silently ignored.
+// Mirrors SECRET_ENV_KEYS in controller/src/setup/secrets.ts. Anything not on
+// this list is silently ignored.
 export const WIZARD_SECRET_KEYS = [
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',
@@ -236,9 +204,8 @@ export const WIZARD_SECRET_KEYS = [
   'EMBEDDING_API_KEY',
 ] as const;
 
-// Merge a batch of API keys into state/secrets.env (mode 0600), preserving
-// any keys the operator added by hand. Same shape the controller's
-// saveSecrets() writes, so the next controller boot picks them up.
+// Merges into state/secrets.env (0600), preserving hand-added keys. Same shape
+// the controller's saveSecrets() writes, so the next boot picks them up.
 export function writeSecretsEnv(patch: Record<string, string>): void {
   const p = getSecretsEnvPath();
   const current: Record<string, string> = {};
@@ -270,7 +237,7 @@ export function writeSecretsEnv(patch: Record<string, string>): void {
   try {
     chmodSync(p, 0o600);
   } catch {
-    // chmod may fail on non-POSIX filesystems (e.g. Windows host) — non-fatal.
+    // Non-POSIX filesystem (a Windows host) — non-fatal.
   }
 }
 
@@ -296,9 +263,8 @@ export function truncate(s: string, n: number): string {
   return s.slice(0, n - 1) + '…';
 }
 
-// Resolve a fetch failure into a short, human-readable reason. fetch() rejects
-// with an AggregateError-ish shape on connection refused; pull out just the
-// readable bit so doctor reports don't have stack traces in them.
+// fetch() rejects with an AggregateError-ish shape on connection refused; dig
+// out the readable bit so doctor reports don't carry stack traces.
 export function fetchErrorReason(e: unknown): string {
   if (!e) return 'unknown';
   if (e instanceof Error) {

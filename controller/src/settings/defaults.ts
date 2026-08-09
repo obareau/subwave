@@ -4,6 +4,15 @@
 // Part of the settings/ split — see ../settings.ts for the public barrel.
 
 import { config } from '../config.js';
+import {
+  BEDS_CROSS_SEC_BOUNDS,
+  BEDS_THRESHOLD_SEC_BOUNDS,
+  CROSSFADE_DURATION_BOUNDS,
+  JINGLE_RATIO_BOUNDS,
+  LOUDNESS_MAX_BOOST_DB_BOUNDS,
+  LOUDNESS_TARGET_LUFS_BOUNDS,
+} from '../schemas/settings.js';
+import { SHOW_MAX_TRACK_SECONDS } from '../schemas/show.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
 import {
   AAC_BITRATES,
@@ -714,25 +723,23 @@ export const DEFAULTS = {
 };
 
 export const BOUNDS = {
-  // 0 = jingles off entirely — radio.liq skips the jingle rotate when the
-  // ratio file reads 0 (issue #997: no way to disable the station stinger).
-  jingleRatio: { min: 0, max: 1000, type: 'int' },
-  crossfadeDuration: { min: 0, max: 30, type: 'float' },
-  // 0 = bed every link whose incoming vocal onset is unknown. The ceiling is
-  // deliberately low: past ~60s the DJ has outlasted any script the generators
-  // produce, so a higher value is indistinguishable from beds being off.
-  bedsThresholdSec: { min: 0, max: 60, type: 'float' },
-  // The bed's ramp into the next song. bed-policy clamps this against the bed's
-  // own length too, so a long ramp on a short link can't invert the arithmetic.
-  bedsCrossSec: { min: 0, max: 15, type: 'float' },
+  // The three keys converted to the shared schema (#1348) take their numbers
+  // from schemas/settings.ts rather than declaring them here. A mirrored module
+  // may not import a non-mirrored one, so the shared schema has to own the
+  // constant and this re-exports it — the same rule that homed SHOW_ID_RE in
+  // schemas/show.ts. The rationale for each figure moved with it.
+  jingleRatio: { ...JINGLE_RATIO_BOUNDS, type: 'int' },
+  crossfadeDuration: { ...CROSSFADE_DURATION_BOUNDS, type: 'float' },
+  bedsThresholdSec: { ...BEDS_THRESHOLD_SEC_BOUNDS, type: 'float' },
+  bedsCrossSec: { ...BEDS_CROSS_SEC_BOUNDS, type: 'float' },
   // 0 = off; 36000 s (10h) is a generous ceiling that still leaves room for
   // long-form mix shows without letting a typo set an absurd value.
-  maxTrackSeconds: { min: 0, max: 36000, type: 'int' },
-  // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
-  loudnessTargetLufs: { min: -23, max: -9, type: 'float' },
-  // 0 disables boosting entirely (cut-only levelling); 12 dB is plenty — the
-  // per-track peak headroom cap bites long before that on dynamic material.
-  loudnessMaxBoostDb: { min: 0, max: 12, type: 'float' },
+  // Ceiling from the shared show schema: the strict show validator has always
+  // bounds-checked a show's own override against this station figure, so two
+  // copies of the number would drift.
+  maxTrackSeconds: { min: 0, max: SHOW_MAX_TRACK_SECONDS, type: 'int' },
+  loudnessTargetLufs: { ...LOUDNESS_TARGET_LUFS_BOUNDS, type: 'float' },
+  loudnessMaxBoostDb: { ...LOUDNESS_MAX_BOOST_DB_BOUNDS, type: 'float' },
 };
 
 export const MP3_BITRATE_SET = new Set<number>(MP3_BITRATES);

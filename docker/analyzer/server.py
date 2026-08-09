@@ -38,10 +38,9 @@ ANALYZER_HF_HOME = os.environ.get("ANALYZER_HF_HOME", "/opt/analyzer/hf-cache")
 # the CLAP/Demucs singletons, but ~1GB of librosa/numba/torch scratch stays
 # resident — restarting the worker is the only full reclaim. After this many
 # seconds with no HEAVY use (lean bpm/key traffic doesn't count, same clock as
-# the worker's release) the shim terminates the worker and run() respawns it.
-# The recycle holds the request lock, so a request landing mid-recycle queues
-# behind the respawn instead of 500ing. Default sits above the worker's
-# largest release window so the cheap release always fires first; 0 disables.
+# the worker's release) the shim terminates it and run() respawns. Default
+# sits above the worker's largest release window so the cheap release always
+# fires first; 0 disables.
 _RECYCLE_ENV = os.environ.get("ANALYZE_RECYCLE_IDLE_S", "").strip()
 try:
     RECYCLE_IDLE_S = float(_RECYCLE_ENV) if _RECYCLE_ENV else 3600.0
@@ -76,9 +75,8 @@ log = logging.getLogger("analyzer")
 class StdioWorker:
     """Async wrapper around a long-lived stdio worker subprocess.
 
-    One JSON object per line over stdin/stdout; no multiplexing — one request
-    in flight, gated by a lock. run() supervises the lifecycle from the
-    FastAPI lifespan: start → wait-for-exit → respawn with a short backoff.
+    No multiplexing — one request in flight, gated by a lock. run() drives the
+    lifecycle from the FastAPI lifespan.
     """
 
     START_BACKOFF_S = 5.0
@@ -104,14 +102,14 @@ class StdioWorker:
         self.models_resident = False
         self.recycles = 0
         # Capabilities the worker advertised at ready but LOST when the model
-        # was actually asked to load — {"audio_embedding": "<why>"}. Harvested
-        # from every response (analyze_worker.capability_loss) and deliberately
-        # NOT cleared by _reset(), which is the whole point: the worker's own
-        # _embed_failed dies with the process, and recycle_loop respawns the
-        # process on idle, so a purely in-worker latch resets itself every hour
-        # and the controller re-widens its backfill to the same doomed track
-        # set forever (#1300 bug 3). Cleared only by restarting THIS container,
-        # which is also the operator's retry after fixing the cause.
+        # was actually asked to load — {"audio_embedding": "<why>"}, harvested
+        # from every response (analyze_worker.capability_loss). Deliberately
+        # NOT cleared by _reset(): the worker's own latch dies with the
+        # process, and recycle_loop respawns that process every idle hour, so
+        # an in-worker-only latch would reset itself and the controller would
+        # re-widen its backfill to the same doomed tracks forever (#1300 bug
+        # 3). Cleared only by restarting THIS container — which is also the
+        # operator's retry after fixing the cause.
         self.capability_errors: dict[str, str] = {}
 
     async def run(self) -> None:
@@ -390,10 +388,10 @@ async def health():
             "vocal_activity_capable", "vocal_activity"
         ),
         # WHY a capability is false, when the reason is a failed load rather
-        # than a lean build — null in every other case, including a lean image.
-        # The distinction is the actionable part: "rebuild with the heavy image"
-        # and "give this host reach to huggingface.co, or pre-seed its cache"
-        # are opposite instructions, and a bare false can't tell them apart.
+        # than a lean build (null in every other case). The distinction is the
+        # actionable part: "rebuild with the heavy image" and "give this host
+        # reach to huggingface.co" are opposite instructions, and a bare false
+        # can't tell them apart.
         "analyze_audio_error": analyzer_worker.capability_errors.get("audio_embedding"),
         "analyze_vocal_error": analyzer_worker.capability_errors.get("vocal_activity"),
         # Tail vocal ranges — a worker-version signal as much as a capability:

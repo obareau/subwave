@@ -4,7 +4,7 @@
 import { Users } from 'lucide-react';
 import type { Persona } from './types';
 import { API_BASE, PERSONA_MAX } from './constants';
-import { initialsFor, personaValid } from './helpers';
+import { initialsFor } from './helpers';
 import { cn } from '../../../lib/cn';
 import { useRosterView } from '../../../lib/adminView';
 import { Btn, Pill, MetaChip } from '../ui';
@@ -18,6 +18,9 @@ interface PersonaRosterProps {
   // Equals activePersonaId unless a show overrides it.
   onAirPersonaId: string;
   avatarTick: number;
+  // Sourced from the RHF form's own formState.errors.personas — the schema's
+  // answer, not a local reimplementation of it.
+  isPersonaInvalid: (idx: number) => boolean;
   // Opens the system-prompt library modal.
   onOpenPrompt: () => void;
   onAdd: () => void;
@@ -28,7 +31,7 @@ interface PersonaRosterProps {
 }
 
 export function PersonaRoster({
-  personas, activePersonaId, onAirPersonaId, avatarTick,
+  personas, activePersonaId, onAirPersonaId, avatarTick, isPersonaInvalid,
   onOpenPrompt, onAdd, onSelect, communityCount, onCommunity,
 }: PersonaRosterProps) {
   // Cards (default) or a dense table. Remembered per surface in localStorage.
@@ -65,6 +68,7 @@ export function PersonaRoster({
           activePersonaId={activePersonaId}
           onAirPersonaId={onAirPersonaId}
           avatarTick={avatarTick}
+          isPersonaInvalid={isPersonaInvalid}
           onSelect={onSelect}
         />
       )}
@@ -72,7 +76,7 @@ export function PersonaRoster({
       {view === 'cards' && personas.map((p, i) => {
         const isOnAir = p.id === onAirPersonaId;
         const isDefault = p.id === activePersonaId;
-        const valid = personaValid(p);
+        const valid = !isPersonaInvalid(i);
         const src = p.avatar
           ? `${API_BASE}/persona-avatar/${encodeURIComponent(p.id)}?v=${avatarTick}`
           : null;

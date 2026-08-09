@@ -11,7 +11,7 @@ import {
 import { Card, Btn, Pill, Seg } from '../ui';
 import { LocationPicker, type GeocodeResult } from '../../LocationPicker';
 import {
-  SectionHeader, SaveBar,
+  SectionHeader, SaveBar, SettingsFieldError,
   type SectionProps,
 } from './shared';
 
@@ -41,7 +41,7 @@ const ON_OFF = [
   { id: 'off', label: 'Off' },
 ] as const;
 
-export function StationSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+export function StationSection({ data, form, setForm, busy, saveSettings, fieldErrors }: SectionProps) {
   // Persisted state, for the "restart required" pill and the password placeholder.
   const authOnFile = data.values?.privacy?.listenerAuth === true;
   const passwordOnFile = data.values?.privacy?.password === 'set';
@@ -123,6 +123,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
             className="w-[260px] max-w-full"
             maxLength={80}
           />
+          <SettingsFieldError path="station" errors={fieldErrors} />
           <div className="field-hint">
             Substituted into the DJ prompt’s {'{station}'} placeholder (current: {data.values?.station || 'SUB/WAVE'}). Applies live.
           </div>
@@ -139,6 +140,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
             className="w-full"
             maxLength={200}
           />
+          <SettingsFieldError path="stationDescription" errors={fieldErrors} />
           <div className="field-hint">
             The blurb shown when someone shares a link to this station on social
             media or chat. Stays the same whoever is on air; leave it empty and
@@ -541,6 +543,8 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
         busy={busy}
         onSave={save}
         saveLabel="Save station settings"
+        errors={fieldErrors}
+        ownedKeys={['station', 'stationDescription', 'timezone', 'locale', 'weather', 'privacy', 'requests']}
       />
     </>
   );

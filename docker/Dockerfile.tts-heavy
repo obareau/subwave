@@ -4,6 +4,9 @@
 # `docker compose --profile tts-heavy up -d`; the controller POSTs speech
 # requests via TTS_HEAVY_URL.
 #
+# TTS-only: acoustic analysis lives in the standalone subwave-analyzer sidecar
+# (docker/Dockerfile.analyzer).
+#
 # TWO isolated venvs, one per engine, driven by the existing stdio workers
 # (controller/scripts/{chatterbox,pocket_tts}_worker.py) behind a thin FastAPI
 # front (docker/tts-heavy/server.py). Two venvs because the engines need
@@ -98,9 +101,6 @@ RUN python3 -m venv /opt/server/venv && \
     /opt/server/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/server/venv/bin/pip install --no-cache-dir \
       fastapi==0.139.0 "uvicorn[standard]==0.49.0" pydantic==2.13.4
-
-# This image is TTS-only — acoustic analysis lives in the standalone
-# subwave-analyzer sidecar (docker/Dockerfile.analyzer).
 
 # Strip the build toolchain now that pkuseg has compiled (~500MB).
 RUN apt-get update && apt-get purge -y --auto-remove build-essential && \

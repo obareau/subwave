@@ -58,30 +58,51 @@ export const FADER_FILL_WIDTH: Record<number, readonly string[]> = {
 // Engine descriptors live in components/admin/tts/engineMeta.ts (shared with the
 // Settings voice tab) — import ENGINES from there, not here.
 
-// Chatterbox reference voice files are validated against this in audio/chatterbox.ts
-// — basename only, no path separators, .wav extension, conservative chars.
-export const CHATTERBOX_VOICE_RE = /^[A-Za-z0-9_.-]{1,80}\.wav$/;
-// Sentinel for the empty-string "use the built-in voice" choice — Radix Select
-// rejects an empty-string SelectItem value.
-export const CB_DEFAULT_VOICE = '__cb_default__';
-// PocketTTS voice ids — lowercase, allow underscores/hyphens (matches the
-// settings-side POCKET_TTS_VOICE_RE).
-export const POCKET_TTS_VOICE_RE = /^[a-z][a-z0-9_-]{0,39}$/;
-export const KOKORO_RE = /^[a-z]{2}_[a-z0-9]+$/;
+// Every cap and voice pattern below comes from the MIRROR
+// (controller/src/schemas/persona.ts via lib/schemas.generated.ts) rather than
+// being re-typed here. They used to be hand-copied with "keep in lockstep with
+// …" comments, which is the surest sign of a constant about to drift — and one
+// already had: personaValid required a `cloud` voice unconditionally while the
+// controller allows an empty one for openai-compatible, so an operator on a
+// self-hosted TTS server could not save their roster at all.
+//
+// These are re-exported under the names this editor already used, so no call
+// site moved.
+import {
+  DJ_PROMPT_LIMIT,
+  DJ_PROMPT_NAME_MAX,
+  DJ_PROMPT_TEXT_MAX,
+  DJ_PROMPT_TEXT_MIN,
+  PERSONA_LANGUAGE_MAX,
+  PERSONA_LIMIT,
+  PERSONA_NAME_MAX,
+  PERSONA_SOUL_MAX,
+  PERSONA_TAGLINE_MAX,
+  TTS_CHATTERBOX_VOICE_RE,
+  TTS_KOKORO_VOICE_RE,
+  TTS_POCKET_VOICE_RE,
+} from '@/lib/schemas.generated';
 
-export const NAME_MAX = 40;
-export const TAGLINE_MAX = 80;
-export const SOUL_MAX = 2000;
-export const LANGUAGE_MAX = 60;
-export const PROMPT_MIN = 50;
-export const PROMPT_MAX = 4000;
-// Prompt-template library caps — keep in lockstep with the controller's
-// DJ_PROMPT_LIMIT / DJ_PROMPT_NAME_MAX (settings.ts).
-export const PROMPT_PRESET_MAX = 20;
-export const PROMPT_NAME_MAX = 60;
+export const CHATTERBOX_VOICE_RE = TTS_CHATTERBOX_VOICE_RE;
+// Sentinel for the empty-string "use the built-in voice" choice — Radix Select
+// rejects an empty-string SelectItem value. Purely a UI concern, so it stays.
+export const CB_DEFAULT_VOICE = '__cb_default__';
+export const POCKET_TTS_VOICE_RE = TTS_POCKET_VOICE_RE;
+export const KOKORO_RE = TTS_KOKORO_VOICE_RE;
+
+export const NAME_MAX = PERSONA_NAME_MAX;
+export const TAGLINE_MAX = PERSONA_TAGLINE_MAX;
+export const SOUL_MAX = PERSONA_SOUL_MAX;
+export const LANGUAGE_MAX = PERSONA_LANGUAGE_MAX;
+export const PROMPT_MIN = DJ_PROMPT_TEXT_MIN;
+export const PROMPT_MAX = DJ_PROMPT_TEXT_MAX;
+export const PROMPT_PRESET_MAX = DJ_PROMPT_LIMIT;
+export const PROMPT_NAME_MAX = DJ_PROMPT_NAME_MAX;
 // Station house rules cap — lockstep with DJ_HOUSE_RULES_MAX (settings/vocab.ts).
+// Not yet on the mirror: djHouseRules converted as a scalar settings key, whose
+// schema owns the bound but does not export it as a named constant.
 export const HOUSE_RULES_MAX = 2000;
-export const PERSONA_MAX = 48;
+export const PERSONA_MAX = PERSONA_LIMIT;
 
 // 512×512 output target. The controller hard-caps the decoded image at 300 KB
 // and the JSON body at 600 KB; a center-cropped 512×512 WebP from a typical

@@ -34,7 +34,7 @@ const searchProviderLabel = (id: string | undefined): string =>
 interface SearchSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
-export function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: SearchSectionProps) {
+export function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch, fieldErrors }: SearchSectionProps) {
   const [keyTest, setKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
   const [keyTesting, setKeyTesting] = useState(false);
   const [testingSearxng, setTestingSearxng] = useState(false);
@@ -250,6 +250,8 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         busy={busy}
         onSave={save}
         saveLabel="Save web search"
+        errors={fieldErrors}
+        ownedKeys={['search']}
       />
     </>
   );

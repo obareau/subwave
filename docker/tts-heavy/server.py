@@ -72,11 +72,10 @@ log = logging.getLogger("tts-heavy")
 class TtsWorker:
     """Async wrapper around a long-lived stdio TTS worker subprocess.
 
-    One JSON object per line over stdin/stdout (the same protocol as the
-    controller's in-process TS clients); no multiplexing — one request in
-    flight per worker, gated by a lock. run() supervises the lifecycle:
-    start → wait-for-exit → respawn with a short backoff, so a crash (OOM,
-    fatal model error) recovers without bouncing the container.
+    Same line protocol as the controller's in-process TS clients; no
+    multiplexing — one request in flight per worker, gated by a lock. run()
+    supervises the lifecycle so a crash (OOM, fatal model error) recovers
+    without bouncing the container.
     """
 
     # START_BACKOFF applies when start() itself fails (model load error,

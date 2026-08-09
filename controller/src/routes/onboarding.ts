@@ -22,6 +22,14 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 
 import { requireAdmin } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validate.js';
+import {
+  fishAudioIssue,
+  llmProbeSchema,
+  navidromeProbeSchema,
+  normalizeNavidromeCredentials,
+  type LlmProbeInput,
+} from '../schemas/onboarding.js';
 import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch } from '../llm/provider.js';
 import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
@@ -62,14 +70,8 @@ router.get('/onboarding/status', async (req, res) => {
 // ---------------------------------------------------------------------------
 // POST /onboarding/test-navidrome — body: { url, user, pass }
 // ---------------------------------------------------------------------------
-router.post('/onboarding/test-navidrome', requireAdmin, async (req, res) => {
-  const url = String(req.body?.url || '').trim().replace(/\/$/, '');
-  const user = String(req.body?.user || '').trim();
-  const pass = String(req.body?.pass || '');
-  if (!url || !user || !pass) {
-    return res.status(400).json({ ok: false, error: 'url, user, and pass are required' });
-  }
-
+router.post('/onboarding/test-navidrome', requireAdmin, validateBody(navidromeProbeSchema), async (req, res) => {
+  const { url, user, pass } = req.body as { url: string; user: string; pass: string };
   res.json(await pingWith({ url, user, pass, client: 'sub-wave-wizard' }));
 });
 
@@ -78,15 +80,12 @@ router.post('/onboarding/test-navidrome', requireAdmin, async (req, res) => {
 // Constructs a one-off AI SDK model and asks it for a single token. Does NOT
 // touch the live llm settings.
 // ---------------------------------------------------------------------------
-router.post('/onboarding/test-llm', requireAdmin, async (req, res) => {
-  const provider = String(req.body?.provider || '').trim();
-  const model = String(req.body?.model || '').trim();
-  const apiKey = String(req.body?.apiKey || '').trim();
-  const baseUrl = String(req.body?.baseUrl || '').trim();
-  const ollamaUrl = String(req.body?.ollamaUrl || '').trim();
-  if (!provider || !model) {
-    return res.status(400).json({ ok: false, error: 'provider and model are required' });
-  }
+router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), async (req, res) => {
+  // The schema owns "provider and model are required" AND "openai-compatible
+  // needs a baseUrl" — the latter used to be a throw inside the switch below,
+  // discoverable only by pressing Test; the wizard now runs the same rule to
+  // hold the button shut.
+  const { provider, model, apiKey, baseUrl, ollamaUrl } = req.body as LlmProbeInput;
 
   try {
     let m: any;
@@ -98,7 +97,6 @@ router.post('/onboarding/test-llm', requireAdmin, async (req, res) => {
         m = createOpenAI(apiKey ? { apiKey } : {})(model);
         break;
       case 'openai-compatible':
-        if (!baseUrl) throw new Error('baseUrl is required for openai-compatible');
         // noThinkFetch so a thinking model (Qwen3 etc.) returns visible content
         // in the test rather than spending its budget in the reasoning channel.
         m = createOpenAI({ baseURL: baseUrl, apiKey: apiKey || 'unused', fetch: noThinkFetch }).chat(model);
@@ -176,27 +174,20 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     // Validate Fish's provider-specific settings before ANY wizard store is
     // mutated. Navidrome/setup credentials are written earlier than the shared
     // settings patch, so deferring this to settings.update() could otherwise
-    // make a rejected Fish save hide onboarding on the next reload.
-    const fishCloud = b.tts?.cloud;
-    if (fishCloud?.enabled && fishCloud.provider === 'fish-audio') {
-      const model = String(fishCloud.model || '').trim();
-      const voice = String(fishCloud.voice || '').trim();
-      if (!model || model.length > 100 || /[\r\n]/.test(model)) {
-        throw new Error('Fish Audio model id must be 1-100 characters with no line breaks');
-      }
-      if (!voice || voice.length > 100 || /[\r\n]/.test(voice)) {
-        throw new Error('Fish Audio voice reference id must be 1-100 characters with no line breaks');
-      }
-    }
+    // make a rejected Fish save hide onboarding on the next reload. The rule
+    // itself lives in schemas/onboarding.ts (fishAudioIssue) — the wizard runs
+    // the same copy, because the two hand-rolled versions had already drifted
+    // in the MESSAGE ('1-100' here, '1–100' there) before they could in logic.
+    const fishIssue = fishAudioIssue(b.tts?.cloud);
+    if (fishIssue) throw new Error(fishIssue);
 
     // Navidrome — only the wizard-managed overlay; never mutate the live env.
+    // Save does NOT require the fields the probe does (skipping Navidrome is a
+    // supported way through the wizard), but it normalises identically —
+    // normalizeNavidromeCredentials is the one copy of trim + slash-strip.
     if (b.navidrome && typeof b.navidrome === 'object') {
       await saveSetupConfig({
-        navidrome: {
-          url: String(b.navidrome.url || '').trim().replace(/\/$/, ''),
-          user: String(b.navidrome.user || '').trim(),
-          pass: String(b.navidrome.pass || ''),
-        },
+        navidrome: normalizeNavidromeCredentials(b.navidrome),
       });
       // Apply to the live config so subsonic calls work without a restart.
       applyNavidromeToLiveConfig(b.navidrome);

@@ -1,9 +1,29 @@
 'use client';
 // The engine picker and every engine's voice selector live in the shared
 // tts/EngineVoiceFields, which the station-wide TTS fallback slot uses too.
-import type { ChangeEvent } from 'react';
-import type { Persona, PersonaTts, SettingsResponse } from './types';
+//
+// `tts` is bound as ONE `useController` over the whole {engine, cloudProvider,
+// voice, gainDb, speed} object, not a `SelectField` per subfield — two
+// independent reasons, not just a style choice. (1) EngineVoiceFields already
+// does real cross-field work on change (switching engine resets `voice` to a
+// value the NEW engine accepts, e.g. a Kokoro id after Chatterbox), which
+// needs one callback over the whole slot the way `SelectField`'s hardcoded
+// `onValueChange={field.onChange}` cannot express — the same class of
+// deviation Task 6 established for BlockRulesCard's "Match on" field. (2) The
+// controller's own fieldErrors for this block are ALSO block-level: traced
+// `ttsVoiceSlotSchema` (controller/src/schemas/persona.ts) — it's a single
+// `.transform()` over the whole slot and every `ctx.addIssue` inside it omits
+// an explicit `.path()`, so a bad voice for a bad engine/provider combination
+// comes back keyed at `personas.<i>.tts`, never `.tts.voice` — there is no
+// deeper field to attach a per-input error to even in principle. Binding one
+// controller at exactly that path is what lets `field.error` — and the
+// operator-visible message below — actually catch it.
+import { useId } from 'react';
+import { useController, type Control } from 'react-hook-form';
+import type { Persona, PersonasFormValues, SettingsResponse } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
+import { fieldAria } from '@/lib/form';
+import { Field, FieldLabel, FieldError } from '@/components/ui/field';
 import { Card } from '../ui';
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
 import { Label } from '../../ui/label';
@@ -11,35 +31,49 @@ import { VoiceMeter } from './VoiceMeter';
 import { cn } from '../../../lib/cn';
 
 interface PersonaVoiceCardProps {
-  persona: Persona;
+  persona: Persona; // read-only: language (preview) + on-screen labels only
+  index: number;
+  control: Control<PersonasFormValues>;
   data: SettingsResponse | null;
   defaultEngine: string;
   cloudIssueText: string | null;
   adminFetch: AdminAuth['adminFetch'];
-  updateTts: (patch: Partial<PersonaTts>) => void;
 }
 
-export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText, adminFetch, updateTts }: PersonaVoiceCardProps) {
-  const gain = persona.tts.gainDb ?? 0;
+export function PersonaVoiceCard({
+  persona, index, control, data, defaultEngine, cloudIssueText, adminFetch,
+}: PersonaVoiceCardProps) {
+  const { field, fieldState } = useController({ control, name: `personas.${index}.tts` });
+  const tts = field.value;
+  const uid = useId();
+  const aria = fieldAria(`${uid}-tts`, fieldState.error);
+
+  const gain = tts.gainDb ?? 0;
   const gainLabel = !gain
     ? '0 dB'
     : `${gain > 0 ? '+' : '−'}${Math.abs(gain).toFixed(1)} dB`;
 
-  const speed = persona.tts.speed ?? 1;
+  const speed = tts.speed ?? 1;
   // Only Piper/Kokoro/cloud honour speed; the other workers ignore it, so the
   // control is shown but disabled with a hint.
-  const speedSupported = persona.tts.engine !== 'chatterbox' && persona.tts.engine !== 'pocket-tts' && persona.tts.engine !== 'remote';
+  const speedSupported = tts.engine !== 'chatterbox' && tts.engine !== 'pocket-tts' && tts.engine !== 'remote';
 
   return (
     <Card flat title="Voice" sub="text-to-speech engine">
       <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8">
-        <div className="min-w-0">
+        <Field data-invalid={aria.invalid || undefined} {...aria.groupProps} className="min-w-0">
+          {/* No single labelable control across engine + voice, so this Field
+              names itself via aria-labelledby (fieldAria's group variant),
+              matching BlockRulesCard's "values" chip group. */}
+          <FieldLabel asChild className="caption" {...aria.labelledByProps}>
+            <span>Engine &amp; voice</span>
+          </FieldLabel>
           <EngineVoiceFields
-            value={persona.tts}
-            onChange={updateTts}
+            value={tts}
+            onChange={patch => field.onChange({ ...tts, ...patch })}
             data={data}
             adminFetch={adminFetch}
-            previewSpeed={persona.tts.speed}
+            previewSpeed={tts.speed}
             previewLanguage={persona.language}
             cloudIssue={cloudIssueText && (
               <>
@@ -61,7 +95,11 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
               applied later, on air.
             </>}
           />
-        </div>
+          <FieldError
+            {...aria.errorProps}
+            errors={fieldState.error ? [fieldState.error] : undefined}
+          />
+        </Field>
 
         <div className="field mt-3.5 max-w-[360px] lg:mt-0 lg:max-w-[460px]">
           <div className="flex items-baseline justify-between gap-3">
@@ -70,7 +108,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
           </div>
           <VoiceMeter
             value={gain}
-            onChange={v => updateTts({ gainDb: v })}
+            onChange={v => field.onChange({ ...tts, gainDb: v })}
           />
           <div className="mt-1.5 flex justify-between text-[8px] font-bold tracking-[0.1em] text-muted tabular-nums">
             <span>−12 dB</span>
@@ -94,7 +132,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
               step={0.05}
               value={speed}
               disabled={!speedSupported}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => updateTts({ speed: Number(e.target.value) })}
+              onChange={e => field.onChange({ ...tts, speed: Number(e.target.value) })}
               aria-label="Speech speed multiplier"
               className={cn(
                 'mt-1.5 w-full accent-[var(--accent)]',

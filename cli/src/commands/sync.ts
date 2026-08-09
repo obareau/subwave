@@ -1,11 +1,7 @@
-// `subwave sync` — re-materialise the embedded compose files + .env.example
-// into the install dir, so a stack scaffolded before a service was added picks
-// it up (the #1043 fix). `init` writes these files once and nothing else
-// rewrites them; this is the explicit "refresh them now" action that the drift
-// warnings in `update` / `doctor` point at. It backs up anything it changes.
-//
-// `--check` is a dry-run: report drift, write nothing, exit non-zero if the
-// files are behind — usable from a script / CI probe.
+// `subwave sync` — the explicit "refresh the compose files now" action that the
+// drift warnings in `update` / `doctor` point at (#1043). Backs up anything it
+// changes. `--check` is a dry-run for scripts: report drift, write nothing, exit
+// non-zero when the files are behind.
 
 import { requireSubwaveHome, isCloneMode } from '../home.ts';
 import {
@@ -26,8 +22,7 @@ export async function runSyncCommand(opts: SyncOptions = {}): Promise<void> {
 
   const { home } = requireSubwaveHome();
 
-  // Clone installs get their compose from the repo — nothing for the CLI to
-  // materialise. Point at git and stop.
+  // A clone gets its compose from the repo — nothing to materialise.
   if (isCloneMode(home)) {
     header('Clone install');
     info('This is a git clone — its compose files come from the repo, not the CLI.');
@@ -60,7 +55,6 @@ export async function runSyncCommand(opts: SyncOptions = {}): Promise<void> {
   for (const e of behind) reportDrift(e);
   console.log();
 
-  // Dry-run: report + non-zero exit for scripting, no writes, no pause.
   if (opts.check) {
     muted('→ run `subwave sync` to refresh them (backs up any changed file first).');
     process.exit(1);

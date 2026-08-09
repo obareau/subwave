@@ -1,8 +1,6 @@
-// Main menu loop. Status-aware — the top-level actions adapt to what's
-// currently running (start vs stop vs restart). Esc inside any submenu
-// throws MENU_BACK, which is caught here and treated as "re-render".
-//
-// Mirrors locca's src/menu.ts pattern.
+// Main menu loop, following locca's pattern. Status-aware: the actions adapt to
+// what's running, and MENU_BACK thrown from any submenu is caught here as
+// "re-render".
 
 import { detectCompose } from './compose.ts';
 import { setMenuMode, MENU_BACK, banner, header, ok, warn, muted, exitIfCancelled, p, pc } from './ui.ts';
@@ -24,8 +22,7 @@ export async function runMenu(): Promise<void> {
   setMenuMode(true);
   banner('operator console');
 
-  // Header line — one quick render before the main select. Hits docker
-  // ps only; no controller HTTP call so the menu pops up instantly even
+  // docker ps only, no controller HTTP — the menu has to pop up instantly even
   // when the stack is unreachable.
   const compose = detectCompose();
   if (compose.env === 'down') {
@@ -33,22 +30,20 @@ export async function runMenu(): Promise<void> {
   } else {
     let running = Object.values(compose.services).filter((s) => s === 'running').length;
     let total = Object.keys(compose.services).length;
-    // In dev the web UI is a host-side `npm run dev` process, not a compose
-    // service — fold it into the running/total tally so the banner reflects
-    // the whole rig.
+    // The dev web server isn't a compose service; fold it into the tally so the
+    // banner reflects the whole rig.
     if (compose.env === 'dev') {
       const holder = whoHolds7700();
       total += 1;
-      // `next dev` reports as `next-server` on Linux, `node` on macOS — match
-      // both (isWebDevCommand), else the banner undercounts on Linux.
+      // isWebDevCommand, not a bare 'node' check — Linux reports `next-server`
+      // and the banner would undercount there.
       if (holder && isWebDevCommand(holder.command)) running += 1;
     }
     ok(`stack up · env=${pc.bold(compose.env)} · ${running}/${total} running`);
   }
   console.log();
 
-  // Top-level menu. Build options based on stack state so the operator
-  // only sees what makes sense right now (locca pattern).
+  // Built from stack state so the operator only sees what makes sense now.
   const options: Array<{ value: string; label: string; hint?: string }> = [];
 
   options.push({ value: 'status', label: 'status', hint: 'compose + now-playing + recent events' });
@@ -64,8 +59,7 @@ export async function runMenu(): Promise<void> {
     options.push({ value: 'stop', label: 'stop', hint: 'docker compose down' });
   }
   options.push({ value: 'setup', label: 'setup', hint: 're-run the install wizard' });
-  // Surface `sync` only when the on-disk compose has fallen behind the binary
-  // — so the operator sees it exactly when it matters (see #1043).
+  // Only shown when the on-disk compose has fallen behind the binary (#1043).
   if (composeFilesDrifted()) {
     options.push({ value: 'sync', label: 'sync', hint: pc.yellow('compose files behind this CLI — refresh them') });
   }
@@ -111,8 +105,8 @@ async function dispatch(choice: string): Promise<void> {
     case 'logs':    return runLogsCommand();
     case 'sync':    return runSyncCommand();
     case 'setup': {
-      // The setup wizard owns its own Clack lifecycle. Temporarily disable
-      // menu-mode so its Esc handling works normally; restore after.
+      // The setup wizard owns its own Clack lifecycle, so menu-mode Esc
+      // handling has to stand down for the duration.
       setMenuMode(false);
       try { await runSetupCommand(); }
       finally { setMenuMode(true); }
@@ -125,9 +119,8 @@ async function dispatch(choice: string): Promise<void> {
   }
 }
 
-// Cheap on-disk drift probe for the menu (a few readFileSync — no docker/HTTP).
-// Standalone installs only; any resolution error → no hint (never blocks the
-// menu render).
+// A few readFileSync, no docker or HTTP — this runs on every menu render, and
+// any error yields no hint rather than blocking it.
 function composeFilesDrifted(): boolean {
   try {
     const home = getSubwaveHome();

@@ -84,14 +84,14 @@ const allowed = new Set(['classic-light', 'vinyl', 'blueprint']);
 // A dangling persona reference is still a hard error.
 assert.throws(
   () => validateShowsStrict([{ name: 'Bad', personaId: 'p_nope' }], personas, allowed),
-  /personaId must reference an existing persona/,
+  /personaId.*must reference an existing persona/,
   'unknown personaId still throws',
 );
 
 // A blank name is still a hard error (proves the theme fix did not blanket-soften).
 assert.throws(
   () => validateShowsStrict([{ name: '', personaId: 'p_host' }], personas, allowed),
-  /name must be 1-60 chars/,
+  /name.*must be 1-60 chars/,
   'invalid name still throws',
 );
 

@@ -89,22 +89,19 @@ export default function WizardShell() {
 
       <div className="border border-ink bg-surface p-6">{body}</div>
 
-      <div className="mt-6 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="outline" onClick={w.back} disabled={w.stepIdx === 0}>
-            ← Back
-          </Button>
-          {/* Next to Back so it can't be confused with the primary CTA. */}
-          {w.step === 'review' && (
-            <Link href="/setup" className="bs-link text-xs text-muted">
-              read the docs instead
-            </Link>
-          )}
-        </div>
-        {w.step !== 'review' && (
-          <Button variant="solid" onClick={w.next}>
-            Next →
-          </Button>
+      {/* Back only — every non-review step now owns its own gated "Next"
+          submit button inside its own form (steps.tsx), so a second,
+          ungated Next here would bypass that step's validation entirely.
+          Review owns its own "Save and finish" button the same way it
+          always has. */}
+      <div className="mt-6 flex items-center gap-3">
+        <Button variant="outline" onClick={w.back} disabled={w.stepIdx === 0}>
+          ← Back
+        </Button>
+        {w.step === 'review' && (
+          <Link href="/setup" className="bs-link text-xs text-muted">
+            read the docs instead
+          </Link>
         )}
       </div>
     </div>

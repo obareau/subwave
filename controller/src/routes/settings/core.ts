@@ -23,6 +23,7 @@ import { queue } from '../../broadcast/queue.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { invalidateWeatherCache } from '../../context.js';
 import { requireAdmin } from '../../middleware/auth.js';
+import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
@@ -214,8 +215,16 @@ router.get('/settings', requireAdmin, async (req, res) => {
 // ---------------------------------------------------------------------------
 // POST /settings — update values. Returns { requiresRestart } so the UI can
 // prompt the user to restart the mixer for jingle freq / crossfade changes.
+//
+// validateSettingsBody() runs the per-key registry first, so a failure on a
+// converted key comes back with `fieldErrors` the admin panel can map onto the
+// input that caused it — the channel every form here has been missing (#1348).
+// It also rejects unknown top-level keys, which used to save nothing and still
+// answer 200. That check is deliberately HERE and not in settings.update():
+// backup restore hands update() a whole settings.json, and a key from a newer
+// version must cost one setting, not the entire restore.
 // ---------------------------------------------------------------------------
-router.post('/settings', requireAdmin, async (req, res) => {
+router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) => {
   try {
     const result = await settings.update(req.body || {});
     // Apply live: weather location flows through config.weather to context.js

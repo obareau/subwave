@@ -2,57 +2,221 @@
 
 import type { ChangeEvent } from 'react';
 import { useRef, useState } from 'react';
+import { Controller, useWatch, type Control } from 'react-hook-form';
 import { Trash2 } from 'lucide-react';
 import { fmtSize } from '../../../lib/format';
 import { Modal } from '../../ui/modal';
-import { Input } from '../../ui/input';
-import { Textarea } from '../../ui/textarea';
-import { Label } from '../../ui/label';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
 import { V3Alert } from '../../ui/alert';
 import { SkeletonCards } from '@/components/ui/skeleton';
 import { Btn, Seg } from '../ui';
 import { PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
-import type { SfxData, SfxForm } from './types';
+import type { SfxData, ImagingSubmitResult } from './types';
+import {
+  IMAGING_DESCRIPTION_MAX,
+  IMAGING_NAME_MAX,
+  IMAGING_PROMPT_MAX,
+  SFX_MIN_SEC,
+  SFX_MAX_SEC,
+  sfxCreateSchema,
+  imagingImportSchema,
+} from '@/lib/schemas.generated';
+import { useZodForm, applyServerFieldErrors } from '@/lib/form';
+import { TextField, TextareaField } from '@/lib/form-fields';
 import {
   SectionMasthead, PanelBox, PanelHead, EmptyState, DropZone, MetaLine, TabMetric, pad2,
 } from './parts';
 
 interface SfxSectionProps {
   sfxData: SfxData | null;
-  sfxForm: SfxForm;
-  setSfxForm: (updater: (f: SfxForm) => SfxForm) => void;
   busy: boolean;
-  createSfx: () => Promise<boolean>;
-  uploadSfx: (file: File, name: string, description: string) => Promise<boolean>;
+  createSfx: (values: { name: string; description: string; prompt: string; durationSec?: number }) => Promise<ImagingSubmitResult>;
+  uploadSfx: (file: File, values: { name: string; description: string }) => Promise<ImagingSubmitResult>;
   onDelete: (name: string | null) => void;
   data: SettingsData | null;
   saveSettings: SaveSettings;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
-export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, onDelete, data, saveSettings, adminFetch }: SfxSectionProps) {
+// The RHF-bound shape of the create form. name/description/durationSec are
+// all z.preprocess-wrapped in the shared schema (imagingName/imagingDescription/
+// imagingDuration), so their z.input is `unknown` — cast once here rather than
+// fighting that at every TextField call site (see lib/form.ts's header note).
+interface SfxCreateFormValues {
+  name: string;
+  description: string;
+  prompt: string;
+  durationSec: string | number;
+}
+
+function SfxCreateModal({
+  busy, ready, createSfx, onClose,
+}: {
+  busy: boolean;
+  ready: boolean;
+  createSfx: SfxSectionProps['createSfx'];
+  onClose: () => void;
+}) {
+  const form = useZodForm(sfxCreateSchema, { name: '', description: '', prompt: '', durationSec: '' });
+  const control = form.control as unknown as Control<SfxCreateFormValues>;
+  const promptValue = (useWatch({ control, name: 'prompt' }) as string | undefined) || '';
+
+  const onSubmit = form.handleSubmit(async (values) => {
+    const res = await createSfx(values);
+    if (res.ok) onClose();
+    else applyServerFieldErrors(form, res.fieldErrors);
+  });
+
+  return (
+    <Modal
+      open
+      onOpenChange={(o) => { if (!o) onClose(); }}
+      title="create effect"
+      sub="we’ll generate it with ElevenLabs"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={onClose}>Cancel</Button>
+          <Btn
+            sm
+            tone="accent"
+            className="min-h-9 sm:min-h-0"
+            onClick={() => void onSubmit()}
+            disabled={busy || !ready || !form.formState.isValid}
+          >
+            {busy ? 'Generating…' : 'Create'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="grid gap-3.5">
+        {!ready && (
+          <V3Alert title="key required">
+            You’ll need an ElevenLabs key to generate. Add{' '}
+            <code className="font-mono text-[12px]">ELEVENLABS_API_KEY</code> and restart the
+            controller.
+          </V3Alert>
+        )}
+        <div className="grid grid-cols-[1fr_120px] gap-3">
+          <TextField control={control} name="name" label="Name" placeholder="tape-stop" maxLength={IMAGING_NAME_MAX} />
+          <TextField control={control} name="durationSec" label="Duration · s" numeric placeholder="auto" step={0.1} min={SFX_MIN_SEC} max={SFX_MAX_SEC} />
+        </div>
+        <TextField
+          control={control}
+          name="description"
+          label="Description · optional"
+          placeholder="Your DJ reads this to decide when the effect fits a line"
+          maxLength={IMAGING_DESCRIPTION_MAX}
+        />
+        <div className="grid gap-1.5">
+          <TextareaField
+            control={control}
+            name="prompt"
+            label="Generation prompt"
+            rows={3}
+            placeholder="Describe the sound for ElevenLabs…"
+          />
+          <div className="text-right font-mono text-[11px] text-muted">{promptValue.length} / {IMAGING_PROMPT_MAX}</div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// The RHF-bound shape of the import form: name/description mirror
+// imagingImportSchema (also preprocess-wrapped — same cast as above). `file`
+// rides alongside them so the DropZone reads through the same `control`, but
+// it is NOT part of the zod schema (a File object isn't something the
+// controller's shared, zod-only schema module can describe), so it never
+// appears in `form.handleSubmit`'s validated `values` — read separately via
+// useWatch. The file picker is exactly the "real work the wrappers don't
+// expose" case lib/form-fields.tsx's header calls out for a raw Controller.
+interface SfxImportFormValues {
+  name: string;
+  description: string;
+  file: File | null;
+}
+
+function SfxImportModal({
+  busy, uploadSfx, onClose,
+}: {
+  busy: boolean;
+  uploadSfx: SfxSectionProps['uploadSfx'];
+  onClose: () => void;
+}) {
+  const form = useZodForm(imagingImportSchema, { name: '', description: '' });
+  const control = form.control as unknown as Control<SfxImportFormValues>;
+  const file = useWatch({ control, name: 'file' }) as File | null;
+  const importRef = useRef<HTMLInputElement>(null);
+
+  const onSubmit = form.handleSubmit(async (values) => {
+    if (!file) return; // Save is disabled without one — see below
+    const res = await uploadSfx(file, values);
+    if (res.ok) onClose();
+    else applyServerFieldErrors(form, res.fieldErrors);
+  });
+
+  return (
+    <Modal
+      open
+      onOpenChange={(o) => { if (!o) onClose(); }}
+      title="import effect"
+      sub="bring your own mp3 / wav — no ElevenLabs key needed"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={onClose}>Cancel</Button>
+          <Btn
+            sm
+            tone="accent"
+            className="min-h-9 sm:min-h-0"
+            onClick={() => void onSubmit()}
+            disabled={busy || !file || !form.formState.isValid}
+          >
+            {busy ? 'Importing…' : 'Import'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="grid gap-3.5">
+        <TextField control={control} name="name" label="Name" placeholder="rain-hiss" maxLength={IMAGING_NAME_MAX} />
+        <TextField
+          control={control}
+          name="description"
+          label="Description · optional"
+          placeholder="Your DJ reads this to decide when the effect fits a line"
+          maxLength={IMAGING_DESCRIPTION_MAX}
+        />
+        <Controller
+          control={control}
+          name="file"
+          defaultValue={null}
+          render={({ field }) => (
+            <>
+              <input
+                ref={importRef}
+                type="file"
+                accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
+                aria-label="Import SFX audio file"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => field.onChange(e.target.files?.[0] ?? null)}
+                className="hidden"
+              />
+              <DropZone
+                label={field.value ? `${field.value.name} · ${fmtSize(field.value.size)}` : 'choose a file…'}
+                hint="mp3 · wav · ogg · flac · m4a · aac · opus — up to 25 MB · converted to MP3 on import"
+                onClick={() => importRef.current?.click()}
+              />
+            </>
+          )}
+        />
+      </div>
+    </Modal>
+  );
+}
+
+export function SfxSection({ sfxData, busy, createSfx, uploadSfx, onDelete, data, saveSettings, adminFetch }: SfxSectionProps) {
   // Hooks must run before the early "loading…" return — keep them at the top.
   const [modal, setModal] = useState<null | 'create' | 'import'>(null);
-  const [importFile, setImportFile] = useState<File | null>(null);
-  const [importName, setImportName] = useState('');
-  const [importDesc, setImportDesc] = useState('');
-  const importRef = useRef<HTMLInputElement>(null);
-  const doImport = async () => {
-    if (!importFile || !importName.trim()) return;
-    const ok = await uploadSfx(importFile, importName, importDesc);
-    if (ok) {
-      setImportFile(null);
-      setImportName('');
-      setImportDesc('');
-      if (importRef.current) importRef.current.value = '';
-      setModal(null);
-    }
-  };
-  const doCreate = async () => {
-    if (await createSfx()) setModal(null);
-  };
+  const closeModal = () => setModal(null);
 
   if (!sfxData) {
     return <SkeletonCards cards={4} />;
@@ -148,128 +312,12 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
         )}
       </PanelBox>
 
-      <Modal
-        open={modal === 'create'}
-        onOpenChange={(o) => { if (!o) setModal(null); }}
-        title="create effect"
-        sub="we’ll generate it with ElevenLabs"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={() => setModal(null)}>Cancel</Button>
-            <Btn
-              sm
-              tone="accent"
-              className="min-h-9 sm:min-h-0"
-              onClick={doCreate}
-              disabled={busy || !ready || !sfxForm.name.trim() || !sfxForm.prompt.trim()}
-            >
-              {busy ? 'Generating…' : 'Create'}
-            </Btn>
-          </>
-        }
-      >
-        <div className="grid gap-3.5">
-          {!ready && (
-            <V3Alert title="key required">
-              You’ll need an ElevenLabs key to generate. Add{' '}
-              <code className="font-mono text-[12px]">ELEVENLABS_API_KEY</code> and restart the
-              controller.
-            </V3Alert>
-          )}
-          <div className="grid grid-cols-[1fr_120px] gap-3">
-            <div className="grid gap-1.5">
-              <Label>Name</Label>
-              <Input
-                value={sfxForm.name}
-                maxLength={60}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => setSfxForm(f => ({ ...f, name: e.target.value }))}
-                placeholder="tape-stop"
-              />
-            </div>
-            <div className="grid gap-1.5">
-              <Label>Duration · s</Label>
-              <Input
-                className="mono-num"
-                type="number"
-                step={0.1}
-                min={0.5}
-                max={22}
-                value={sfxForm.durationSec}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => setSfxForm(f => ({ ...f, durationSec: e.target.value }))}
-                placeholder="auto"
-              />
-            </div>
-          </div>
-          <div className="grid gap-1.5">
-            <Label>Description · optional</Label>
-            <Input
-              value={sfxForm.description}
-              maxLength={200}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setSfxForm(f => ({ ...f, description: e.target.value }))}
-              placeholder="Your DJ reads this to decide when the effect fits a line"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label>Generation prompt</Label>
-            <Textarea
-              rows={3}
-              value={sfxForm.prompt}
-              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setSfxForm(f => ({ ...f, prompt: e.target.value.slice(0, 500) }))}
-              placeholder="Describe the sound for ElevenLabs…"
-            />
-            <div className="text-right font-mono text-[11px] text-muted">{sfxForm.prompt.length} / 500</div>
-          </div>
-        </div>
-      </Modal>
-
-      <Modal
-        open={modal === 'import'}
-        onOpenChange={(o) => { if (!o) setModal(null); }}
-        title="import effect"
-        sub="bring your own mp3 / wav — no ElevenLabs key needed"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" className="min-h-9 sm:min-h-0" onClick={() => setModal(null)}>Cancel</Button>
-            <Btn sm tone="accent" className="min-h-9 sm:min-h-0" onClick={doImport} disabled={busy || !importFile || !importName.trim()}>
-              {busy ? 'Importing…' : 'Import'}
-            </Btn>
-          </>
-        }
-      >
-        <div className="grid gap-3.5">
-          <div className="grid gap-1.5">
-            <Label>Name</Label>
-            <Input
-              value={importName}
-              maxLength={60}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setImportName(e.target.value)}
-              placeholder="rain-hiss"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label>Description · optional</Label>
-            <Input
-              value={importDesc}
-              maxLength={200}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setImportDesc(e.target.value)}
-              placeholder="Your DJ reads this to decide when the effect fits a line"
-            />
-          </div>
-          <input
-            ref={importRef}
-            type="file"
-            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
-            aria-label="Import SFX audio file"
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
-            className="hidden"
-          />
-          <DropZone
-            label={importFile ? `${importFile.name} · ${fmtSize(importFile.size)}` : 'choose a file…'}
-            hint="mp3 · wav · ogg · flac · m4a · aac · opus — up to 25 MB · converted to MP3 on import"
-            onClick={() => importRef.current?.click()}
-          />
-        </div>
-      </Modal>
+      {modal === 'create' && (
+        <SfxCreateModal busy={busy} ready={ready} createSfx={createSfx} onClose={closeModal} />
+      )}
+      {modal === 'import' && (
+        <SfxImportModal busy={busy} uploadSfx={uploadSfx} onClose={closeModal} />
+      )}
     </section>
   );
 }

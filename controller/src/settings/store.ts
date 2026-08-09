@@ -74,7 +74,18 @@ export function getRedacted() {
   const s = get();
   const clone = JSON.parse(JSON.stringify(s));
   if (clone.llm) {
-    clone.llm.apiKey = s.llm?.apiKey ? 'set' : '';
+    // Masked against the leg's RESOLVED key — keys[provider] — never against
+    // the field itself. `llm.apiKey` is a legacy WRITE-ONLY channel: load()
+    // hardcodes it to '' because the real store is the per-provider map
+    // (#657), so `s.llm.apiKey ? …` could only ever emit ''. And '' is not
+    // neutral here — applyInlineKey() reads it as "clear this provider's key".
+    // The backup path replays this whole object through update()
+    // (routes/backup.ts), so an unconditional '' deleted the stored key for
+    // whichever provider was the primary leg and for whichever was the
+    // fallback, leaving the station pointed at a provider whose credential had
+    // just been dropped (#1351). Every other provider's key was untouched,
+    // which is why it read as "backups are fine".
+    clone.llm.apiKey = llmKeyFor(s.llm?.provider ?? '') ? 'set' : '';
     // Per-provider inline keys masked to 'set' | '' per entry, so the admin UI
     // can show which providers have a key on file without exposing the value.
     clone.llm.keys = {};
@@ -82,7 +93,11 @@ export function getRedacted() {
       clone.llm.keys[p] = s.llm.keys[p] ? 'set' : '';
     }
   }
-  if (clone.llm?.fallback) clone.llm.fallback.apiKey = s.llm?.fallback?.apiKey ? 'set' : '';
+  // Same channel, same map — the fallback leg's key also lives in llm.keys,
+  // under ITS provider (update() routes it there via applyInlineKey).
+  if (clone.llm?.fallback) {
+    clone.llm.fallback.apiKey = llmKeyFor(s.llm?.fallback?.provider ?? '') ? 'set' : '';
+  }
   if (clone.tts?.cloud) {
     clone.tts.cloud.apiKey = s.tts?.cloud?.apiKey ? 'set' : '';
     clone.tts.cloud.compatApiKey = s.tts?.cloud?.compatApiKey ? 'set' : '';

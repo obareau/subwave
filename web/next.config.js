@@ -56,6 +56,15 @@ const nextConfig = {
   // otherwise infer it as the workspace root — destabilising module resolution and
   // crashing the dev server when it loads tailwind.config.js through the ESM loader.
   outputFileTracingRoot: __dirname,
+  // Verifying the onboarding wizard needs a SECOND `next dev` running
+  // concurrently against a second controller (needsSetup is only ever true
+  // there — see web/scripts/verify-forms.py's `onboarding` check), from this
+  // same source tree. Next's dev server refuses a second instance sharing
+  // one `.next/dev/lock` file ("Another next dev server is already
+  // running"), and the lock is keyed off distDir — defaulting both
+  // instances to plain `.next` collides. Unset, this is byte-identical to
+  // every other invocation (dev, build, the Docker image).
+  distDir: process.env.SUBWAVE_NEXT_DIST_DIR || '.next',
   // Dev only. Next blocks /_next/* dev resources whose Origin isn't localhost, so
   // opening `npm run dev` from a phone or another LAN/tailnet box serves the HTML but
   // never the client bundle — AdminShell then sits on "loading…" forever, because

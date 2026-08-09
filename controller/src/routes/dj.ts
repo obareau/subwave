@@ -16,7 +16,16 @@ import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, runProgrammeFeature, runProgrammeOutro, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
 import * as sfxLib from '../broadcast/sfx.js';
-import { loadSkills, loadedCapabilities, parseFrontmatter, parseTags, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, TAG_RE, TAGS_PER_SKILL_LIMIT, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
+import { loadSkills, loadedCapabilities, parseFrontmatter, parseTags, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
+import {
+  builtinSkillFileSchema,
+  customSkillFileSchema,
+  skillCreateSchema,
+  skillFieldsFrom,
+  type SkillFileParsed,
+} from '../schemas/skill.js';
+import { validateBody } from '../middleware/validate.js';
+import { firstMessage } from '../util/zod-error.js';
 import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
 import { coerceConfigValues, readConfigValues, type SkillConfigField } from '../skills/config-fields.js';
 import { mapPool } from '../util/async-pool.js';
@@ -75,26 +84,6 @@ function resolveConfig(kind: string, body: any): { config: Record<string, string
   if (body?.config !== undefined) return { config: coerceConfigValues(fields, body.config), configKeys };
   if (fields.some(f => body?.[f.key] !== undefined)) return { config: coerceConfigValues(fields, body), configKeys };
   return { config: readConfigValues(fields, loadedConfig(kind)), configKeys };
-}
-
-// Normalise a tags form value (array or comma string) with LOUD validation — a
-// bad tag 400s here instead of silently vanishing (the loader's lenient
-// parseTags is for hand-edited files; the form should fail fast).
-function buildTags(raw: unknown): string[] | undefined {
-  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
-  const out: string[] = [];
-  for (const item of list) {
-    const tag = String(item ?? '').trim().toLowerCase();
-    if (!tag) continue;
-    if (!TAG_RE.test(tag)) {
-      throw new Error(`invalid tag "${tag}" — lowercase slugs (a-z, 0-9, hyphens), max 24 chars`);
-    }
-    if (!out.includes(tag)) out.push(tag);
-  }
-  if (out.length > TAGS_PER_SKILL_LIMIT) {
-    throw new Error(`at most ${TAGS_PER_SKILL_LIMIT} tags per skill`);
-  }
-  return out.length ? out : undefined;
 }
 
 // The subset of a Subsonic song toAdminRow reads to build a queue-ready row.
@@ -316,8 +305,6 @@ router.post('/dj/skills/import', requireAdmin, zipUpload('file'), async (req, re
 // Rescan power-feature — writeSkillFile never touches it.
 // ---------------------------------------------------------------------------
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
-const COOLDOWN_RE = /^\d+\s*[smhd]?$/;
-const ENV_KEY_RE = /^[A-Z][A-Z0-9_]*$/;
 
 // True when SKILL.md exists for this slug (folder is a real skill).
 async function skillFileExists(slug: string): Promise<boolean> {
@@ -334,47 +321,14 @@ async function skillHasTool(slug: string): Promise<boolean> {
 // SkillFileFields object for writeSkillFile. Throws Error(message) on the first
 // invalid field; callers map that to a 400. The slug is the immutable identity,
 // passed in (from the URL on edit, from the body on create).
-function buildCustomSkillFields(slug: string, b: Record<string, unknown>): SkillFields {
-  const brief = typeof b.brief === 'string' ? b.brief.trim() : '';
-  if (!brief) throw new Error('brief is required');
-
-  const cooldown = typeof b.cooldown === 'string' ? b.cooldown.trim() : '';
-  if (cooldown && !COOLDOWN_RE.test(cooldown)) {
-    throw new Error('cooldown must look like "45m", "6h", "2d", or a bare number (minutes)');
-  }
-
-  const label = typeof b.label === 'string' && b.label.trim() ? b.label.trim() : undefined;
-  const fields: SkillFields = { kind: slug, label, cooldown: cooldown || undefined, brief };
-
-  // Context fields — the "right now" lines this segment may weave in (#471).
-  // Accept a comma string or an array; validate every token so a typo fails
-  // loudly here. An empty selection resets the skill to the default profile.
-  if (b.context !== undefined) {
-    const raw = Array.isArray(b.context) ? b.context : String(b.context).split(',');
-    const toks = raw.map((s: unknown) => String(s).trim().toLowerCase()).filter(Boolean);
-    const known = new Set<string>(dj.CONTEXT_FIELDS as readonly string[]);
-    const bad = toks.filter((t: string) => !known.has(t));
-    if (bad.length) {
-      throw new Error(`unknown context field(s): ${bad.join(', ')} — valid: ${[...known].join(', ')}`);
-    }
-    if (toks.length) fields.contextFields = toks;
-  }
-
-  if (b.window !== undefined) {
-    const w = String(b.window).trim().toLowerCase();
-    if (w !== 'any' && w !== 'commute') throw new Error('window must be "any" or "commute"');
-    if (w === 'commute') fields.window = 'commute';
-  }
-
-  if (b.requiresKey !== undefined && String(b.requiresKey).trim()) {
-    const key = String(b.requiresKey).trim();
-    if (!ENV_KEY_RE.test(key)) throw new Error('requiresKey must be an env var name (UPPER_SNAKE_CASE)');
-    fields.requiresKey = key;
-  }
-
-  if (b.tags !== undefined) fields.tags = buildTags(b.tags);
-
-  return fields;
+//
+// The rules themselves live in the shared skill schema, which the admin editor
+// runs too — this is the thin adapter that turns a ZodError into the flat
+// message string every caller here already reports.
+function buildCustomSkillFields(slug: string, b: unknown): SkillFields {
+  const parsed = customSkillFileSchema.safeParse(b);
+  if (!parsed.success) throw new Error(firstMessage(parsed.error));
+  return skillFieldsFrom(slug, parsed.data);
 }
 
 // ---------------------------------------------------------------------------
@@ -487,26 +441,28 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
 // state/skills/<slug>/SKILL.md and reloads. Created skills arrive DISABLED (the
 // loader's posture) — the operator reviews + enables them before they can air.
 // Body: { name, label?, cooldown?, context?, window?, requiresKey?, brief }
+//
+// The shape is validated by the shared schema at the boundary; what's left here
+// is the two rules a schema can't hold, because both are answers about the live
+// install rather than about the value. Both name a FIELD in the error payload:
+// the way out of either is to type a different slug.
 // ---------------------------------------------------------------------------
-router.post('/dj/skills', requireAdmin, async (req, res) => {
-  const b = req.body || {};
-  const name = typeof b.name === 'string' ? b.name.trim().toLowerCase() : '';
-  if (!SLUG_RE.test(name)) {
-    return res.status(400).json({ error: 'name must be a lowercase slug (a–z, 0–9, hyphens), 1–49 chars' });
-  }
+router.post('/dj/skills', requireAdmin, validateBody(skillCreateSchema), async (req, res) => {
+  const { name, ...rest } = req.body as { name: string } & SkillFileParsed;
   if (RESERVED_KINDS.has(name)) {
-    return res.status(400).json({ error: `"${name}" is reserved — it shadows a built-in capability, pick another name` });
+    return res.status(400).json({
+      error: `"${name}" is reserved — it shadows a built-in capability, pick another name`,
+      fieldErrors: { name: `"${name}" is reserved — it shadows a built-in capability, pick another name` },
+    });
   }
   if (await skillFileExists(name)) {
-    return res.status(409).json({ error: `a skill named "${name}" already exists` });
+    return res.status(409).json({
+      error: `a skill named "${name}" already exists`,
+      fieldErrors: { name: `a skill named "${name}" already exists` },
+    });
   }
 
-  let fields: SkillFields;
-  try {
-    fields = buildCustomSkillFields(name, b);
-  } catch (err) {
-    return res.status(400).json({ error: err.message });
-  }
+  const fields: SkillFields = skillFieldsFrom(name, rest);
 
   try {
     await writeSkillFile(fields);
@@ -558,42 +514,18 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   }
 
   // Built-in edit — brief/cooldown/label/context, + any knobs its tool declares.
-  const brief = typeof b.brief === 'string' ? b.brief.trim() : '';
-  if (!brief) return res.status(400).json({ error: 'brief is required' });
-
-  const cooldown = typeof b.cooldown === 'string' ? b.cooldown.trim() : '';
-  if (cooldown && !COOLDOWN_RE.test(cooldown)) {
-    return res.status(400).json({ error: 'cooldown must look like "45m", "6h", "2d", or a bare number (minutes)' });
-  }
-
-  const label = typeof b.label === 'string' && b.label.trim() ? b.label.trim() : undefined;
-  const fields: SkillFields = { kind, label, cooldown: cooldown || undefined, brief };
-
-  // Context fields — the "right now" lines this segment may weave in (#471).
-  // Accept a comma string or an array; validate every token against the known
-  // vocabulary so a typo fails loudly here instead of silently narrowing the
-  // block. An empty selection resets the skill to the default profile.
-  if (b.context !== undefined) {
-    const raw = Array.isArray(b.context) ? b.context : String(b.context).split(',');
-    const toks = raw.map((s: unknown) => String(s).trim().toLowerCase()).filter(Boolean);
-    const known = new Set<string>(dj.CONTEXT_FIELDS as readonly string[]);
-    const bad = toks.filter((t: string) => !known.has(t));
-    if (bad.length) {
-      return res.status(400).json({ error: `unknown context field(s): ${bad.join(', ')} — valid: ${[...known].join(', ')}` });
-    }
-    if (toks.length) fields.contextFields = toks;
-  }
-
-  if (b.tags !== undefined) {
-    try {
-      fields.tags = buildTags(b.tags);
-    } catch (err) {
-      return res.status(400).json({ error: err.message });
-    }
-  }
+  // Same schema as a custom skill minus `window` / `requiresKey`, which a
+  // built-in takes from its shipped template and this route has never read off
+  // the body. This branch used to be a 35-line copy of buildCustomSkillFields.
+  const parsed = builtinSkillFileSchema.safeParse(b);
+  if (!parsed.success) return res.status(400).json({ error: firstMessage(parsed.error) });
+  const fields: SkillFields = skillFieldsFrom(kind, parsed.data);
 
   // Knobs the skill declares for itself (news' feed / feedMaxItems), validated
-  // against that declaration rather than against the kind string.
+  // against that declaration rather than against the kind string. Read off the
+  // RAW body, not the parsed one: the declaration is runtime data from tool.mjs,
+  // so a skill-file body is not a closed shape and the schema above deliberately
+  // doesn't try to own its tail.
   try {
     Object.assign(fields, resolveConfig(kind, b));
   } catch (err) {
@@ -643,13 +575,20 @@ router.put('/dj/skills/:slug/personas', requireAdmin, async (req, res) => {
   const allSlugs = catalog.map((sk) => sk.name);
   let changed = false;
   const personas = s.personas.map((p) => {
-    const has = p.skills === null || p.skills.includes(slug);
+    // `== null` covers BOTH the explicit "all skills" sentinel and an ABSENT
+    // key: the seeded roster (SEED_PERSONAS) carries no `skills` at all until
+    // the operator saves personas once, and everything else that reads this
+    // field already treats falsy as "runs everything" (skills/_agent.ts's
+    // `persona?.skills &&` gate, the admin panel's personaHasSkill). A strict
+    // `=== null` here threw `Cannot read properties of undefined` on a fresh
+    // station, so ticking a DJ in a skill's editor hung the request.
+    const has = p.skills == null || p.skills.includes(slug);
     const should = want.has(p.id);
     if (has === should) return p;
     changed = true;
-    // `should && !has` implies p.skills is an array (null would mean has=true).
+    // `should && !has` implies p.skills is an array (absent would mean has=true).
     if (should) return { ...p, skills: [...p.skills, slug] };
-    const base = p.skills === null ? allSlugs : p.skills;
+    const base = p.skills == null ? allSlugs : p.skills;
     return { ...p, skills: base.filter((sl) => sl !== slug) };
   });
 
@@ -660,7 +599,7 @@ router.put('/dj/skills/:slug/personas', requireAdmin, async (req, res) => {
       personas: personas.map((p) => ({
         id: p.id,
         name: p.name,
-        hasSkill: p.skills === null || p.skills.includes(slug),
+        hasSkill: p.skills == null || p.skills.includes(slug),
       })),
     });
   } catch (err) {

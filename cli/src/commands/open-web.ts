@@ -1,9 +1,5 @@
-// `subwave listen` / `subwave admin` — open the web player or the admin
-// console in the operator's default browser, pointed at the live stack.
-//
-// The URL depends on the compose env: prod serves the UI through the Caddy
-// edge on :7700; dev runs the Next.js dev server on :7700 (same host
-// binding, just one stack at a time).
+// `subwave listen` / `subwave admin` — open the player or admin console in the
+// operator's browser, pointed at the live stack.
 
 import { detectCompose, webBaseFor, type ComposeEnv } from '../compose.ts';
 import { openUrl } from '../util.ts';
@@ -24,8 +20,7 @@ export async function runOpenWebCommand(
   target: WebTarget,
   opts: OpenWebOpts = {},
 ): Promise<void> {
-  // Explicit arg wins; otherwise follow the running stack; if nothing's up,
-  // ask — the env only decides which host/port the browser points at.
+  // Explicit arg → running stack → ask. The env only decides host and port.
   let env: OpenableEnv;
   if (opts.envArg) {
     env = opts.envArg;

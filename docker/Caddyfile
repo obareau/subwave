@@ -10,13 +10,12 @@
 	#
 	# A Cloudflare TUNNEL is different: cloudflared is a container beside this
 	# one, so the peer is a private Docker address and Caddy discards the
-	# forwarded header — tunnel operators must append `private_ranges`. That is
-	# NOT the default because it's a real trust decision: anything reaching
-	# Caddy from private address space could then forge X-Forwarded-For, faking
-	# admin → Listeners rows and defeating every per-IP limit in
-	# middleware/ratelimit.ts (request caps, admin lockout, station-password
-	# throttle, like dedup). Safe when the tunnel is the only ingress; not when
-	# the host port is also reachable from a shared LAN. See docs/deployment.md.
+	# forwarded header — tunnel operators must append `private_ranges`. NOT the
+	# default, because anything reaching Caddy from private address space could
+	# then forge X-Forwarded-For, faking admin → Listeners rows and defeating
+	# every per-IP limit in middleware/ratelimit.ts. Safe when the tunnel is the
+	# only ingress; not when the host port is also reachable from a shared LAN.
+	# See docs/deployment.md.
 	servers {
 		trusted_proxies static \
  173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 \

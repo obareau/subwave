@@ -5,17 +5,30 @@
 // global templates, '' = the built-in default. Everything POSTs to /settings
 // and applies live — no mixer restart.
 import { useEffect, useRef, useState } from 'react';
+import { z } from 'zod';
+import {
+  useFieldArray,
+  type Control,
+  type UseFormGetValues,
+  type UseFormReset,
+  type UseFormSetValue,
+  type UseFormWatch,
+} from 'react-hook-form';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
+import { useZodForm, applyServerFieldErrors } from '@/lib/form';
+import { personaSchema, djPromptSchema } from '@/lib/schemas.generated';
 import { Card, Btn, Pill } from './ui';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { Modal } from '../ui/modal';
-import type { Persona, PersonaTts, DjPromptPreset, FormState, SettingsResponse, CommunityPersona } from './personas/types';
+import type {
+  Persona, SettingsResponse, CommunityPersona, PersonasFormValues,
+} from './personas/types';
 import { DIAL_NEUTRAL, HOUSE_RULES_MAX, PERSONA_MAX } from './personas/constants';
 import {
-  clientMintId, fetchDicebearAvatar, fileToAvatarDataUrl, personaValid, promptPresetValid,
+  clientMintId, fetchDicebearAvatar, fileToAvatarDataUrl,
   voiceForSave, cloudIssue, formFromSettings, personaFromSettings, personasEqual,
   promptLibraryFromSettings,
 } from './personas/helpers';
@@ -24,11 +37,22 @@ import { SystemPromptModal } from './personas/SystemPromptModal';
 import { PersonaRoster } from './personas/PersonaRoster';
 import { PersonaEditor } from './personas/PersonaEditor';
 
+// The RHF resolver — literally the two shared schemas the controller itself
+// validates against (personaSchema / djPromptSchema), so this editor and the
+// controller cannot disagree about what's saveable. `activePersonaId` /
+// `activeDjPromptId` / `djHouseRules` stay OUTSIDE this schema: they aren't
+// array rows, and the controller's patch registry validates each as its own
+// top-level settings key, not as part of these two arrays.
+const formSchema = z.object({
+  personas: z.array(personaSchema),
+  djPrompts: z.array(djPromptSchema),
+});
+
 export default function PersonasPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [data, setData] = useState<SettingsResponse | null>(null);
-  const [form, setForm] = useState<FormState | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [focusIdx, setFocusIdx] = useState(0);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -46,10 +70,39 @@ export default function PersonasPanel() {
   const [community, setCommunity] = useState<CommunityPersona[] | null>(null);
   const [communityOpen, setCommunityOpen] = useState(false); // catalog modal open?
   const [installing, setInstalling] = useState<string | null>(null); // community slug installing, or null
+  // Not array rows — plain state, not RHF (see the schema comment above).
+  const [activePersonaId, setActivePersonaId] = useState('');
+  const [activeDjPromptId, setActiveDjPromptId] = useState('');
+  const [djHouseRules, setDjHouseRules] = useState('');
   const editorRef = useRef<HTMLDivElement | null>(null);
   // Set by addPersona so the focus-change effect scrolls; a plain roster click
   // changes focus too but shouldn't yank the page around.
   const scrollToEditorRef = useRef(false);
+
+  const form = useZodForm(formSchema, { personas: [], djPrompts: [] });
+  // Every field in personaSchema/djPromptSchema is a z.unknown().transform()
+  // (the schema doubles as the server's load-repair target — see the
+  // PersonasFormValues comment in personas/types.ts), so z.input<> types every
+  // leaf `unknown` and no nested path would type-check as a FieldPath. This
+  // cast is type-only — same runtime `form.control`, same technique Task 3
+  // established for festivalsSchema/moodsSchema.
+  const control = form.control as unknown as Control<PersonasFormValues>;
+  const setValue = form.setValue as unknown as UseFormSetValue<PersonasFormValues>;
+  const getValues = form.getValues as unknown as UseFormGetValues<PersonasFormValues>;
+  const watch = form.watch as unknown as UseFormWatch<PersonasFormValues>;
+  const resetForm = form.reset as unknown as UseFormReset<PersonasFormValues>;
+
+  // `keyName: '_rhfKey'` is load-bearing — personas and prompt presets both
+  // carry their own `id`, and RHF's default keyName ('id') would clobber it.
+  // `fields` (the _rhfKey-carrying identity list) is unused here — every
+  // consumer (PersonaRoster/PersonaTable) already keys off the persona's OWN
+  // `id`, and this component reads live values via `watch('personas')`.
+  const { append: appendPersonaField, remove: removePersonaField } =
+    useFieldArray({ control, name: 'personas', keyName: '_rhfKey' });
+  const {
+    fields: promptFields, append: appendPromptField, remove: removePromptFieldAt,
+    replace: replacePromptFields,
+  } = useFieldArray({ control, name: 'djPrompts', keyName: '_rhfKey' });
 
   const load = async () => {
     try {
@@ -63,21 +116,16 @@ export default function PersonasPanel() {
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
-    const initial = async () => {
-      try {
-        const r = await adminFetch('/settings');
-        if (!r.ok) return null;
-        const j = (await r.json()) as SettingsResponse;
-        setData(j); setErr(null);
-        return j;
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : String(e));
-        return null;
-      }
-    };
     (async () => {
-      const next = formFromSettings(await initial());
-      if (next) setForm(next);
+      const j = await load();
+      const next = formFromSettings(j);
+      if (next) {
+        resetForm({ personas: next.personas, djPrompts: next.djPrompts });
+        setActivePersonaId(next.activePersonaId);
+        setActiveDjPromptId(next.activeDjPromptId);
+        setDjHouseRules(next.djHouseRules);
+      }
+      setLoaded(true);
     })();
     // Fetched independently so a catalog failure can't blank the roster.
     (async () => {
@@ -90,6 +138,7 @@ export default function PersonasPanel() {
         setCommunity([]);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, needsAuth, adminFetch]);
 
   // Guarded by scrollToEditorRef so ordinary roster clicks don't scroll.
@@ -99,33 +148,38 @@ export default function PersonasPanel() {
     editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [focusIdx]);
 
-  const setPersona = (i: number, patch: Partial<Persona>) =>
-    setForm(f => f ? { ...f, personas: f.personas.map((p, idx) => (idx === i ? { ...p, ...patch } : p)) } : f);
-  const setPersonaTts = (i: number, patch: Partial<PersonaTts>) =>
-    setForm(f => f ? { ...f, personas: f.personas.map((p, idx) => (idx === i ? { ...p, tts: { ...p.tts, ...patch } } : p)) } : f);
-  const setPersonaSkills = (i: number, skills: string[]) =>
-    setForm(f => f ? { ...f, personas: f.personas.map((p, idx) => (idx === i ? { ...p, skills } : p)) } : f);
+  // The one remaining multi-field bulk patch — the AI-draft "apply" hands back
+  // several fields at once. Every keystroke field is bound straight to
+  // `control` elsewhere, so this is its only caller.
+  const applyPersonaPatch = (i: number, patch: Partial<Persona>) => {
+    const current = getValues(`personas.${i}`);
+    if (!current) return;
+    setValue(`personas.${i}`, { ...current, ...patch }, { shouldDirty: true, shouldValidate: true });
+  };
+
   const addPersona = () => {
-    if (!form || form.personas.length >= PERSONA_MAX) return;
+    const currentPersonas = getValues('personas');
+    if (currentPersonas.length >= PERSONA_MAX) return;
     // Captured before the append so the new entry can be focused.
-    const newIdx = form.personas.length;
+    const newIdx = currentPersonas.length;
     const newId = clientMintId();
-    setForm(f => {
-      if (!f) return f;
-      if (f.personas.length >= PERSONA_MAX) return f;
-      return {
-        ...f,
-        personas: [...f.personas, {
-          id: newId, name: 'New persona', tagline: '',
-          frequency: 'moderate', scriptLength: 'concise', djMode: false,
-          humour: DIAL_NEUTRAL, localColour: DIAL_NEUTRAL, warmth: DIAL_NEUTRAL, soul: '',
-          language: '',
-          avatar: '',
-          tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0, speed: 1 },
-          skills: (data?.skills?.catalog || []).map(s => s.name),
-        }],
-      };
+    appendPersonaField({
+      id: newId, name: 'New persona', tagline: '',
+      frequency: 'moderate', scriptLength: 'concise', djMode: false,
+      humour: DIAL_NEUTRAL, localColour: DIAL_NEUTRAL, warmth: DIAL_NEUTRAL, soul: '',
+      language: '',
+      avatar: '',
+      tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0, speed: 1 },
+      skills: (data?.skills?.catalog || []).map(s => s.name),
     });
+    // RHF only populates formState.errors for a field once IT has been
+    // touched — a freshly-appended row's empty `soul` correctly keeps
+    // formState.isValid (and Save) false, but without an explicit trigger()
+    // the roster's "incomplete" badge and the editor's own status line would
+    // both stay silent about why, until the operator happens to touch a
+    // field. Eagerly validating matches what personaSchema.safeParse always
+    // did against the whole object, touched or not.
+    void form.trigger();
     // Without the open + toast the add is silent, tucked at the end of the roster.
     scrollToEditorRef.current = true;
     setCreatingId(newId);
@@ -133,6 +187,7 @@ export default function PersonasPanel() {
     setEditorOpen(true);
     notify.ok('New persona added. Fill in its details, then Save persona.');
   };
+
   // The controller persists the install; the returned persona is appended to the
   // local form as well so unsaved edits to other personas survive.
   const installCommunity = async (slug: string) => {
@@ -152,7 +207,8 @@ export default function PersonasPanel() {
           avatar: '',
           tts: { ...mapped.tts, voice: p.tts?.voice ?? '' },
         };
-        setForm(f => f ? { ...f, personas: [...f.personas, installed] } : f);
+        appendPersonaField(installed);
+        void form.trigger(); // see the comment on addPersona's own trigger() call
       }
       notify.ok(`Installed “${p?.name || slug}” — off air until you put them on the desk`);
     } catch (e) {
@@ -160,17 +216,18 @@ export default function PersonasPanel() {
     } finally { setInstalling(null); }
   };
 
-  const removePersona = (i: number) =>
-    setForm(f => {
-      if (!f) return f;
-      if (f.personas.length <= 1) return f;
-      const target = f.personas[i];
-      if (!target) return f;
-      const personas = f.personas.filter((_, idx) => idx !== i);
-      const fallback = personas[0]?.id ?? f.activePersonaId;
-      const activePersonaId = target.id === f.activePersonaId ? fallback : f.activePersonaId;
-      return { ...f, personas, activePersonaId };
+  const removePersona = (i: number) => {
+    const currentPersonas = getValues('personas');
+    if (currentPersonas.length <= 1) return;
+    const target = currentPersonas[i];
+    if (!target) return;
+    removePersonaField(i);
+    setActivePersonaId(cur => {
+      if (target.id !== cur) return cur;
+      const remaining = currentPersonas.filter((_, idx) => idx !== i);
+      return remaining[0]?.id ?? cur;
     });
+  };
 
   // Avatar mutations update the local form too, so the basename round-trips
   // through any subsequent save.
@@ -186,9 +243,8 @@ export default function PersonasPanel() {
       const j = (await r.json().catch(() => ({}))) as { error?: string; avatar?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       const filename = j.avatar || '';
-      setForm(f =>
-        f ? { ...f, personas: f.personas.map(p => (p.id === personaId ? { ...p, avatar: filename } : p)) } : f,
-      );
+      const idx = getValues('personas').findIndex(p => p.id === personaId);
+      if (idx !== -1) setValue(`personas.${idx}.avatar`, filename, { shouldDirty: true, shouldValidate: true });
       setAvatarTick(t => t + 1);
       notify.ok('avatar uploaded');
     } catch (e) {
@@ -210,9 +266,8 @@ export default function PersonasPanel() {
       const j = (await r.json().catch(() => ({}))) as { error?: string; avatar?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       const filename = j.avatar || '';
-      setForm(f =>
-        f ? { ...f, personas: f.personas.map(p => (p.id === personaId ? { ...p, avatar: filename } : p)) } : f,
-      );
+      const idx = getValues('personas').findIndex(p => p.id === personaId);
+      if (idx !== -1) setValue(`personas.${idx}.avatar`, filename, { shouldDirty: true, shouldValidate: true });
       setAvatarTick(t => t + 1);
       notify.ok('avatar generated');
     } catch (e) {
@@ -230,9 +285,8 @@ export default function PersonasPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setForm(f =>
-        f ? { ...f, personas: f.personas.map(p => (p.id === personaId ? { ...p, avatar: '' } : p)) } : f,
-      );
+      const idx = getValues('personas').findIndex(p => p.id === personaId);
+      if (idx !== -1) setValue(`personas.${idx}.avatar`, '', { shouldDirty: true, shouldValidate: true });
       setAvatarTick(t => t + 1);
       notify.ok('avatar removed');
     } catch (e) {
@@ -242,40 +296,35 @@ export default function PersonasPanel() {
     }
   };
 
-  const addPromptPreset = (preset: DjPromptPreset) =>
-    setForm(f => f ? { ...f, djPrompts: [...f.djPrompts, preset] } : f);
-  const patchPromptPreset = (id: string, patch: Partial<Pick<DjPromptPreset, 'name' | 'text'>>) =>
-    setForm(f => f ? { ...f, djPrompts: f.djPrompts.map(p => (p.id === id ? { ...p, ...patch } : p)) } : f);
-  const removePromptPreset = (id: string) =>
-    setForm(f => f
-      ? {
-          ...f,
-          djPrompts: f.djPrompts.filter(p => p.id !== id),
-          // Deleting the in-use template falls back to the built-in default.
-          activeDjPromptId: f.activeDjPromptId === id ? '' : f.activeDjPromptId,
-        }
-      : f);
+  const removePromptPreset = (idx: number, id: string) => {
+    removePromptFieldAt(idx);
+    // Deleting the in-use template falls back to the built-in default.
+    setActiveDjPromptId(cur => (cur === id ? '' : cur));
+  };
+
+  const personas = watch('personas');
+  const djPrompts = watch('djPrompts');
 
   // The textarea's maxLength already enforces the house-rules cap; this guards
   // a pasted-over-limit edge.
-  const promptsOk = form
-    ? form.djPrompts.every(promptPresetValid)
-      && (form.activeDjPromptId === '' || form.djPrompts.some(p => p.id === form.activeDjPromptId))
-      && form.djHouseRules.trim().length <= HOUSE_RULES_MAX
-    : false;
-  const allPersonasOk = form ? form.personas.every(p => personaValid(p)) : false;
-  const canSave = !!form && allPersonasOk && promptsOk
-    && form.personas.some(p => p.id === form.activePersonaId);
+  const promptsOk = !form.formState.errors.djPrompts
+    && (activeDjPromptId === '' || djPrompts.some(p => p.id === activeDjPromptId))
+    && djHouseRules.trim().length <= HOUSE_RULES_MAX;
+  const allPersonasOk = !form.formState.errors.personas;
+  const canSave = form.formState.isValid && promptsOk
+    && personas.some(p => p.id === activePersonaId);
+  const isPersonaInvalid = (idx: number) => !!form.formState.errors.personas?.[idx];
 
   const save = async (): Promise<boolean> => {
-    if (!canSave || !form) return false;
+    if (!canSave) return false;
     setBusy(true);
     try {
+      const values = getValues();
       const r = await adminFetch('/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          personas: form.personas.map(p => ({
+          personas: values.personas.map(p => ({
             id: p.id,
             name: p.name.trim(),
             tagline: p.tagline.trim(),
@@ -301,14 +350,20 @@ export default function PersonasPanel() {
             },
             skills: p.skills,
           })),
-          activePersonaId: form.activePersonaId,
-          djPrompts: form.djPrompts.map(p => ({ id: p.id, name: p.name.trim(), text: p.text.trim() })),
-          activeDjPromptId: form.activeDjPromptId,
-          djHouseRules: form.djHouseRules.trim(),
+          activePersonaId,
+          djPrompts: values.djPrompts.map(p => ({ id: p.id, name: p.name.trim(), text: p.text.trim() })),
+          activeDjPromptId,
+          djHouseRules: djHouseRules.trim(),
         }),
       });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = (await r.json().catch(() => ({}))) as { error?: string; fieldErrors?: Record<string, string> };
+      if (!r.ok) {
+        // A rule only the server can check still lands on the right row —
+        // the controller emits `personas.<i>.tts` / etc., which IS already
+        // the field-array path this form binds through.
+        applyServerFieldErrors(form, j.fieldErrors);
+        throw new Error(j.error || `failed (${r.status})`);
+      }
       notify.ok('personas saved, applies on the next spoken line');
       await load();
       return true;
@@ -318,10 +373,11 @@ export default function PersonasPanel() {
     } finally { setBusy(false); }
   };
 
-  // Discard must actually revert: `form` is the only copy of the roster the UI
-  // reads and save() POSTs the WHOLE array, so abandoned edits used to block
-  // Save for every other persona and ride along on the next save (issue #1106).
-  // Scoped to the persona being edited so edits to others aren't dropped.
+  // Discard must actually revert: `personas` is the only copy of the roster
+  // the UI reads and save() POSTs the WHOLE array, so abandoned edits used to
+  // block Save for every other persona and ride along on the next save
+  // (issue #1106). Scoped to the persona being edited so edits to others
+  // aren't dropped.
   const discardPersona = async (): Promise<void> => {
     // Close the editor BEFORE the settings round-trip — an editor left open
     // across the fetch re-raises the unsaved-changes confirm, because a click
@@ -337,28 +393,28 @@ export default function PersonasPanel() {
         notify.err('could not reach the controller — your changes were kept');
         return;
       }
-      setForm(f => {
-        if (!f) return f;
-        // Clamp here rather than closing over the render's `safeIdx` — the
-        // roster can shift between render and click.
-        const idx = Math.min(focusIdx, f.personas.length - 1);
-        const target = f.personas[idx];
-        if (!target) return f;
-        const stored = server.personas.find(p => p.id === target.id);
-        // Never saved (added in this session) → it leaves the roster entirely.
-        const personas = stored
-          ? f.personas.map((p, i) => (i === idx ? stored : p))
-          : f.personas.filter((_, i) => i !== idx);
-        if (!personas.length) return f; // paranoia: keep at least one persona
-        // "Set as default" is a form edit too: undo it when it pointed at the
-        // reverted persona, then make sure the id still resolves.
-        let activePersonaId = f.activePersonaId === target.id
-          ? server.activePersonaId
-          : f.activePersonaId;
-        if (!personas.some(p => p.id === activePersonaId)) {
-          activePersonaId = personas[0]!.id;
-        }
-        return { ...f, personas, activePersonaId };
+      // Clamp here rather than closing over the render's `safeIdx` — the
+      // roster can shift between render and click.
+      const currentPersonas = getValues('personas');
+      const idx = Math.min(focusIdx, currentPersonas.length - 1);
+      const target = currentPersonas[idx];
+      if (!target) return;
+      const stored = server.personas.find(p => p.id === target.id);
+      // Never saved (added in this session) → it leaves the roster entirely.
+      const nextPersonas = stored
+        ? currentPersonas.map((p, i) => (i === idx ? stored : p))
+        : currentPersonas.filter((_, i) => i !== idx);
+      if (!nextPersonas.length) return; // paranoia: keep at least one persona
+      if (stored) {
+        setValue(`personas.${idx}`, stored, { shouldDirty: true, shouldValidate: true });
+      } else {
+        removePersonaField(idx);
+      }
+      // "Set as default" is a form edit too: undo it when it pointed at the
+      // reverted persona, then make sure the id still resolves.
+      setActivePersonaId(cur => {
+        const next = cur === target.id ? server.activePersonaId : cur;
+        return nextPersonas.some(p => p.id === next) ? next : (nextPersonas[0]?.id ?? next);
       });
       // focusIdx needs no adjustment — the render clamps it (`safeIdx`), so a
       // removal just lands focus on the neighbour.
@@ -377,8 +433,11 @@ export default function PersonasPanel() {
         notify.err('could not reach the controller — your changes were kept');
         return;
       }
-      const { djPrompts, activeDjPromptId, djHouseRules } = promptLibraryFromSettings(j);
-      setForm(f => f ? { ...f, djPrompts, activeDjPromptId, djHouseRules } : f);
+      const { djPrompts: nextPrompts, activeDjPromptId: nextActiveId, djHouseRules: nextHouseRules } =
+        promptLibraryFromSettings(j);
+      replacePromptFields(nextPrompts);
+      setActiveDjPromptId(nextActiveId);
+      setDjHouseRules(nextHouseRules);
       notify.ok('changes discarded');
     } finally { setBusy(false); }
   };
@@ -392,7 +451,7 @@ export default function PersonasPanel() {
       </div>
     );
   }
-  if (!form) {
+  if (!loaded) {
     return (
       <div className="grid gap-4">
         <Card title="Personas">
@@ -402,8 +461,8 @@ export default function PersonasPanel() {
     );
   }
 
-  const safeIdx = Math.min(focusIdx, form.personas.length - 1);
-  const focused = form.personas[safeIdx];
+  const safeIdx = Math.min(focusIdx, personas.length - 1);
+  const focused = personas[safeIdx];
   if (!focused) {
     return (
       <div className="grid gap-4">
@@ -414,15 +473,15 @@ export default function PersonasPanel() {
     );
   }
 
-  const activePersona = form.personas.find(p => p.id === form.activePersonaId);
+  const activePersona = personas.find(p => p.id === activePersonaId);
   // A scheduled show can override the default; fall back to the default
   // selection on controllers predating the onAir field.
-  const onAirPersonaId = data?.onAir?.personaId || form.activePersonaId;
-  const onAirPersona = form.personas.find(p => p.id === onAirPersonaId) || activePersona;
+  const onAirPersonaId = data?.onAir?.personaId || activePersonaId;
+  const onAirPersona = personas.find(p => p.id === onAirPersonaId) || activePersona;
   const onAirShow = data?.onAir?.show || null;
-  const focusedOk = personaValid(focused);
+  const focusedOk = !isPersonaInvalid(safeIdx);
   // Drives the confirm on ×/Escape: closing the editor keeps edits pending in
-  // `form`, which is how unsaved state used to ride along on the next save.
+  // `personas`, which is how unsaved state used to ride along on the next save.
   const storedFocused = data?.values?.personas?.find(p => p.id === focused.id);
   const focusedDirty = !storedFocused
     || !personasEqual(focused, personaFromSettings(storedFocused, (data?.skills?.catalog || []).map(s => s.name)));
@@ -444,28 +503,30 @@ export default function PersonasPanel() {
       <SystemPromptModal
         open={showPrompt}
         onOpenChange={setShowPrompt}
-        presets={form.djPrompts}
-        activeId={form.activeDjPromptId}
-        houseRules={form.djHouseRules}
-        onHouseRulesChange={(v) => setForm(f => f ? { ...f, djHouseRules: v } : f)}
+        control={control}
+        promptFields={promptFields}
+        setValue={setValue}
+        activeId={activeDjPromptId}
+        houseRules={djHouseRules}
+        onHouseRulesChange={setDjHouseRules}
         defaultPrompt={data?.defaults?.djPrompt || ''}
         busy={busy}
         canSave={canSave}
         allPersonasOk={allPersonasOk}
         promptsOk={promptsOk}
-        onSetActive={(id) => setForm(f => f ? ({ ...f, activeDjPromptId: id }) : f)}
-        onAddPreset={addPromptPreset}
-        onPatchPreset={patchPromptPreset}
+        onSetActive={setActiveDjPromptId}
+        onAppendPreset={appendPromptField}
         onRemovePreset={removePromptPreset}
         onSave={async () => { if (await save()) setShowPrompt(false); }}
         onDiscard={() => { void discardPrompts(); }}
       />
 
       <PersonaRoster
-        personas={form.personas}
-        activePersonaId={form.activePersonaId}
+        personas={personas}
+        activePersonaId={activePersonaId}
         onAirPersonaId={onAirPersonaId}
         avatarTick={avatarTick}
+        isPersonaInvalid={isPersonaInvalid}
         onOpenPrompt={() => setShowPrompt(true)}
         onAdd={addPersona}
         onSelect={(i) => { setCreatingId(null); setFocusIdx(i); setEditorOpen(true); }}
@@ -490,7 +551,7 @@ export default function PersonasPanel() {
         <div className="mt-4 grid gap-3">
           {community && community.length > 0 ? (
             community.map(c => {
-              const inRoster = form.personas.some(
+              const inRoster = personas.some(
                 p => p.name.trim().toLowerCase() === c.displayName.trim().toLowerCase(),
               );
               return (
@@ -538,8 +599,8 @@ export default function PersonasPanel() {
                         className="min-h-9 sm:min-h-0"
                         tone="accent"
                         onClick={() => installCommunity(c.slug)}
-                        disabled={installing === c.slug || form.personas.length >= PERSONA_MAX}
-                        title={form.personas.length >= PERSONA_MAX ? 'The roster is full' : undefined}
+                        disabled={installing === c.slug || personas.length >= PERSONA_MAX}
+                        title={personas.length >= PERSONA_MAX ? 'The roster is full' : undefined}
                       >
                         {installing === c.slug ? 'Installing…' : 'Install'}
                       </Btn>
@@ -559,8 +620,9 @@ export default function PersonasPanel() {
       <PersonaEditor
         persona={focused}
         index={safeIdx}
-        personaCount={form.personas.length}
-        activePersonaId={form.activePersonaId}
+        control={control}
+        personaCount={personas.length}
+        activePersonaId={activePersonaId}
         onAirPersonaId={onAirPersonaId}
         data={data}
         adminFetch={adminFetch}
@@ -575,13 +637,11 @@ export default function PersonasPanel() {
         // ×/Escape with unsaved edits asks first — closing used to keep them
         // pending in `form`, which is the other half of issue #1106.
         onClose={() => { if (focusedDirty) setConfirmDiscard(true); else setEditorOpen(false); }}
-        setPersona={setPersona}
-        setPersonaTts={setPersonaTts}
-        setPersonaSkills={setPersonaSkills}
+        onUpdate={applyPersonaPatch}
         onUploadAvatar={uploadAvatar}
         onGenerateAvatar={generateAvatar}
         onClearAvatar={clearAvatar}
-        onSetActive={() => setForm(f => f ? ({ ...f, activePersonaId: focused.id }) : f)}
+        onSetActive={() => setActivePersonaId(focused.id)}
         onRemove={() => setConfirmDeleteIdx(safeIdx)}
         canSave={canSave}
         focusedOk={focusedOk}
@@ -615,7 +675,7 @@ export default function PersonasPanel() {
         description={
           <>
             Remove{' '}
-            <b>{confirmDeleteIdx !== null ? (form.personas[confirmDeleteIdx]?.name.trim() || 'this persona') : 'this persona'}</b>
+            <b>{confirmDeleteIdx !== null ? (personas[confirmDeleteIdx]?.name.trim() || 'this persona') : 'this persona'}</b>
             {' '}from the roster? Nothing is permanent until you Save persona.
           </>
         }

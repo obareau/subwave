@@ -1,11 +1,21 @@
-// Pure show helpers: hydration, validation, and the payload / table-row
-// projections. hydrateShow is the single place the legacy singular → plural
-// coercion (#929) lives, so the initial load and a community install can't drift.
+// Pure show helpers: hydration and the payload / table-row projections.
+//
+// Validation itself now lives entirely in ShowsPanel/ShowEditor, which run the
+// shared show schema (controller/src/schemas/show.ts, mirrored into
+// lib/schemas.generated.ts) directly through react-hook-form's zodResolver, so
+// the rules this panel applies are byte-for-byte the ones the controller
+// enforces. What stays local here is only what the schema deliberately does
+// not express: the editor's tolerance for a half-finished show (hydrateShow),
+// and showPayload's "only means something with" conditionals.
 
 import type { ShowFacet, ShowRow } from './ShowsTable';
 import { SHOW_COLORS } from '../schedule/lib';
-import { NAME_MAX, TOPIC_MAX, eraLabelOf } from './types';
+import { eraLabelOf } from './types';
 import type { Persona, Schedule, Show } from './types';
+import {
+  migrateLegacyShowFields,
+  type ShowSchemaContext,
+} from '@/lib/schemas.generated';
 
 
 export function clientMintId() {
@@ -13,37 +23,39 @@ export function clientMintId() {
   return 's_' + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
-// One place, so the initial load and a community install share the exact same
-// legacy-field coercion (#929).
+// Fill in a show the editor can hold.
+//
+// Deliberately NOT a schema parse: the editor must be able to carry a
+// half-finished show (a fresh one has no name and no host yet), and a parse
+// would reject exactly that. What it does take from the schema is the legacy
+// singular → plural coercion (#929) — migrateLegacyShowFields — so the browser
+// and the controller's load path can't disagree about what an old `mood` or a
+// comma-crammed `genre` becomes.
 export function hydrateShow(s: Partial<Show>): Show {
+  const m = migrateLegacyShowFields(s) as Partial<Show>;
   return {
-    id: s.id ?? clientMintId(),
-    name: s.name ?? '',
-    topic: s.topic ?? '',
-    personaId: s.personaId ?? '',
-    guestPersonaIds: Array.isArray(s.guestPersonaIds) ? s.guestPersonaIds : [],
-    banter: s.banter ?? false,
-    // Plural lists are canonical (#929); a legacy singular field from a stale
-    // response still hydrates as a one-element list.
-    moods: Array.isArray(s.moods) ? s.moods : (s as { mood?: string }).mood ? [(s as { mood?: string }).mood!] : [],
-    themeId: s.themeId ?? '',
-    genres: Array.isArray(s.genres) ? s.genres : (s as { genre?: string }).genre ? [(s as { genre?: string }).genre!] : [],
-    eras: Array.isArray(s.eras) ? s.eras : (() => {
-      const { fromYear = null, toYear = null } = s as { fromYear?: number | null; toYear?: number | null };
-      return fromYear != null || toYear != null ? [{ fromYear, toYear }] : [];
-    })(),
-    energies: Array.isArray(s.energies) ? s.energies : (s as { energy?: string }).energy ? [(s as { energy?: string }).energy!] : [],
-    // Anything unrecognised reads as no constraint, matching the controller's
-    // coerceShowVocals — a steering field that silently stops applying is a far
+    id: m.id ?? clientMintId(),
+    name: m.name ?? '',
+    topic: m.topic ?? '',
+    personaId: m.personaId ?? '',
+    guestPersonaIds: Array.isArray(m.guestPersonaIds) ? m.guestPersonaIds : [],
+    banter: m.banter ?? false,
+    moods: Array.isArray(m.moods) ? m.moods : [],
+    themeId: m.themeId ?? '',
+    genres: Array.isArray(m.genres) ? m.genres.map(g => String(g).trim()).filter(Boolean) : [],
+    eras: Array.isArray(m.eras) ? m.eras : [],
+    energies: Array.isArray(m.energies) ? m.energies : [],
+    // Anything unrecognised reads as no constraint, matching the schema's own
+    // vocals field — a steering filter that silently stops applying is a far
     // smaller failure than a show that stops playing music.
-    vocals: s.vocals === 'instrumental' || s.vocals === 'vocal' ? s.vocals : '',
-    filtersStrict: s.filtersStrict ?? false,
-    maxTrackSeconds: s.maxTrackSeconds ?? null,
-    playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
-    playlistStrict: s.playlistStrict ?? false,
-    excludedPlaylistIds: Array.isArray(s.excludedPlaylistIds) ? s.excludedPlaylistIds : [],
-    programme: s.programme ?? false,
-    segmentSkill: s.segmentSkill ?? '',
+    vocals: m.vocals === 'instrumental' || m.vocals === 'vocal' ? m.vocals : '',
+    filtersStrict: m.filtersStrict ?? false,
+    maxTrackSeconds: m.maxTrackSeconds ?? null,
+    playlistIds: Array.isArray(m.playlistIds) ? m.playlistIds : [],
+    playlistStrict: m.playlistStrict ?? false,
+    excludedPlaylistIds: Array.isArray(m.excludedPlaylistIds) ? m.excludedPlaylistIds : [],
+    programme: m.programme ?? false,
+    segmentSkill: m.segmentSkill ?? '',
   };
 }
 
@@ -59,10 +71,25 @@ export function abbrev(name: string): string {
   return name.trim().slice(0, 2).toUpperCase();
 }
 
-export function showValid(s: Show): boolean {
-  // mood is deliberately not required — '' means "Any" (autonomous mood).
-  return s.name.trim().length >= 1 && s.name.trim().length <= NAME_MAX
-    && !!s.personaId && s.topic.trim().length <= TOPIC_MAX;
+/**
+ * The show schema's context, from what the panel already has loaded.
+ *
+ * Every field is a real check here — unlike the controller's LOAD path, the
+ * panel holds the live roster, the live mood vocabulary and the live theme
+ * list, so it can answer all four questions the server will ask.
+ */
+export function showContext(opts: {
+  personas: Persona[];
+  moods: string[];
+  themeIds: string[];
+  minTrackSeconds: number | null;
+}): ShowSchemaContext {
+  return {
+    personaIds: opts.personas.map(p => p.id),
+    moodNames: opts.moods,
+    themeIds: opts.themeIds,
+    minTrackSeconds: opts.minTrackSeconds,
+  };
 }
 
 // At least one music filter set — the Strict filter toggle only means
@@ -142,7 +169,17 @@ function faceOf(p: Persona, apiBase: string) {
 }
 
 // Everything the row needs is derived here, so ShowsTable never sees `Show`.
-export function showRow(s: Show, index: number, personas: Persona[], apiBase: string, hrs: number): ShowRow {
+// `ok` is supplied by the caller (ShowsPanel), sourced from the RHF form's own
+// `formState.errors.shows` — the schema's answer, not a local reimplementation
+// of it. Same convention PersonaRoster/PersonaTable already established.
+export function showRow(
+  s: Show,
+  index: number,
+  personas: Persona[],
+  apiBase: string,
+  hrs: number,
+  ok: boolean,
+): ShowRow {
   const host = personas.find(p => p.id === s.personaId) ?? null;
   const guests = (s.guestPersonaIds || [])
     .map(id => personas.find(p => p.id === id))
@@ -161,7 +198,7 @@ export function showRow(s: Show, index: number, personas: Persona[], apiBase: st
     guestNames: joinNames(guests.map(g => g.name?.trim() || 'Unnamed')),
     facets: showFacets(s),
     hrs,
-    ok: showValid(s),
+    ok,
   };
 }
 

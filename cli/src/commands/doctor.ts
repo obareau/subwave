@@ -1,5 +1,4 @@
-// `subwave doctor` — run all diagnostic checks and print a structured
-// report. Pure rendering: every fact comes from runDoctor().
+// `subwave doctor` — pure rendering; every fact comes from runDoctor().
 
 import { runDoctor, type Finding, type Status } from '../doctor.ts';
 import { header, ok, warn, err, info, muted, pc, p, pauseForEnter } from '../ui.ts';
@@ -15,8 +14,7 @@ export async function runDoctorCommand(): Promise<void> {
     for (const f of sec.findings) renderFinding(f);
   }
 
-  // Summary line. Mirrors locca's doctor footer: a count + the most useful
-  // next-step hint when something failed.
+  // locca's doctor footer: a count, plus the most useful next step on failure.
   const { ok: okCount, warn: warnCount, fail, skip } = report.counts;
   console.log();
   const parts: string[] = [];

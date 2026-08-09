@@ -1,9 +1,7 @@
 import type { DjPromptPreset, FormState, Persona, SettingsResponse } from './types';
 import {
   AVATAR_TARGET_PX, DICEBEAR_STYLES, DIAL_NEUTRAL,
-  NAME_MAX, TAGLINE_MAX, SOUL_MAX, LANGUAGE_MAX,
-  PROMPT_NAME_MAX, PROMPT_MIN, PROMPT_MAX,
-  KOKORO_RE, CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE,
+  CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE,
 } from './constants';
 import { CLOUD_PROVIDER_ENV_KEY, cloudProviderLabel } from '../tts/cloudProviderMeta';
 
@@ -13,18 +11,6 @@ import { CLOUD_PROVIDER_ENV_KEY, cloudProviderLabel } from '../tts/cloudProvider
 export function clientMintId(prefix: string = 'p_') {
   const b = crypto.getRandomValues(new Uint8Array(3));
   return prefix + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
-}
-
-// Client-side mirror of the controller's per-preset validation
-// (settings.ts:validateDjPromptsStrict) — used to gate Save.
-export function promptPresetValid(p: { name: string; text: string }): boolean {
-  const name = p.name.trim();
-  const text = p.text.trim();
-  return (
-    name.length >= 1 && name.length <= PROMPT_NAME_MAX &&
-    text.length >= PROMPT_MIN && text.length <= PROMPT_MAX &&
-    text.includes('{name}')
-  );
 }
 
 // The single defaulting path — used by the initial load, community install and
@@ -165,35 +151,6 @@ export async function fileToAvatarDataUrl(file: File): Promise<string> {
   } finally {
     bitmap.close?.();
   }
-}
-
-export function personaValid(p: Persona): boolean {
-  if (p.name.trim().length < 1 || p.name.trim().length > NAME_MAX) return false;
-  if (p.tagline.trim().length > TAGLINE_MAX) return false;
-  if (p.soul.trim().length < 1 || p.soul.trim().length > SOUL_MAX) return false;
-  if (p.language.trim().length > LANGUAGE_MAX) return false;
-  const e = p.tts.engine;
-  if (e === 'kokoro') return KOKORO_RE.test(p.tts.voice.trim());
-  if (e === 'chatterbox') {
-    // Empty = use built-in default voice; otherwise must be a plain .wav filename.
-    const v = p.tts.voice.trim();
-    return v === '' || CHATTERBOX_VOICE_RE.test(v);
-  }
-  if (e === 'pocket-tts') {
-    // Built-in voice id, OR a .wav filename for zero-shot cloning (issue #213),
-    // OR empty for the default — matches the server-side validator in settings.ts.
-    const v = p.tts.voice.trim();
-    return v === '' || POCKET_TTS_VOICE_RE.test(v) || CHATTERBOX_VOICE_RE.test(v);
-  }
-  if (e === 'cloud') {
-    const v = p.tts.voice.trim();
-    return v.length >= 1 && v.length <= 100;
-  }
-  if (e === 'remote') {
-    const v = p.tts.voice.trim();
-    return v.length <= 100;
-  }
-  return true; // piper — voice ignored
 }
 
 // `voice` is shared across engines, so switching engines can leave an incompatible

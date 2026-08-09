@@ -1,14 +1,7 @@
-// SUB/WAVE operator CLI entry point. Parses argv, dispatches to a
-// command, or falls back to the interactive menu when no command is
-// given.
-//
-// Boot order matters:
-//   1. Strip `--home <path>` from argv and stash it on SUBWAVE_HOME so the
-//      lazy resolver in util.ts picks it up.
-//   2. Handle commands that DON'T need a resolved home (--version, help,
-//      init) — these short-circuit before any path lookup.
-//   3. Everything else either has a resolvable home or gets pointed at
-//      `subwave init` by requireSubwaveHome().
+// CLI entry point — dispatches a command, or opens the interactive menu when
+// given none. Boot order is load-bearing: `--home` has to reach SUBWAVE_HOME
+// before anything triggers util.ts's lazy resolver, and the commands that work
+// without an install must short-circuit above the resolved-home gate.
 
 import { existsSync } from 'node:fs';
 import { consumeHomeFlag, resolveSubwaveHome } from './home.ts';
@@ -61,7 +54,6 @@ Esc inside the menu navigates back. Ctrl-C exits.
 `.trimStart();
 
 async function main(): Promise<void> {
-  // Mutates process.argv in place, removing --home/--home=<path>.
   const homeFlag = consumeHomeFlag(process.argv);
   if (homeFlag) process.env.SUBWAVE_HOME = homeFlag;
 
@@ -72,9 +64,7 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === '--version' || cmd === '-v') {
-    // Embedded at build time by cli/scripts/embed-assets.ts (release-please
-    // bumps cli/package.json in lockstep with the git tag, so this stays
-    // accurate across releases). Doesn't touch SUBWAVE_HOME.
+    // Imported lazily so printing a version never resolves SUBWAVE_HOME.
     const { CLI_VERSION } = await import('./assets.ts');
     process.stdout.write(`${CLI_VERSION}\n`);
     return;
@@ -104,7 +94,6 @@ async function main(): Promise<void> {
   }
   if (cmd === 'self-update') {
     const { runSelfUpdateCommand } = await import('./commands/self-update.ts');
-    // --version <tag> picks a specific release; otherwise latest.
     const versionFlagIdx = rest.findIndex((a) => a === '--version' || a.startsWith('--version='));
     let version: string | undefined;
     if (versionFlagIdx >= 0) {
@@ -115,9 +104,9 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'uninstall') {
-    // Handled before the resolved-home gate: uninstall must work even when the
-    // install is half-broken (no .env, stale stack), and can still clean up
-    // CLI config + binary when there's no home at all.
+    // Above the resolved-home gate on purpose: uninstall has to work on a
+    // half-broken install, and can still remove the CLI config and binary when
+    // there's no home at all.
     const { runUninstallCommand } = await import('./commands/uninstall.ts');
     await runUninstallCommand({
       yes: rest.includes('--yes') || rest.includes('-y'),
@@ -128,12 +117,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  // From here on we need a resolved home. Two failure modes worth distinct
-  // messages:
-  //   - No home resolvable at all → point at `subwave init` (fresh install).
-  //   - Home exists but has no .env → push into the wizard (`subwave setup`).
-  // The util.ts lazy paths will call requireSubwaveHome() on first access; we
-  // pre-check here to give a nicer message before that happens.
+  // Everything below needs a home. util.ts would call requireSubwaveHome() on
+  // first path access anyway; pre-checking here buys a message that separates
+  // "no install at all" from "install with no .env".
   const resolved = resolveSubwaveHome();
   if (!resolved) {
     process.stderr.write(
@@ -144,10 +130,8 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  // First-run inside an existing install: no .env yet. The legacy
-  // controller/.env is checked too so a partial upgrade doesn't fall back
-  // into the init error unnecessarily. `init` itself is exempt — it's the
-  // command that creates .env. Everything else bails with a pointer.
+  // The legacy controller/.env counts too, so a partial upgrade isn't sent back
+  // to init. `init` is exempt — it's the command that writes .env.
   const haveEnv = existsSync(getRootEnv()) || existsSync(getLegacyControllerEnv());
   if (!haveEnv && cmd !== 'init') {
     process.stderr.write(

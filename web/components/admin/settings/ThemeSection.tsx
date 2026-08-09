@@ -19,7 +19,7 @@ import { DEFAULT_SKIN_ID, SKINS } from '../../skins';
 import { THEME_TOKENS, THEME_TOKEN_KEYS, SWATCH_KEYS, DISPLAY_FONT_IDS, MONO_FONT_IDS } from '../../../lib/theme-tokens.generated';
 import {
   SectionHeader,
-  type SettingsData, type SaveSettings,
+  type SettingsData, type SaveSettings, type SettingsFieldErrors,
 } from './shared';
 
 interface ThemeSectionProps {
@@ -27,6 +27,8 @@ interface ThemeSectionProps {
   busy: boolean;
   saveSettings: SaveSettings;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  /** Server-side errors from the last save, keyed by dotted path. */
+  fieldErrors: SettingsFieldErrors;
 }
 
 interface ThemeDef {

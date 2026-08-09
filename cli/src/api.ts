@@ -1,11 +1,7 @@
-// Controller HTTP client. Picks the right base URL for the live compose
-// env, attaches admin Basic auth if creds are available in the root .env,
-// and returns parsed JSON.
-//
-// The controller exposes both public (/health, /now-playing, /state) and
-// admin (/settings, /debug, /stats, /dj/*) endpoints. We grab admin creds
-// lazily from the root .env; if they're missing in dev that's fine
-// (controller skips the auth gate when not in NODE_ENV=production).
+// Controller HTTP client — resolves the base URL for the live compose env and
+// attaches admin Basic auth when the root .env has creds. Missing creds are
+// survivable in dev, where the controller skips its auth gate outside
+// NODE_ENV=production.
 
 import { apiBaseFor, type ComposeEnv } from './compose.ts';
 import { getLegacyControllerEnv, getRootEnv, parseEnvFile, fetchErrorReason } from './util.ts';
@@ -16,9 +12,8 @@ export interface AdminCreds {
 }
 
 export function readAdminCreds(): AdminCreds | null {
-  // Prefer the root .env (post single-compose). Fall back to the legacy
-  // controller/.env so an upgrading operator who hasn't re-run setup yet still
-  // gets their admin calls authenticated.
+  // The legacy controller/.env fallback keeps admin calls authenticated for an
+  // upgrader who hasn't re-run setup yet.
   for (const path of [getRootEnv(), getLegacyControllerEnv()]) {
     const env = parseEnvFile(path);
     if (env.ADMIN_USER && env.ADMIN_PASS) {
@@ -96,11 +91,8 @@ export function makeClient(env: ComposeEnv): ApiClient {
   };
 }
 
-// Returns true if the operator still needs to finish the configuration
-// wizard (Navidrome + LLM not yet persisted). Returns null on any error —
-// the caller treats null as "don't know, stay quiet" rather than nagging
-// when the controller isn't responsive enough to give a clean answer.
-// Endpoint is unauthenticated (controller/src/routes/onboarding.ts:53).
+// null means "don't know" — callers stay quiet rather than nag when the
+// controller can't answer cleanly. The endpoint is unauthenticated.
 export async function checkNeedsSetup(env: ComposeEnv): Promise<boolean | null> {
   const client = makeClient(env);
   const r = await client.get<{ needsSetup?: boolean }>('/onboarding/status', { timeoutMs: 2000 });
@@ -108,9 +100,8 @@ export async function checkNeedsSetup(env: ComposeEnv): Promise<boolean | null> 
   return r.body.needsSetup;
 }
 
-// Poll /health until it returns { status: 'on-air' } or until timeout.
-// Used by `subwave start` after `docker compose up -d` to give the operator
-// a confident "controller is alive" signal before the prompt returns.
+// Polls until the controller reports on-air, so `subwave start` can hand back a
+// confident signal rather than just "compose exited 0".
 export async function waitForHealth(
   env: ComposeEnv,
   timeoutMs = 30_000,
@@ -127,9 +118,8 @@ export async function waitForHealth(
   return false;
 }
 
-// Shapes of the public payloads we render in status/doctor. Field names
-// match what controller/src/routes/public.js actually emits — checked
-// against a live response, not guessed from docs.
+// Field names were taken from a live response, not from the docs — keep them in
+// step with what controller/src/routes/public.js emits.
 export interface NowPlayingPayload {
   nowPlaying?: {
     title?: string;
@@ -153,6 +143,6 @@ export interface StatePayload {
   upcoming?: Array<{ title?: string; artist?: string }>;
   current?: { title?: string; artist?: string };
   history?: Array<{ title?: string; artist?: string; playedAt?: number }>;
-  // Each entry has: id, kind, message, meta, t (ISO string).
+  // Entries also carry id + meta; declared here only as far as we render.
   djLog?: Array<{ kind?: string; message?: string; t?: string }>;
 }
