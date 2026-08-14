@@ -56,3 +56,6 @@ ds-bundle/
 .design-sync/node_modules
 web/.ds-styles.css
 __pycache__/
+
+# Sauvegardes de .env — elles portent ADMIN_PASS (ajouté 2026-08-14)
+.env.bak-*
