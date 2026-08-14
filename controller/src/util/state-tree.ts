@@ -1,0 +1,83 @@
+// One directory listing for the read-only state-dir tree (GET /debug/state-tree).
+//
+// NEVER recursive. state/stems is a byte-budget LRU cache that routinely holds
+// tens of thousands of dirs and state/archive grows one mixdown an hour forever,
+// so a walk here would be an unbounded fs traversal on an admin page.
+//
+// The cap is applied AFTER sorting and BEFORE stat, which is the whole trick:
+// expanding a 200k-entry stems/ costs one readdir and MAX_ENTRIES stats, not
+// 200k stats. `total` reports the real size so the UI can say "showing 500 of
+// 214,338" rather than truncating silently.
+
+import { readdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { MAX_ENTRIES, realStatePath, resolveStatePath } from './state-path.js';
+
+export type StateEntry = {
+  name: string;
+  isDir: boolean;
+  isSymlink: boolean;
+  size?: number;
+  mtime?: string;
+};
+
+export type StateListing = {
+  root: string;
+  path: string;
+  entries: StateEntry[];
+  shown: number;
+  total: number;
+};
+
+/** Thrown for a malformed path — the route answers 400. A path that is merely
+ *  missing or unreadable comes back as `{ error }` instead (see listStateDir). */
+export class BadStatePathError extends Error {}
+
+/** Directories first, then by name. Fixed locale so ordering can't drift with
+ *  the container's LANG — an operator comparing two installs should see one order. */
+function compareEntries(a: StateEntry, b: StateEntry): number {
+  if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+  return a.name.localeCompare(b.name, 'en');
+}
+
+export async function listStateDir(root: string, rel: string): Promise<StateListing> {
+  const abs = resolveStatePath(root, rel);
+  if (!abs) throw new BadStatePathError('path escapes the state dir');
+  const real = await realStatePath(root, abs);
+  if (!real) throw new BadStatePathError('path escapes the state dir');
+
+  // withFileTypes gives isDirectory()/isSymbolicLink() off the dirent, so
+  // classifying every entry costs no stat at all.
+  const dirents = await readdir(real, { withFileTypes: true });
+  const all: StateEntry[] = dirents.map((d) => ({
+    name: d.name,
+    // A symlink to a directory reports isDirectory() false on the dirent; the
+    // stat below (which follows) corrects it, so the tree can still expand it.
+    isDir: d.isDirectory(),
+    isSymlink: d.isSymbolicLink(),
+  }));
+  all.sort(compareEntries);
+
+  const entries = all.slice(0, MAX_ENTRIES);
+  await Promise.all(entries.map(async (e) => {
+    try {
+      const s = await stat(join(real, e.name));
+      e.size = s.size;
+      e.mtime = s.mtime.toISOString();
+      if (s.isDirectory()) e.isDir = true;
+    } catch {
+      // A broken symlink or a race with the LRU sweep costs this entry its
+      // size/mtime, never the whole listing.
+    }
+  }));
+  // stat can promote a symlink to a directory, so re-sort to keep dirs first.
+  entries.sort(compareEntries);
+
+  return {
+    root,
+    path: rel.replace(/^\/+/, '').replace(/\/+$/, ''),
+    entries,
+    shown: entries.length,
+    total: all.length,
+  };
+}

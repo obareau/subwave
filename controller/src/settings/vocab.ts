@@ -44,7 +44,6 @@ import {
   TTS_ENGINES as TTS_ENGINE_VALUES,
   TTS_GAIN_CLAMP_DB as TTS_GAIN_CLAMP_DB_VALUE,
   TTS_KOKORO_VOICE_RE,
-  TTS_PIPER_VOICE_RE,
   TTS_POCKET_VOICE_RE,
   TTS_SPEED_DEFAULT as TTS_SPEED_DEFAULT_VALUE,
   TTS_SPEED_MAX as TTS_SPEED_MAX_VALUE,
@@ -143,22 +142,17 @@ export function personaToneDirectives(persona: unknown): string {
   return lines.length ? `\n\nTone:\n- ${lines.join('\n- ')}` : '';
 }
 
-// TTS engines. Every spoken segment is voiced by the on-air persona's own
-// `tts` config (see audio/tts.js); only jingle rendering falls back to the
-// global defaultEngine.
+// TTS engines. Every spoken segment is voiced by the on-air persona's own `tts`
+// config (audio/tts.js); only jingle rendering falls back to defaultEngine.
 //
-// `cloud` routes through the AI SDK (OpenAI / ElevenLabs speech models) —
-// see llm/speech.js. `piper`, `kokoro`, `chatterbox`, and `pocket-tts` are
-// local engines. `remote` is a first-class self-hosted HTTP engine: it POSTs
-// to a configurable /speak endpoint and gets the rendered audio back in the
-// response body (no shared volume, so the endpoint can live on any host),
-// gated on a /health probe. Configure the URL in settings.tts.remote.url.
-// Chatterbox and PocketTTS are opt-in — the
-// default controller image doesn't bundle either; build the image with
-// `--build-arg WITH_CHATTERBOX=1` or `--build-arg WITH_POCKETTTS=1` (see
-// docker/Dockerfile.controller) to include the runtime. The dispatcher gates
-// each engine on isAvailable() so settings can reference it safely even when
-// the runtime is absent (the engine just falls back to Piper).
+// `cloud` routes through the AI SDK (llm/speech.js). `piper`, `kokoro`,
+// `chatterbox` and `pocket-tts` are local. `remote` is a self-hosted HTTP
+// engine: it POSTs to a configurable /speak endpoint and gets the audio back in
+// the response body — no shared volume, so it can live on any host — gated on a
+// /health probe. Chatterbox and PocketTTS are opt-in at image build time
+// (`--build-arg WITH_CHATTERBOX=1` / `WITH_POCKETTTS=1`). The dispatcher gates
+// every engine on isAvailable(), so settings can name one whose runtime is
+// absent and it simply falls back to Piper.
 export const TTS_ENGINES: readonly string[] = TTS_ENGINE_VALUES;
 
 // DJ-voice level trim, in dB. A per-engine gain levels the loudness gap between
@@ -284,17 +278,14 @@ export const LLM_PROVIDERS = [
   'gateway',
 ];
 
-// Subset of LLM_PROVIDERS that can actually produce text embeddings — the
-// library tagger embeds every track (music/embeddings.ts). Two chat providers
-// still route chat ONLY: deepseek and the Vercel AI gateway have no embeddings
-// endpoint. Offering them in the embedding-provider picker silently fell through
-// to a local Ollama and failed with a misleading "can't reach <provider>" error
-// (#493). `openrouter` was originally in that chat-only set, but OpenRouter
-// shipped an OpenAI-compatible embeddings endpoint, so it's back in (#522) and
-// routes through llm/internal/provider/embedding.ts. `anthropic` was dropped —
-// it has no first-party embedding model and only worked by transparently routing
-// to OpenAI (needs OPENAI_API_KEY), which confused operators; pick OpenAI (or any
-// other embedding provider) directly instead.
+// Subset of LLM_PROVIDERS that can actually produce text embeddings. Chat-only
+// providers are excluded because offering them in the embedding picker fell
+// through to a local Ollama and failed with a misleading "can't reach
+// <provider>" (#493): deepseek and the Vercel AI gateway have no embeddings
+// endpoint, and `anthropic` has no first-party embedding model (it only worked
+// by transparently routing to OpenAI, which confused operators — pick OpenAI
+// directly). `openrouter` IS included: it shipped an OpenAI-compatible
+// embeddings endpoint (#522), routed through provider/embedding.ts.
 export const EMBEDDING_PROVIDERS = [
   'ollama',
   'openai-compatible',
@@ -370,13 +361,13 @@ export function clampMaxOutputTokens(raw: unknown, def: number): number {
 // band. Non-numeric/NaN falls back to `def`. Same 0-means-auto shape as
 // clampMaxOutputTokens above.
 //
-// The band is imported from the harness rather than restated here: it is a
-// property of the tool loop (a 0 budget corners the model at step 0 with an
-// empty candidate set; an unbounded one eats the shared deadline the recovery
-// legs need), and a second copy of the numbers would be free to drift from the
-// clamp discoveryStepsFor() applies. This is the one place settings reaches past
-// an `llm/` barrel: capabilities.ts imports nothing, while the llm/provider.js
-// barrel pulls in registry.ts, which imports settings — a cycle.
+// The band is imported from the harness rather than restated: it is a property
+// of the tool loop (a 0 budget corners the model at step 0 with an empty
+// candidate set; an unbounded one eats the shared deadline the recovery legs
+// need), and a second copy would be free to drift from discoveryStepsFor()'s
+// clamp. This is the one place settings reaches past an `llm/` barrel —
+// capabilities.ts imports nothing, while the llm/provider.js barrel pulls in
+// registry.ts, which imports settings: a cycle.
 export function clampDiscoverySteps(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   const n = Math.floor(raw);
@@ -664,7 +655,6 @@ export const WEATHER_MOOD_DEFAULTS: Record<string, string> = {
 
 // --- Mood vocabulary validation (the seeded-but-editable pattern) ---
 export const MOODS_LIMIT = 40;
-export const MOOD_NAME_MAX = 40;
 export const MOOD_PROMPT_MAX = 200;
 
 // Normalise a raw mood name to the canonical id form (lowercase, [a-z0-9-]).
@@ -827,11 +817,6 @@ export const POCKET_TTS_VOICE_RE = TTS_POCKET_VOICE_RE;
 // (means "use the built-in default voice"). Used by both chatterbox and
 // pocket-tts since issue #213.
 export const CHATTERBOX_VOICE_RE = TTS_CHATTERBOX_VOICE_RE;
-// Per-persona Piper voice — an `.onnx` model filename in the shared voice folder
-// (config.voices.dir), e.g. `en_US-amy-medium.onnx`, dropped alongside its
-// `.onnx.json` manifest. Basename only, no path separators. Empty is valid and
-// means "use the baked-in default voice" (issue #230).
-export const PIPER_VOICE_RE = TTS_PIPER_VOICE_RE;
 // The entity-id pattern shows, personas and skill assignments all share. Its
 // one definition is SHOW_ID_RE in the shared show schema — a mirrored module
 // cannot import a common one (gen-schemas.ts rejects every specifier but
@@ -880,23 +865,18 @@ export { SHOW_TOPIC_MAX } from '../schemas/show.js';
 // like the host.
 export { GUESTS_PER_SHOW, PLAYLISTS_PER_SHOW, EXCLUDED_PLAYLISTS_PER_SHOW };
 // Values per multi-select music filter (moods / genres / eras). Within one
-// attribute the values OR together at pick time; across attributes they AND.
-// Raised 6 → 15: the AND-across argument for keeping it small never applied
-// WITHIN an attribute, and genre is where it bites — a strict alt/punk show
-// has to name every library tag it wants (Punk Rock, Emo, Pop Punk,
-// Post-Hardcore, Emo Pop, …) because matching only REFINES, never broadens
-// (see trackGenres/genreMatches in music/show-filter.ts), so 6 forced the
-// operator to either drop valid tags or retag the library.
+// attribute the values OR at pick time; across attributes they AND.
 //
-// What made 6 load-bearing was cost, not meaning: every genre used to cost a
-// getGenres() round trip to resolve (music/subsonic.ts) plus two discovery
-// fetches per genre in each pool builder, all sequential. Both are bounded now
-// — getGenres is TTL-cached and the per-genre fetches run through mapPool — so
-// the wall-clock of a pick no longer scales with this number. The per-genre
-// size budgets already divide a FIXED total (randomSize / genreSetSize in
-// music/picker.ts + broadcast/scheduler.ts), so the pool doesn't grow either.
-// Keep in lockstep with FILTER_VALUES_MAX in
-// web/components/admin/shows/types.ts (pinned by scripts/show-filter-cap.test.ts).
+// The cap can be generous because neither cost nor pool size scales with it:
+// getGenres() is TTL-cached, the per-genre discovery fetches run through
+// mapPool, and the per-genre size budgets divide a FIXED total (randomSize /
+// genreSetSize). It needs to be generous because genre matching only REFINES,
+// never broadens (trackGenres/genreMatches in music/show-filter.ts), so a strict
+// alt/punk show must name every library tag it wants — Punk Rock, Emo, Pop Punk,
+// Post-Hardcore, … — or retag the library.
+//
+// Keep in lockstep with FILTER_VALUES_MAX in web/components/admin/shows/types.ts
+// (pinned by scripts/show-filter-cap.test.ts).
 export { SHOW_FILTER_VALUES_MAX };
 // Must comfortably exceed a realistic skill library: unticking one skill on an
 // "all skills" (null) persona materialises the FULL catalog minus one, so a cap

@@ -178,15 +178,14 @@ export async function ping(): Promise<{ ok: boolean; reason?: string }> {
 // Music-source test/save flow. Unlike ping() it never touches config.navidrome
 // and never mutates anything; callers pass exactly what to try. Never throws.
 //
-// One retry on ANY first failure — broader than ping()'s fast-fail-only rule,
-// deliberately. ping()'s 30s timeout makes a slow retry expensive; this probe
-// is 5s-bounded, so the retry costs at most ~5.5s against a truly-dead server.
-// It covers both failure shapes of a warm-but-stale connection pool: the
-// instant reset on reusing a stale socket, AND the full-timeout stall seen
-// when the Navidrome process restarts under pooled connections (the aborted
-// attempt's teardown is what un-wedges the pool, so the second try connects
-// fresh). A Test button reporting either blip as "unreachable" sends the
-// operator chasing a config that actually works.
+// One retry on ANY first failure, broader than ping()'s fast-fail-only rule:
+// ping()'s 30s timeout makes a slow retry expensive, but this probe is
+// 5s-bounded, so the retry costs at most ~5.5s against a truly-dead server. It
+// covers both failure shapes of a warm-but-stale connection pool — the instant
+// reset on reusing a stale socket, and the full-timeout stall when Navidrome
+// restarts under pooled connections (the aborted attempt's teardown is what
+// un-wedges the pool). A Test button reporting either blip as "unreachable"
+// sends the operator chasing a config that actually works.
 export async function pingWith(target: {
   url: string;
   user: string;
@@ -383,16 +382,14 @@ export async function resolveGenreName(name) {
 // ---------------------------------------------------------------------------
 // Fuzzy artist resolution
 // ---------------------------------------------------------------------------
-// Navidrome's search3 does exact token/substring matching only, so a one-letter
-// transliteration variance ("Sikandar" vs the library's "Sikander") or a
-// dropped accent ("Beyonce" vs "Beyoncé") returns zero artists, and a bare
-// "play <artist>" request silently falls through to mood filler. resolveArtist
-// is to artists what resolveGenreName is to genres: normalise the free text,
-// try an exact index hit, then relax to per-token index searches and
-// fuzzy-rank the candidates against the whole request. Returns the best
-// matching artist object ({ id, name, ... }) or null. Library-relative — it
-// ranks against whatever artists THIS operator actually has, so it needs no
-// per-library data and works on every install.
+// Navidrome's search3 matches exact tokens/substrings only, so a one-letter
+// transliteration variance ("Sikandar" vs "Sikander") or a dropped accent
+// ("Beyonce" vs "Beyoncé") returns zero artists and a bare "play <artist>"
+// request falls through to mood filler. resolveArtist is to artists what
+// resolveGenreName is to genres: normalise, try an exact index hit, then relax
+// to per-token searches and fuzzy-rank candidates against the whole request.
+// Ranks against whatever artists THIS operator has, so it needs no per-library
+// data. Returns the best artist object or null.
 
 function normArtist(s: string): string {
   return String(s || '')
@@ -936,19 +933,18 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   // it here because the predecessor's own annotation is already sent).
   if (song.chop) fields.push('liq_chop="true"');
   if (song.chopPeriod != null) fields.push(`liq_chop_period="${escAnnotate(song.chopPeriod)}"`);
-  // Hard track-length cap (issue #447 / max-track-length). When the caller passes
-  // a positive cap, stamp `liq_cue_out` so radio.liq's `cue_cut` stops the track
-  // at that second offset — a real ceiling that fires no matter how the track
-  // reached the stream, not just a selection bias. Only the capped paths set it
-  // (autonomous picks in queue.drainToLiquidsoap + the auto.m3u fallback);
-  // explicit listener requests pass null and play in full. A cue_out past a
-  // shorter track's end is a Liquidsoap no-op, so sub-cap tracks play untouched.
-  // Stem-blend cue points (feature: stem-blend transitions): an explicit
-  // cueOutSec (the blend start in the OUTGOING track) folds with the length
-  // cap — whichever cuts earlier wins, so a blend can never resurrect audio
-  // past the operator's cap. cueInSec skips the INCOMING track past the head
-  // its rendered clip already played. Liquidsoap 2.4 honours both labels
-  // natively at request resolution; no radio.liq change.
+  // Hard track-length cap (#447): a positive cap stamps `liq_cue_out` so
+  // radio.liq's `cue_cut` stops the track at that offset — a real ceiling
+  // whatever path the track took to the stream, not a selection bias. Only the
+  // capped paths set it (autonomous picks + the auto.m3u fallback); listener
+  // requests pass null and play in full. A cue_out past a shorter track's end is
+  // a Liquidsoap no-op.
+  //
+  // Stem-blend cue points fold in here too: an explicit cueOutSec (the blend
+  // start in the OUTGOING track) competes with the cap and whichever cuts
+  // earlier wins, so a blend can never resurrect audio past the operator's cap.
+  // cueInSec skips the INCOMING track past the head its rendered clip already
+  // played. Liquidsoap 2.4 honours both labels at request resolution.
   const cueOut = [opts.maxDurationSec, opts.cueOutSec]
     .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
   if (cueOut.length) {

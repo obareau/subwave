@@ -35,6 +35,7 @@ import {
 import { skillSubmitUrl } from '../../../lib/repo';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, TextareaField } from '@/lib/form-fields';
+import { Switch } from '@/components/ui/switch';
 
 // Only what this modal needs from GET /dj/skills; the full list type lives in
 // SkillsPanel.
@@ -98,6 +99,13 @@ interface SkillFileResponse {
   config?: Record<string, string | number>;
   label?: string;
   cooldown?: string;
+  cron?: string | null;
+  // Set when the file on disk carries an expression node-cron can't register.
+  // Only a hand-edited SKILL.md can produce one — every save route refuses it —
+  // and the scheduler's skip is logged where the operator won't see it, so the
+  // editor is the surface that has to say so.
+  cronInvalid?: boolean;
+  cronOnly?: boolean;
   context?: string;
   knownContextFields?: string[];
   window?: 'any' | 'commute';
@@ -111,18 +119,16 @@ interface SkillFileResponse {
 
 const COOLDOWN_PRESETS = ['15m', '25m', '45m', '1h', '6h'];
 
-// The RHF-bound shape of the SKILL.md fields (what `useZodForm`'s schema
-// validates). `name` is create-only — the edit-mode schema (skillFileSchema)
-// has no such field, so it just rides along unused there. `config` (the
-// skill's own declared knobs) is deliberately NOT here: those are runtime
-// data from the skill's own tool.mjs, validated separately by
-// skills/config-fields.ts on the controller, so they stay their own
-// useState below rather than joining the shared schema — same reasoning as
-// the schema file's own header comment.
+// The RHF-bound shape of the SKILL.md fields. `name` is create-only and rides
+// along unused in edit mode. `config` (the skill's own declared knobs) stays
+// out: it's runtime data from the skill's tool.mjs, validated separately by
+// the controller's skills/config-fields.ts, so it keeps its own useState.
 interface SkillFormValues {
   name?: string;
   label: string;
   cooldown: string;
+  cron: string;
+  cronOnly: boolean;
   context: string[];
   tags: string[];
   brief: string;
@@ -160,6 +166,8 @@ function fileToFormValues(j: SkillFileResponse) {
   return {
     label: j.label || '',
     cooldown: j.cooldown || '',
+    cron: j.cron || '',
+    cronOnly: !!j.cronOnly,
     context: splitContext(j.context),
     window: (j.window === 'commute' ? 'commute' : 'any') as 'any' | 'commute',
     tags: Array.isArray(j.tags) ? j.tags : [],
@@ -185,6 +193,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const [custom, setCustom] = useState(mode === 'create' ? true : !!skill?.custom);
   const [configFields, setConfigFields] = useState<SkillConfigField[]>([]);
   const [hasTool, setHasTool] = useState(false);
+  const [cronInvalid, setCronInvalid] = useState(false);
   const [knownContext, setKnownContext] = useState<string[]>(CONTEXT_FIELDS_FALLBACK);
 
   // The skill's own declared knobs (news' feed/feedMaxItems, …) — runtime data
@@ -210,35 +219,28 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const [confirmDelete, setConfirmDelete] = useState(false);  // delete confirm dialog
   const [defaults, setDefaults] = useState<SkillDefaults | null>(null); // built-in shipped defaults
 
-  // The same schema the controller runs (controller/src/schemas/skill.ts via
-  // the generated mirror) — so a bad cooldown is caught at the input instead of
-  // coming back as a 400 after the operator hits Save. Declared as the widened
-  // ZodType rather than the literal create/edit union: several of its fields
-  // (label/cooldown/window/requiresKey) are z.preprocess-wrapped, whose
-  // z.input is `unknown`, so the union's input type collapses the same way a
-  // factory schema's does (see FestivalsSection/MoodsPanel) — worked around
-  // the same way, with one cast on `control` below instead of fighting the
-  // union at every call site.
+  // The same schema the controller runs, so a bad cooldown is caught at the
+  // input rather than coming back as a 400. Declared as the widened ZodType
+  // rather than the create/edit union: several fields are z.preprocess-wrapped,
+  // whose z.input is `unknown`, so the union's input type collapses — handled
+  // with one cast on `control` below instead of at every call site.
   const schema: z.ZodType<FieldValues, FieldValues> =
     mode === 'create' ? skillCreateSchema : skillFileSchema(custom);
 
   const form = useZodForm(
     schema,
     (mode === 'create'
-      ? { name: '', label: '', cooldown: '', context: [], tags: [], brief: '', window: 'any', requiresKey: '' }
-      : { label: '', cooldown: '', context: [], tags: [], brief: '', window: 'any', requiresKey: '' }
+      ? { name: '', label: '', cooldown: '', cron: '', cronOnly: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '' }
+      : { label: '', cooldown: '', cron: '', cronOnly: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '' }
     ) as DefaultValues<z.input<typeof schema>>,
   );
   const control = form.control as unknown as Control<SkillFormValues>;
   const uid = useId();
 
-  // `custom` can flip after mount (edit mode's initial guess comes from the
-  // skills-list row; the file GET below is the source of truth), which swaps
-  // `schema` to a different singleton. react-hook-form picks up a changed
-  // resolver on the next render, but it doesn't retroactively re-run it
-  // against already-computed error state — only the next trigger does. Same
-  // pattern as MoodsPanel's schedule/weather schema, which also depends on
-  // state resolved after mount.
+  // `custom` can flip after mount (the file GET below corrects the list row's
+  // guess), swapping `schema`. RHF picks up the new resolver on the next render
+  // but won't re-run it against already-computed error state — same as
+  // MoodsPanel's schedule/weather schema.
   useEffect(() => {
     void form.trigger();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -283,6 +285,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         setCustom(!!j.custom);
         setConfigFields(Array.isArray(j.configFields) ? j.configFields : []);
         setHasTool(!!j.hasTool);
+        setCronInvalid(!!j.cronInvalid);
         setDefaults(j.defaults || null);
         setKnownContext(
           Array.isArray(j.knownContextFields) && j.knownContextFields.length
@@ -308,16 +311,12 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const dirty = loaded && (form.formState.isDirty || configDirty || assignDirty);
 
   const canSave = loaded && form.formState.isValid && !busy;
-  // Every field has its own inline error slot now except `requiresKey`
-  // (name/label/cooldown/brief via TextField/TextareaField's built-in
-  // FieldError; context/tags/window via the hand-rolled Controller blocks
-  // below) — excluded here so a message doesn't render TWICE, once under the
-  // field and again in this generic banner. `requiresKey` is the one field
-  // with NO rendered control at all (a hidden passthrough — see its
-  // declaration above), so a disk-authored value that isn't UPPER_SNAKE_CASE
-  // has nowhere else to surface. The footer shows the first such issue so a
-  // gated Save always says why.
-  const FIELDS_WITH_INLINE_ERRORS = ['name', 'label', 'cooldown', 'context', 'tags', 'window', 'brief'];
+  // Every field has its own inline error slot, so listing them here too would
+  // render each message twice. `requiresKey` is the exception: it's a hidden
+  // passthrough with no rendered control, so a disk-authored value that isn't
+  // UPPER_SNAKE_CASE has nowhere else to surface, and a gated Save would
+  // otherwise never say why.
+  const FIELDS_WITH_INLINE_ERRORS = ['name', 'label', 'cooldown', 'cron', 'cronOnly', 'context', 'tags', 'window', 'brief'];
   const blockingIssue = (() => {
     const entry = Object.entries(form.formState.errors).find(
       ([key, err]) => err && !FIELDS_WITH_INLINE_ERRORS.includes(key),
@@ -339,15 +338,13 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     setBusy(true);
     try {
       // `requiresKey` (and, for a custom skill, `window`) ride along in `values`
-      // whenever the schema in force declares them — a built-in edit's schema
-      // (builtinSkillFileSchema) doesn't, so zod has already stripped them from
-      // the parsed output, same as the old `...(custom ? {…} : {})` spread.
+      // only when the schema in force declares them — a built-in edit's schema
+      // doesn't, so zod has already stripped them from the parsed output.
       const body: Record<string, unknown> = { ...values };
       // Always sent when the skill declares knobs, so clearing a field clears
-      // the frontmatter line. Omitted entirely for a skill with none, which the
-      // controller reads as "leave whatever is on disk". `config` is read off
-      // the raw body server-side (routes/dj.ts's resolveConfig), never off the
-      // parsed schema output, so it travels outside `values` here too.
+      // the frontmatter line; omitted for a skill with none, which the
+      // controller reads as "leave whatever is on disk". Read off the raw body
+      // server-side, so it travels outside `values` here too.
       if (configFields.length) {
         body.config = Object.fromEntries(
           configFields.map(f => [f.key, (config[f.key] || '').trim()]),
@@ -375,9 +372,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       };
       if (!r.ok) {
         // A server-side name rule (reserved slug, slug already on disk) comes
-        // back as fieldErrors.name — typing a different slug is the way out,
-        // so it lands on the slug input rather than only flashing past in a
-        // toast.
+        // back as fieldErrors.name. Typing a different slug is the way out, so
+        // land it on the input rather than only in a toast.
         applyServerFieldErrors(form, j.fieldErrors);
         throw new Error(j.error || `failed (${r.status})`);
       }
@@ -677,13 +673,11 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         <div style={{ opacity: isEdit && !enabled ? 0.6 : 1, transition: 'opacity .2s ease' }}>
 
             <div className="sw-section">
-              <div style={sectionLabel}>SKILL NAME</div>
               <TextField
                 control={control}
                 name="label"
                 label="Skill name"
                 placeholder={displayName}
-                className="mt-4"
               />
               {mode === 'create' && (
                 <Controller
@@ -747,6 +741,54 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               </div>
             </div>
 
+            {/* Cron timer — optional dedicated schedule that fires the skill immediately */}
+            <div className="sw-section">
+              <div style={sectionLabel}>CRON TIMER — FIRE ON A FIXED SCHEDULE</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
+                <TextField
+                  control={control}
+                  name="cron"
+                  label="Cron expression"
+                  placeholder="0 * * * *"
+                  className="w-50"
+                />
+              </div>
+              {cronInvalid && (
+                <div style={{ fontSize: 12, color: 'var(--danger, #e5484d)', marginTop: 12, lineHeight: 1.6, maxWidth: '72ch' }}>
+                  This skill&apos;s SKILL.md carries a cron expression the scheduler can&apos;t run, so no timer is registered for it. Fix or clear the field to save.
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6, maxWidth: '72ch' }}>
+                Standard 5-field cron expression (e.g. <code>0 * * * *</code> = top of every hour, <code>*/30 * * * *</code> = every 30 min); a leading seconds field is accepted too. Leave blank to rely on the cooldown / normal frequency gating. When a cron timer fires it runs the skill immediately, bypassing the frequency floor and cooldown — but unlike Run Now it still stands down when the station voice is off, a programme is on air, nobody is listening, the daily token budget is spent, or the skill is disabled / not assigned to the on-air DJ. Uses the station timezone set in Settings.
+              </div>
+              <Controller
+                control={control}
+                name="cronOnly"
+                render={({ field }) => {
+                  const baseId = `${uid}-cron-only`;
+                  const aria = fieldAria(baseId);
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 20 }}>
+                      <Switch
+                        {...aria.controlProps}
+                        checked={!!field.value}
+                        onCheckedChange={field.onChange}
+                        onBlur={field.onBlur}
+                        ref={field.ref}
+                      />
+                      <label {...aria.labelProps} style={{ ...sectionLabel, cursor: 'pointer' }}>
+                        ONLY FIRE ON THE CRON TIMER
+                      </label>
+                    </div>
+                  );
+                }}
+              />
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6, maxWidth: '72ch' }}>
+                Off by default: the skill stays eligible for the DJ&apos;s normal between-track random picks in addition to firing on the schedule above. Turn this on for a skill written around a specific moment (a running joke tied to a particular time) so it never airs at any other time.
+              </div>
+            </div>
+
+            {/* Window — custom skills only (built-in window isn't editable) */}
             {custom && (
               <div className="sw-section">
                 <Controller

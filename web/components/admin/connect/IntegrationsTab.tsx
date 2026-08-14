@@ -1,5 +1,6 @@
 'use client';
 
+import { useCopyToClipboard } from 'usehooks-ts';
 import { Card, Btn, Pill } from '../ui';
 import CodeBlock from '../../CodeBlock';
 import { notify } from '../../../lib/notify';
@@ -10,9 +11,10 @@ interface Props {
 }
 
 function CopyUrl({ url }: { url: string }) {
+  const [, copyToClipboard] = useCopyToClipboard();
   const copy = async () => {
-    try { await navigator.clipboard.writeText(url); notify.info('URL copied'); }
-    catch { notify.err('Could not copy'); }
+    if (await copyToClipboard(url)) notify.info('URL copied');
+    else notify.err('Could not copy');
   };
   return (
     <div className="flex items-center gap-2">

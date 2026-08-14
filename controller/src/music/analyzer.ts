@@ -761,16 +761,13 @@ function isTimeoutError(err: unknown): boolean {
 // their non-text behaviour, never throw. `timeoutMs` lets interactive callers
 // (a picker tool mid-pick) use a shorter deadline than a bulk pass.
 //
-// One retry on TIMEOUT only: since the idle model release also runs on CPU
-// (#1204), an interactive call can land on a cold worker whose CLAP reload
-// (seconds on a typical box, longer on the small hosts the release exists
-// for) eats the whole deadline. The backend keeps loading after we stop
-// waiting — the request is already queued behind its single-flight lock — so
-// a second wait usually lands on a warm model instead of failing the search.
-// Non-timeout failures (refused, 404, 500) stay single-shot: they're fast,
-// definitive "not available" signals. Bulk callers whose deadline is already
-// generous pass `coldRetry: false` — a 10-minute timeout means real trouble,
-// not a cold model.
+// One retry on TIMEOUT only: with the idle model release (#1204) an interactive
+// call can land on a cold worker whose CLAP reload eats the whole deadline. The
+// backend keeps loading after we stop waiting — the request is already queued
+// behind its single-flight lock — so a second wait usually lands on a warm
+// model. Non-timeout failures (refused, 404, 500) stay single-shot: fast,
+// definitive "not available" signals. Bulk callers pass `coldRetry: false` —
+// a 10-minute timeout means real trouble, not a cold model.
 export async function embedTexts(
   texts: string[],
   opts: { timeoutMs?: number; coldRetry?: boolean } = {},

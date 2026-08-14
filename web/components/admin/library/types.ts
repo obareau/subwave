@@ -100,6 +100,22 @@ export interface BlockRuleStat extends BlockRule {
   matchCount: number;
 }
 
+// What a manual tag save or a single-track retag did, applied across every
+// cached row list by applyTagEvent (queries.ts). The lists disagree about what
+// it means: Search and the Tracks modes patch the row in place, Needs-tags
+// DROPS it (a tagged track is no longer untagged), and Browse refetches because
+// its MEMBERSHIP can change (a mood filter may stop matching).
+export interface TagEvent {
+  track: Track;
+  moods: string[];
+  energy: string | null;
+  cleared: boolean;
+  applyToAlbum: boolean;
+  // Mirrors what the server stamped: 'manual' for the inline editor,
+  // 'llm' for a single-track retag.
+  source: string;
+}
+
 // GET /library/history. Title/artist/album are air-time snapshots.
 export interface PlayEntry {
   id: number;
@@ -152,3 +168,14 @@ export const SEARCH_PAGE = 30;
 export const TABS: Tab[] = ['tracks', 'browse', 'search', 'history', 'blocked'];
 export const SORTS: Sort[] = ['artist', 'title', 'year', 'taggedAt', 'bpm', 'loudness', 'pace'];
 
+
+// One row of GET /dj/playlists — the Navidrome playlist index the Add-to-playlist
+// bar offers.
+export interface PlaylistSummary {
+  id: string;
+  name: string;
+  songCount: number;
+  durationSec: number;
+  owner: string;
+  public: boolean;
+}

@@ -16,28 +16,24 @@
 // ---------------------------------------------------------------
 // `PERSONA_ID_RE` is the same pattern as schemas/show.ts's SHOW_ID_RE, and
 // `PERSONA_SKILL_SLUG_RE` the same as schemas/skill.ts's SKILL_SLUG_RE. Neither
-// can be imported (see above) and neither can reuse the other's NAME (the flat
-// mirror would carry two declarations of it). Re-declaring is therefore
-// structural, not sloppiness — and the drift it invites is pinned by
-// scripts/persona-schema.test.ts, which asserts `.source` equality against both
-// originals. That is the same answer skill-schema.test.ts gives for
-// loader.SLUG_RE and vocab's SKILL_SLUG_RE.
+// can be imported (see above), and neither can reuse the other's NAME because
+// the flat mirror would then carry two declarations of it. Re-declaring is
+// structural, not sloppiness; the drift it invites is pinned by
+// scripts/persona-schema.test.ts, which asserts `.source` equality against both.
 //
 // WHY THERE IS NO FACTORY
 // -----------------------
-// Unlike a show, a persona CAN be validated against itself: every rule is a
-// pure function of the submitted value. `skills` names skill slugs, but a slug
-// that no longer resolves is dropped rather than refused (see the field), so
-// the live catalogue is not an input. Rules that are NOT pure — id minting and
-// cross-row de-duplication — live in persona-server.ts, which is NOT mirrored.
+// Unlike a show, a persona CAN be validated against itself: every rule is a pure
+// function of the submitted value. `skills` names skill slugs, but an unresolved
+// slug is dropped rather than refused, so the live catalogue is not an input.
+// Impure rules — id minting, cross-row de-duplication — live in
+// persona-server.ts, which is NOT mirrored.
 //
 // SETTINGS/VOCAB.TS RE-EXPORTS EVERY CONSTANT BELOW
 // -------------------------------------------------
-// The "first feature converted owns the constant" rule. No call site moved when
-// this landed; vocab.ts aliases these under the names the controller already
-// used (PERSONA_FREQUENCIES as FREQUENCIES, and so on). The web side must read
-// them from the mirror rather than hand-copying — a hand-copied cap is exactly
-// the SKILL_SLUG_RE drift this whole mechanism exists to prevent.
+// "First feature converted owns the constant", so no call site moved: vocab.ts
+// aliases these under the names the controller already used. The web side must
+// read them from the mirror rather than hand-copying.
 import { z } from 'zod';
 
 // ── Persona vocabulary ───────────────────────────────────────────────────────

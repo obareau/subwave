@@ -565,28 +565,24 @@ export function fishAudioIssue(cloud: unknown): string | null {
 // ---------------------------------------------------------------
 // `PERSONA_ID_RE` is the same pattern as schemas/show.ts's SHOW_ID_RE, and
 // `PERSONA_SKILL_SLUG_RE` the same as schemas/skill.ts's SKILL_SLUG_RE. Neither
-// can be imported (see above) and neither can reuse the other's NAME (the flat
-// mirror would carry two declarations of it). Re-declaring is therefore
-// structural, not sloppiness — and the drift it invites is pinned by
-// scripts/persona-schema.test.ts, which asserts `.source` equality against both
-// originals. That is the same answer skill-schema.test.ts gives for
-// loader.SLUG_RE and vocab's SKILL_SLUG_RE.
+// can be imported (see above), and neither can reuse the other's NAME because
+// the flat mirror would then carry two declarations of it. Re-declaring is
+// structural, not sloppiness; the drift it invites is pinned by
+// scripts/persona-schema.test.ts, which asserts `.source` equality against both.
 //
 // WHY THERE IS NO FACTORY
 // -----------------------
-// Unlike a show, a persona CAN be validated against itself: every rule is a
-// pure function of the submitted value. `skills` names skill slugs, but a slug
-// that no longer resolves is dropped rather than refused (see the field), so
-// the live catalogue is not an input. Rules that are NOT pure — id minting and
-// cross-row de-duplication — live in persona-server.ts, which is NOT mirrored.
+// Unlike a show, a persona CAN be validated against itself: every rule is a pure
+// function of the submitted value. `skills` names skill slugs, but an unresolved
+// slug is dropped rather than refused, so the live catalogue is not an input.
+// Impure rules — id minting, cross-row de-duplication — live in
+// persona-server.ts, which is NOT mirrored.
 //
 // SETTINGS/VOCAB.TS RE-EXPORTS EVERY CONSTANT BELOW
 // -------------------------------------------------
-// The "first feature converted owns the constant" rule. No call site moved when
-// this landed; vocab.ts aliases these under the names the controller already
-// used (PERSONA_FREQUENCIES as FREQUENCIES, and so on). The web side must read
-// them from the mirror rather than hand-copying — a hand-copied cap is exactly
-// the SKILL_SLUG_RE drift this whole mechanism exists to prevent.
+// "First feature converted owns the constant", so no call site moved: vocab.ts
+// aliases these under the names the controller already used. The web side must
+// read them from the mirror rather than hand-copying.
 
 // ── Persona vocabulary ───────────────────────────────────────────────────────
 
@@ -1859,40 +1855,37 @@ export const scheduleOverrideRequestSchema = z.object({
 //
 // WHY A KEY AT A TIME, AND NOT ONE SCHEMA FOR THE SETTINGS OBJECT
 // ---------------------------------------------------------------
-// The `/settings` body is a partial PATCH, not an object: every admin panel
-// posts only the keys it owns. `z.object` strips unknown keys, so a schema over
-// the whole settings object would silently delete whatever a form learns to
-// send next. Instead each top-level key owns its own schema here, and
-// settings/patch-registry.ts runs only the keys a given patch actually carries.
-// That keeps the stripping scoped to a block whose shape is fully known.
+// The `/settings` body is a partial PATCH: every admin panel posts only the keys
+// it owns. `z.object` strips unknown keys, so a schema over the whole settings
+// object would silently delete whatever a form learns to send next. Instead each
+// top-level key owns its own schema here and patch-registry.ts runs only the
+// keys a patch actually carries, keeping the stripping scoped to blocks whose
+// shape is fully known.
 //
-// FIDELITY IS THE POINT OF THE FIRST SLICE
-// ----------------------------------------
-// #1337's rule is that no conversion may introduce a silent repair where the
-// operator previously got a refusal, or vice versa. The hand-rolled branches
-// these replace carry a lot of ACCIDENTAL leniency, and reproducing it is most
-// of the work here:
+// FIDELITY IS THE POINT
+// ---------------------
+// No conversion may introduce a silent repair where the operator previously got
+// a refusal, or vice versa (#1337's rule). The hand-rolled branches these
+// replace carry a lot of ACCIDENTAL leniency, and reproducing it is most of the
+// work:
 //
-//   * `parseInt(raw, 10)` / `parseFloat(raw)` stringify first, so '5' and even
-//     '5abc' parse, and a float handed to an int key TRUNCATES rather than
-//     failing (jingleRatio: 5.7 saves as 5 today). `z.number().int()` refuses
-//     all three. See settingsIntLike / settingsFloatLike.
-//   * `!!value` accepts anything, so `enabled: 1` is `true` today. `z.boolean()`
-//     refuses it. See settingsBoolLike.
-//   * `patch.beds || {}` means a non-object block is a silent no-op, not an
-//     error. See settingsBlockOf.
+//   * `parseInt`/`parseFloat` stringify first, so '5' and even '5abc' parse, and
+//     a float on an int key TRUNCATES rather than failing (jingleRatio: 5.7
+//     saves as 5). `z.number().int()` refuses all three — hence
+//     settingsIntLike / settingsFloatLike.
+//   * `!!value` accepts anything, so `enabled: 1` is `true`. See settingsBoolLike.
+//   * `patch.beds || {}` makes a non-object block a silent no-op, not an error.
+//     See settingsBlockOf.
 //
-// Each of those is defensible to TIGHTEN — webhooks did exactly that in #1337 —
-// but tightening is a behaviour change and belongs in a PR that says so. This
-// one establishes the frame at zero behaviour change, so the frame itself can't
+// Tightening any of these is defensible — webhooks did exactly that — but it is
+// a behaviour change and belongs in a PR that says so, so the frame itself can't
 // be what hides a regression.
 //
-// The bounds live HERE rather than in settings/defaults.ts's BOUNDS because a
-// mirrored module may not import a non-mirrored one, and the browser needs the
-// same numbers to pre-flight the form. BOUNDS re-exports these — the same
-// "first feature converted owns the constant" rule that put SHOW_ID_RE in
-// schemas/show.ts. The web side must read them from the mirror rather than
-// hand-copying, which is what BedsSection did with a bare `60` and `15`.
+// The bounds live HERE rather than in defaults.ts's BOUNDS because a mirrored
+// module may not import a non-mirrored one and the browser needs the same
+// numbers to pre-flight the form; BOUNDS re-exports them. The web side must read
+// from the mirror rather than hand-copying — which is what BedsSection did with
+// a bare `60` and `15`.
 
 // Every top-level name in schemas/*.ts shares ONE scope in the flat mirror
 // (module-private ones included), hence the SETTINGS_/settings prefixes.
@@ -2183,6 +2176,12 @@ export const CROSSFADE_DURATION_BOUNDS: SettingsNumericBound = { min: 0, max: 30
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
 // 0 disables boosting entirely (cut-only levelling); 12 dB is plenty.
 export const LOUDNESS_MAX_BOOST_DB_BOUNDS: SettingsNumericBound = { min: 0, max: 12 };
+// 0 disables burst-on-connect; past 60 a listener is a full minute behind the
+// live edge and <queue-size> (which must exceed the burst) gets unreasonable.
+// Named rather than inline because settings.load() bounds the stored value
+// against the SAME figures — a hand-copied pair there is how the save path and
+// the load path drift.
+export const STREAM_BUFFER_SECONDS_BOUNDS: SettingsNumericBound = { min: 0, max: 60 };
 
 // Falling back to the product default is what an emptied station name does —
 // see stationSchema.
@@ -2302,8 +2301,8 @@ export const streamPatchSchema = settingsBlockOf({
   // Number(), not parseInt — so '' / null / [] are 0 (a legal "no burst") and
   // '5abc' is refused. Bounds tested before the round; see the helper.
   bufferSeconds: settingsNumberPreRoundLike(
-    { min: 0, max: 60 },
-    'stream.bufferSeconds must be a number between 0 and 60',
+    STREAM_BUFFER_SECONDS_BOUNDS,
+    `stream.bufferSeconds must be a number between ${STREAM_BUFFER_SECONDS_BOUNDS.min} and ${STREAM_BUFFER_SECONDS_BOUNDS.max}`,
   ),
   idleAfterMinutes: settingsIntLike(
     { min: 1, max: 1440 },
@@ -2347,6 +2346,17 @@ export const djHouseRulesSchema = settingsTrimmedString(
   SETTINGS_DJ_HOUSE_RULES_MAX,
   `djHouseRules must be at most ${SETTINGS_DJ_HOUSE_RULES_MAX} chars`,
 );
+
+/**
+ * Deliberately NOT settingsBoolLike(): this key's branch has always been the
+ * strict `typeof !== 'boolean'` refusal, the same posture `requests`' booleans
+ * take, and loosening it to `!!value` here would be a behaviour change smuggled
+ * in with a conversion. A hand-edited settings.json is unaffected either way —
+ * load() coerces a non-boolean to the default, so only a PATCH is refused.
+ */
+export const djSpeakClockSchema = z.boolean({
+  error: 'djSpeakClock must be a boolean',
+});
 
 /**
  * Trim FIRST, then a strict pair — ' en-GB ' saves, 'en-gb' does not.
@@ -2959,14 +2969,12 @@ export function djPromptTextSchema(bounds: { min: number; max: number }) {
 // settings/vocab.ts as ID_RE rather than living in a shared module.
 //
 // WHY A FACTORY. Unlike webhooks and stations, a show cannot be validated
-// against itself: `personaId` has to name a real persona, `moods` a live mood,
-// `themeId` an installed theme, and `maxTrackSeconds` clears a floor derived
-// from the station's crossfade. Those four travel as ONE ShowSchemaContext
-// value rather than as separate arguments — the shape the old four-parameter
-// validateShowsStrict(raw, personas, allowedThemeIds, moodNames) grew into, and
-// the same "one scope value, never unpacked" rule PickerScope follows. Both
-// sides can build it: the admin panel already fetches personas, moods, themes
-// and the station settings.
+// against itself: `personaId` must name a real persona, `moods` a live mood,
+// `themeId` an installed theme, and `maxTrackSeconds` clears a crossfade-derived
+// floor. Those four travel as ONE ShowSchemaContext value rather than separate
+// arguments — the same "one scope value, never unpacked" rule PickerScope
+// follows. Both sides can build it; the admin panel already fetches personas,
+// moods, themes and the station settings.
 //
 // Rules that are NOT pure functions of the submitted value — id minting and
 // cross-row de-duplication — live in show-server.ts, which is NOT mirrored.
@@ -3525,6 +3533,24 @@ export const SKILL_COOLDOWN_RE = /^\d+\s*[smhd]?$/;
 // A skill may declare an env var it needs before it can fire (`requiresKey`).
 export const SKILL_ENV_KEY_RE = /^[A-Z][A-Z0-9_]*$/;
 
+// Optional dedicated cron schedule ("0 * * * *") that fires the skill
+// immediately, bypassing the cooldown/frequency gate.
+//
+// SHAPE ONLY — 5 fields, or 6 with node-cron's optional leading SECONDS field.
+// This file may import only zod, so the per-field range check (`59 * * * *` is
+// shape-valid and `99 * * * *` is not) belongs to node-cron's own validate(),
+// which routes/dj.ts runs at save time and scheduler.ts runs again at
+// registration. Both halves are needed and neither is redundant: the route
+// catches what an operator types, the scheduler catches what a hand-edited
+// SKILL.md carries.
+//
+// The 6-field arm is not decoration. node-cron 3.x accepts `0 0 8 * * *`, so a
+// disk-authored one registers and fires — and a 5-only pattern here would then
+// refuse the admin form's save of ANY field on that skill, because the editor
+// round-trips the cron value it loaded. A working config the UI cannot edit is
+// worse than one it never accepted.
+export const SKILL_CRON_RE = /^\S+(?:\s+\S+){4,5}$/;
+
 // When a custom skill may air. 'commute' restricts it to the commute hours;
 // 'any' is the default and is NOT written to frontmatter.
 export const SKILL_WINDOWS = ['any', 'commute'] as const;
@@ -3692,10 +3718,40 @@ const skillRequiresKeySchema = z.preprocess(
     .transform((v) => v || undefined),
 );
 
+const skillCronSchema = z.preprocess(
+  skillNullToUndefined,
+  z
+    .string({ error: 'must be text' })
+    .trim()
+    .optional()
+    .refine(
+      (v) => !v || SKILL_CRON_RE.test(v),
+      'must be a cron expression of 5 fields, or 6 with seconds (e.g. "0 * * * *")',
+    )
+    .transform((v) => v || undefined),
+);
+
+// Optional companion to `cron:` — when true, the skill is withheld from the
+// autonomous segment director's random selection (availableCapabilities() in
+// skills/_agent.ts) and fires ONLY when its cron timer ticks. Without this a
+// skill with a `cron:` expression is still off-cooldown eligible for random
+// picks between timer fires, which is surprising for a skill authored to
+// speak at a specific, meaningful moment (e.g. "7:10, dabbers").
+//
+// Absent → false, same posture as persona djMode: present must be a real
+// boolean rather than silently coerced, since a truthy typo here would
+// silently withhold a skill from ever airing outside its cron window.
+const skillCronOnlySchema = z.preprocess(
+  skillNullToUndefined,
+  z.boolean({ error: 'cronOnly must be a boolean' }).default(false),
+);
+
 // The fields every skill's SKILL.md carries, built-in or custom.
 export const builtinSkillFileSchema = z.object({
   label: skillLabelSchema,
   cooldown: skillCooldownSchema,
+  cron: skillCronSchema,
+  cronOnly: skillCronOnlySchema,
   context: skillContextSchema,
   tags: skillTagsSchema,
   brief: skillBriefSchema,
@@ -3736,6 +3792,8 @@ export function skillFieldsFrom(kind: string, parsed: SkillFileParsed) {
     kind,
     label: parsed.label,
     cooldown: parsed.cooldown,
+    cron: parsed.cron,
+    cronOnly: parsed.cronOnly,
     contextFields: parsed.context,
     window: parsed.window,
     requiresKey: parsed.requiresKey,
@@ -3850,6 +3908,15 @@ export const WEBHOOK_EVENTS = [
   'dj.say',              // station ID / weather / hourly — heavy-ducked voice
   'dj.link',              // between-track auto-DJ link — light-ducked voice
   'request.received',    // a listener submitted a request
+  // The same speech as dj.say/dj.link, but as a WINDOW rather than a ping:
+  // start carries the measured duration, end fires when the words finish (#1382).
+  // Subscribe to these instead of dj.* when you need the segment's real extent.
+  // queued lands first, before the words — the one event in the set that is a
+  // forecast rather than an observation, for consumers that must PREPARE for
+  // speech (hand back from a call, close a gate) rather than react to it.
+  'voice.queued',        // the station committed to speaking — not audible yet
+  'voice.start',         // a spoken segment became audible on the stream
+  'voice.end',           // …and finished
 ] as const;
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];

@@ -10,6 +10,44 @@ import * as settings from '../../settings.js';
 import { DRAIN_DEADLINE_SEC } from '../drain-policy.js';
 import type { Track } from './types.js';
 
+interface TransitionItem {
+  track: Track;
+  sent?: boolean;
+  stemSeam?: boolean;
+}
+
+// Human-readable description of the NEXT FINALISED seam the operator will
+// hear. applyMixTransition and the pair/stem stamps run only when `incoming`
+// drains, so flags on an unsent item are still agent proposals: vetoes may
+// remove them and drain-time policy may add another. Returning null keeps the
+// admin honest until `sent` makes the pair authoritative. Exit gestures ride
+// the outgoing track while entry gestures ride the incoming track, so the
+// answer has to inspect both sides. Washout may combine with sweep/blend; stem
+// rendering owns the whole seam and therefore overrides every live effect.
+export function nextTransitionLabel(
+  outgoing: TransitionItem | null | undefined,
+  incoming: TransitionItem | null | undefined,
+): string | null {
+  if (!incoming || incoming.sent !== true) return null;
+  if (incoming.stemSeam) return 'Stem blend';
+
+  const labels: string[] = [];
+  const washing = outgoing?.track.washout === true;
+  const looping = outgoing?.track.loop === true && !washing;
+
+  if (washing) labels.push('Washout');
+  else if (looping) labels.push('Loop');
+
+  // Mirrors radio.liq's precedence: loop suppresses every entry effect;
+  // washout suppresses dissolve/chop but can coexist with sweep/blend.
+  if (!looping && incoming.track.sweep) labels.push('Sweep');
+  if (!looping && incoming.track.blend) labels.push('Blend');
+  if (!washing && !looping && incoming.track.dissolve) labels.push('Dissolve');
+  if (!washing && !looping && incoming.track.chop) labels.push('Chop');
+
+  return labels.length > 0 ? labels.join(' + ') : 'Normal';
+}
+
 export function pickLinkInterval() {
   const f = settings.effectiveFrequency();
   if (f === 'silent')     return Infinity;
@@ -73,18 +111,17 @@ export function linkAirDate(showAt: Date): Date {
 // +120s overshoot that had been masking this undershoot on average.
 //
 // Sized off the pick round itself, measured over 788 rounds: 27.7% ran longer
-// than 45s and 18.3% longer than 60s, but only 0.3% longer than 120s. The
-// exposed population is maybeDeadlinePick's empty-queue backstop, which fires
-// with DRAIN_DEADLINE_SEC..HARD_DEADLINE_SEC of runway on ANY station whatever
-// its track lengths — so the floor is that same deadline: speak the clock only
-// when the pick is being made AHEAD of the endgame window, never inside it. A
-// track-start pick on a normal 3-5 minute track clears it comfortably and keeps
-// its clock; below it the link simply doesn't state a time, which is the
-// pre-#864 behaviour for an unknowable air moment. The flip side is accepted,
-// not accidental: a library whose tracks run under ~2 minutes (punk, hardcore)
-// never has this much runway even at track start, so its links simply never
-// speak the clock — that library's every seam sits inside the risk window the
-// floor exists to silence, and hourly checks still tell the time.
+// than 45s, 18.3% longer than 60s, only 0.3% longer than 120s. The exposed
+// population is maybeDeadlinePick's empty-queue backstop, which fires with
+// DRAIN_DEADLINE_SEC..HARD_DEADLINE_SEC of runway on ANY station whatever its
+// track lengths — so the floor is that same deadline: speak the clock only when
+// the pick is made AHEAD of the endgame window, never inside it. Below the floor
+// the link states no time, the pre-#864 behaviour for an unknowable air moment.
+//
+// The flip side is accepted, not accidental: a library whose tracks run under
+// ~2 minutes never has this much runway even at track start, so its links never
+// speak the clock — every one of its seams sits inside the risk window the floor
+// exists to silence, and hourly checks still tell the time.
 export const LINK_CLOCK_MIN_RUNWAY_SEC = DRAIN_DEADLINE_SEC;
 
 // The instant a pick-attached link may claim to air at, or null when the
@@ -119,32 +156,54 @@ export const LINK_CLOCK_DRIFT_TOLERANCE_SEC = 90;
 // predecessor cueing out early moves the seam the other way.
 //
 // Deliberately NOT narrowed to lines that demonstrably state a time, the way
-// shouldDropStaleLink narrows to lines that name their predecessor. That guard
-// can afford `mentionsTrack` because it matches exact title/artist strings; a
-// clock has no such handle — the model may write "18:38", "twenty to seven" or,
-// under a spell-out house rule, "eighteen thirty-eight", and a detector that
-// misses one airs the wrong time, which is the whole failure. So the stamp is
-// the offer, not the usage: a link that was given a clock and chose not to use
-// it can be dropped for nothing. With LINK_CLOCK_MIN_RUNWAY_SEC in front, that
-// costs a link in the 0.3% tail — cheaper than a regex that has to be right
-// about every phrasing an LLM might reach for.
+// shouldDropStaleLink narrows to lines naming their predecessor. That guard can
+// afford `mentionsTrack` because it matches exact title/artist strings; a clock
+// has no such handle — "18:38", "twenty to seven", or under a spell-out house
+// rule "eighteen thirty-eight" — and a detector that misses one airs the wrong
+// time, which is the whole failure. So the stamp records the clock being
+// OFFERED, not used: a link that was given one and didn't use it can be dropped
+// for nothing. Behind LINK_CLOCK_MIN_RUNWAY_SEC that costs a link in the 0.3%
+// tail, cheaper than a regex that has to be right about every phrasing.
 export function linkClockDrifted(clockAtMs: number | null | undefined, nowMs: number): boolean {
   if (typeof clockAtMs !== 'number' || !Number.isFinite(clockAtMs)) return false;
   return Math.abs(nowMs - clockAtMs) > LINK_CLOCK_DRIFT_TOLERANCE_SEC * 1000;
 }
 
+// The other half of the rule above: what an enqueued item's `linkClockAt` may
+// be set to. `linkClockDrifted` can only honour "a link written under a clock
+// ban is never dropped" if the stamp is withheld at the point the item is
+// queued, and BOTH pick paths have to agree about that — they reach the same
+// `enqueuePick` from different code with different reasons to withhold.
+//
+// `clockOffered` is the question, and it is not the same as "we computed an
+// air time". `airAt` says the air moment is FORECASTABLE; whether the model
+// was actually handed a clock is a second decision on top of it — the agent
+// path also needs a clock in its context (`airClock`), and either path can be
+// overruled by the station clock switch (broadcast/clock-policy.ts). Stamping
+// on `airAt` alone is how a link written under a flat ban still got dropped for
+// drifting away from a time it was never allowed to say.
+//
+// Kept as a named helper rather than a ternary at each call site because the
+// two sites are 170 lines apart and the first one to be updated is the one that
+// looks correct in isolation — which is exactly how they diverged.
+export function linkClockStampFor(
+  airAt: Date | null | undefined,
+  clockOffered: boolean,
+): Date | null {
+  return airAt && clockOffered ? airAt : null;
+}
+
 // Seconds from NOW until the pick being made will start airing — the lead the
 // show look-ahead adds to the wall clock (see runPickCycle).
 //
-// It must be measured from the on-air track's REMAINING time, never its full
-// duration. The pick cycle doesn't only run at a track start: the pair-drain
-// deadline backstop fires it with an empty queue ~2 min from the end, and boot
-// recovery fires it for a track already part-played. Using the full duration
-// there overstates the lead by everything already elapsed — up to a whole
-// track — which walks `showAt` across the next schedule boundary while the
-// real next track still starts inside the current show. That is what aired a
-// handoff five-plus minutes early, over the middle of a song, with the session
-// flipped to a show `/now-playing` still reported as the old one (#1205).
+// Measured from the on-air track's REMAINING time, never its full duration. The
+// pick cycle doesn't only run at a track start — the pair-drain deadline
+// backstop fires it ~2 min from the end, and boot recovery fires it part-way
+// through a track. Full duration there overstates the lead by everything already
+// elapsed, walking `showAt` across the next schedule boundary while the real
+// next track still starts inside the current show: that aired a handoff
+// five-plus minutes early, over the middle of a song, with the session flipped
+// to a show `/now-playing` still reported as the old one (#1205).
 //
 //  - `heldSec` null → the pick follows the ON-AIR track: lead = its remaining.
 //  - `heldSec` set  → the deadline path, where the pick follows a HELD track
@@ -274,9 +333,9 @@ export function shouldDropStaleLink(
 // only thing that would speak and it should. Pure + exported so the rule is
 // unit-pinned (scripts/ident-link-collision.test.ts).
 //
-// The rule mirrors airIntro's own airing decision, and `opts` carries the two
-// runtime drop paths the item's fields alone can't predict — both of which
-// leave the boundary silent, so the ident may take it after all:
+// The rule mirrors airIntro's own airing decision, and `opts` carries the
+// runtime drop paths the item's fields alone can't predict — all of which leave
+// the boundary silent, so the ident may take it after all:
 //   - `voiceAllowed` — airIntro's station-voice backstop (settings.tts.enabled
 //     off) drops the line outright. The pending segment itself may still air:
 //     manual /dj/segment triggers are exempt from the voice switch.

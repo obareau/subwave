@@ -43,7 +43,10 @@ export interface RequestSlipCopy {
 export interface RequestSlip {
   text: string;
   setText: (v: string) => void;
-  /** Optional "from" name — skins without a name field just never set it. */
+  /** Optional "from" name. Every skin renders a field for it now (#1347) — a
+   *  skin that doesn't simply never calls setName, and the request goes up
+   *  unsigned. Deliberately NOT cleared by send(): the text is a one-off, the
+   *  name is who you are, so it carries to your next request in the session. */
   name: string;
   setName: (v: string) => void;
   /** Outcome line to show in place of the form, or null while composing.

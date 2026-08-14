@@ -93,12 +93,19 @@ test('de-duplicates events, preserving first-seen order', () => {
   assert.deepEqual(h.events, ['dj.link', 'track.play']);
 });
 
-test('WEBHOOK_EVENTS holds exactly the four fan-out events', () => {
+test('WEBHOOK_EVENTS holds exactly the fan-out events', () => {
+  // Order is the operator-facing order in the admin UI's checkbox list, so this
+  // pins the sequence and not just the set. Adding one here is deliberate;
+  // RETIRING one costs every hook subscribed to it that subscription (see the
+  // lenient filter in settings/normalize.ts), so it is not a free rename.
   assert.deepEqual([...WEBHOOK_EVENTS], [
     'track.play',
     'dj.say',
     'dj.link',
     'request.received',
+    'voice.queued',
+    'voice.start',
+    'voice.end',
   ]);
 });
 

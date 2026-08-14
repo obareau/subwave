@@ -4,19 +4,13 @@
 //
 // Each takes `control` + `name`, subscribes with useController, and renders the
 // whole Field composition — label, control, description, error — with the ARIA
-// already wired through fieldAria. That single-sourcing is the point: thirteen
-// forms inherit correct aria-invalid / aria-describedby instead of thirteen
-// forms each getting it right.
+// already wired through fieldAria, so every bound form inherits correct
+// aria-invalid / aria-describedby rather than each getting it right separately.
 //
-// Deliberately five components, chosen by counting what the converted forms
-// actually use. Anything else — chip inputs, month/day pickers, sliders, the
-// avatar picker — drops to a raw <Controller>. A bound wrapper for a one-off
-// control is indirection with no payoff.
-//
-// This lives beside form.ts rather than inside it so form.ts keeps its git
-// history: its comments (the three-generics rationale, the dangling
-// aria-describedby note) are load-bearing and a .ts -> .tsx rename reads as
-// delete-plus-add.
+// Deliberately only five, chosen from what the converted forms actually use.
+// Anything else — chip inputs, month/day pickers, sliders, the avatar picker —
+// drops to a raw <Controller>; a bound wrapper for a one-off control is
+// indirection with no payoff.
 import { useId } from 'react';
 import type {
   ComponentPropsWithoutRef,

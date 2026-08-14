@@ -26,7 +26,7 @@ export function effectsGuidance(): string {
   return `\n\n${instruction('pick-criteria', 'effects')}`;
 }
 
-export type ShowEra = { fromYear?: number | null; toYear?: number | null };
+type ShowEra = { fromYear?: number | null; toYear?: number | null };
 export type ShowMusic = { name: string; topic: string; moods?: string[]; genres?: string[]; eras?: ShowEra[]; energies?: string[]; vocals?: string | null; filtersStrict?: boolean };
 
 // One era window as prose ("1990–1999", "1970 onward", "up to 1989").

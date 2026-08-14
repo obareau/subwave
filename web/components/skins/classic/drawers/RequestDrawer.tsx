@@ -5,6 +5,7 @@ import { AnimatePresence, m } from 'motion/react';
 import { ArrowUpRight, Radio } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import type { NowPlayingTrack, RequestResult, StationContext } from '@/lib/types';
+import { REQUEST_NAME_MAX } from '@/lib/schemas.generated';
 
 const SUCCESS_HOLD_MS = 2800;
 const POLL_INTERVAL_MS = 1500;
@@ -259,6 +260,7 @@ export default function RequestDrawer({
                     value={requesterName}
                     onChange={e => setRequesterName(e.target.value)}
                     placeholder="signed, your name (optional)"
+                    maxLength={REQUEST_NAME_MAX}
                     className="v3-tab-num min-w-0 flex-1 border-0 bg-transparent p-0 text-[12px] tracking-[0.04em] text-ink placeholder:text-muted/70 focus:outline-none"
                   />
                 </div>

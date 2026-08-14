@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import type { GenerateResult } from './playlist-gen.js';
 
-export type JobStatus = 'running' | 'done' | 'error';
+type JobStatus = 'running' | 'done' | 'error';
 
 export interface GenerateJob {
   id: string;

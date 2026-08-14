@@ -41,7 +41,7 @@ import { Suggestion, Suggestions } from '../ai-elements/suggestion';
 import { Message, MessageContent } from '../ai-elements/message';
 import type { ChatStatus } from 'ai';
 import { ScrollArea, ScrollBar } from '../ui/scroll-area';
-import { Blend, RefreshCw, X } from 'lucide-react';
+import { RefreshCw, X } from 'lucide-react';
 import StationHeader, { type HealthMetrics } from './StationHeader';
 import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
@@ -334,6 +334,18 @@ export default function DashPanel() {
   const listenersObj = listenersValue && typeof listenersValue === 'object' ? listenersValue : null;
   const upcoming = q.upcoming || [];
   const history = q.history || [];
+  // The controller publishes a label only after the incoming item has drained
+  // and its transition flags are final. Never reconstruct it from raw queue
+  // flags here: an unsent proposal can still be vetoed or replaced.
+  const nextTransition = q.nextTransition ?? '—';
+  // Under pair-aware drain the first upcoming item is held unsent for most of
+  // each track, so the em dash is the NORMAL reading rather than a fault — say
+  // so, or it reads as a broken panel. The armed tooltip names the pair the
+  // label describes: this is the seam out of the on-air track, not out of the
+  // queue row it sits above.
+  const nextTransitionHint = q.nextTransition
+    ? 'How the on-air track hands over to the first queued track'
+    : 'Not armed yet — the seam is decided when the next track is handed to the mixer';
   // `sessionMessages` arrives in air order and is shown newest first. Each turn
   // carries its ORIGINAL index: turnKey() folds the index into the React key, and
   // a display index would shift under every new turn, remounting the whole list.
@@ -384,7 +396,19 @@ export default function DashPanel() {
 
       <div className="stack-mobile grid grid-cols-[1.4fr_1fr] gap-4">
         <div className="grid grid-rows-[auto_1fr] gap-4">
-          <Card title="Queue" sub={`${upcoming.length} upcoming`} bodyClass="px-3.5 py-1.5">
+          <Card
+            title="Queue"
+            sub={`${upcoming.length} upcoming`}
+            right={
+              <span
+                title={nextTransitionHint}
+                className="text-[9px] font-bold tracking-[0.18em] text-muted uppercase"
+              >
+                Next transition: <span className="text-ink">{nextTransition}</span>
+              </span>
+            }
+            bodyClass="px-3.5 py-1.5"
+          >
             <Queue className="rounded-none border-0 bg-transparent p-0 shadow-none">
               {upcoming.length === 0 ? (
                 <div className="py-1 text-muted italic">queue empty, auto-playlist fallback</div>
@@ -411,16 +435,16 @@ export default function DashPanel() {
                         <QueueItemContent className="text-[12px] text-ink">
                           {t.title} <span className="text-muted">— {t.artist}</span>
                         </QueueItemContent>
-                        {/* Seam-type badge (#1257), stamped only once the blend clip
-                            is queued: no icon = plain crossfade. Definitive, not a
-                            prediction — blends are decided at pair drain. */}
+                        {/* `stemSeam` rides the successor, so keep its definitive
+                            marker on that row even while the header describes
+                            the earlier current → first-upcoming transition. Text
+                            makes the meaning explicit without the old opaque icon. */}
                         {t.stemSeam ? (
                           <span
-                            title="Arrives via a stem blend (mixed from cached stems)"
-                            aria-label="Arrives via a stem blend"
-                            className="shrink-0 text-vermilion/70"
+                            title="Arrives via a rendered blend mixed from cached stems"
+                            className="shrink-0 text-[8px] font-bold tracking-[0.14em] whitespace-nowrap text-vermilion/80 uppercase"
                           >
-                            <Blend className="h-3 w-3" />
+                            Stem blend
                           </span>
                         ) : null}
                         <span className="mono-num text-[10px] whitespace-nowrap text-muted">

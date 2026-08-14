@@ -5,6 +5,7 @@ import { z } from 'zod';
 import * as settings from '../../../settings.js';
 import { djObject } from '../strategy/object.js';
 import { modelTolerant } from '../core/pure.js';
+import { isNamedRequester } from '../../../util/request-guard.js';
 
 // Worked-example "ack" values must be concrete, speakable lines — never
 // <placeholder> meta-text. Weak models copy examples verbatim (the same
@@ -114,7 +115,7 @@ export async function matchRequest(
     ctxLines.push(`Currently playing: "${nowPlaying.title}"${nowPlaying.artist ? ` by ${nowPlaying.artist}` : ''}.`);
   }
   const userPrompt = [
-    listenerName ? `Listener "${listenerName}" requests:` : `Anonymous request:`,
+    isNamedRequester(listenerName) ? `Listener "${listenerName}" requests:` : `Anonymous request:`,
     userQuery,
     ctxLines.length ? `\n[Context for resolving references like "similar", "more like this", "match this vibe":\n${ctxLines.join('\n')}]` : '',
   ].filter(Boolean).join(' ');

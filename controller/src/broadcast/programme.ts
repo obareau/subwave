@@ -138,13 +138,12 @@ function featureKindMenu(host: { skills?: string[] } | null | undefined): { kind
 // a real generation failure marks it `fallback` for the episode (beats then
 // run brief-only — one failed producer call shouldn't burn a retry per tick).
 //
-// `now` defaults to the moment the CONTEXT describes (contextDate), not the
-// wall clock: queue.onTrackStarted rolls the session on a look-ahead context,
-// and judging the episode with a live `now` inside that window makes
-// activeEpisode compare the incoming session key against the OUTGOING show —
-// a silent null, so the plan never builds and the handoff greeting airs with
-// no episode angle. A live context carries a live `at`, so live callers are
-// unchanged.
+// `now` defaults to the moment the CONTEXT describes (contextDate), not the wall
+// clock. queue.onTrackStarted rolls the session on a look-ahead context, and
+// judging the episode with a live `now` inside that window makes activeEpisode
+// compare the incoming session key against the OUTGOING show — a silent null, so
+// the plan never builds and the handoff greeting airs with no angle. A live
+// context carries a live `at`, so live callers are unaffected.
 export async function ensurePlan(ctx: SessionContext, now = session.contextDate(ctx)): Promise<void> {
   const ep = activeEpisode(now);
   if (!ep) return;

@@ -14,18 +14,20 @@ import { analysisFailureExclusion } from './tracks.js';
 // vector. Sound-derived, so they complement the LLM's metadata-guessed `moods`.
 // ---------------------------------------------------------------------------
 
-// Transactional bulk write for the scoring pass — one commit per batch instead
-// of one per track (the pass touches every vector-carrying row).
-export function setTrackAudioMoodsBulk(
-  rows: Array<{ id: string; moods: string[]; scores: Record<string, number> }>,
+// Write raw cosines WITHOUT deriving labels — phase one of a calibrated pass.
+// Labels can only be picked once every track's scores are on disk, because the
+// per-mood baselines they are centred against are a property of the whole
+// library (music/audio-calibration.ts). A crash between the two phases leaves
+// audio_moods NULL, which idsNeedingAudioMoods picks up again next run, so the
+// split is resumable rather than lossy.
+export function setTrackAudioMoodScoresBulk(
+  rows: Array<{ id: string; scores: Record<string, number> }>,
 ): void {
   if (rows.length === 0) return;
   const d = requireDb();
-  const stmt = d.prepare(
-    `UPDATE tracks SET audio_moods = ?, audio_mood_scores_json = ? WHERE id = ?`,
-  );
+  const stmt = d.prepare(`UPDATE tracks SET audio_mood_scores_json = ? WHERE id = ?`);
   d.transaction((rs: typeof rows) => {
-    for (const r of rs) stmt.run(JSON.stringify(r.moods), JSON.stringify(r.scores), r.id);
+    for (const r of rs) stmt.run(JSON.stringify(r.scores), r.id);
   })(rows);
 }
 
@@ -67,6 +69,136 @@ export function getAudioMoodScores(id: string): Record<string, number> | null {
   } catch {
     return null;
   }
+}
+
+// Every stored {mood: cosine} map, streamed. The input to the per-mood
+// baselines (music/audio-calibration.ts computeBaselines) that calibration
+// centres against, and the source a relabel pass re-derives from.
+//
+// A generator over better-sqlite3's own row iterator rather than a materialised
+// array: this is one row per scored track for the WHOLE library, and the
+// baselines only need running sums. Rows with unparseable JSON are skipped —
+// one corrupt blob must not deny the library its calibration.
+export function* iterateAudioMoodScores(): Generator<{ id: string; scores: Record<string, number> }> {
+  const rows = requireDb()
+    .prepare(
+      `SELECT id, audio_mood_scores_json AS s FROM tracks
+        WHERE audio_mood_scores_json IS NOT NULL ORDER BY id`,
+    )
+    .iterate() as Iterable<{ id: string; s: string }>;
+  for (const row of rows) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.s);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    yield { id: row.id, scores: parsed as Record<string, number> };
+  }
+}
+
+// One PAGE of stored score maps, keyset-paginated on id (`afterId` exclusive,
+// '' starts). Returns a fully-materialised array — the cursor is closed before
+// this returns.
+//
+// This exists because better-sqlite3 refuses a write on a connection that has
+// a live read cursor: "This database connection is busy executing a query".
+// Any pass that reads every score map AND writes as it goes (the relabel pass)
+// must therefore page rather than stream. iterateAudioMoodScores is still the
+// right shape for a pure read like the baselines, which writes nothing.
+// `lastId` is the last id SCANNED, not the last one returned — a page whose
+// final row had unparseable JSON still has to advance the caller's cursor past
+// it, or the walk stalls on that row forever. null = the walk is done.
+export function pageAudioMoodScores(
+  afterId: string,
+  limit: number,
+): { items: Array<{ id: string; scores: Record<string, number> }>; lastId: string | null } {
+  const rows = requireDb()
+    .prepare(
+      `SELECT id, audio_mood_scores_json AS s FROM tracks
+        WHERE audio_mood_scores_json IS NOT NULL AND id > ?
+        ORDER BY id LIMIT ?`,
+    )
+    .all(afterId, Math.max(1, Math.floor(limit))) as Array<{ id: string; s: string }>;
+  const items: Array<{ id: string; scores: Record<string, number> }> = [];
+  for (const row of rows) {
+    try {
+      const parsed = JSON.parse(row.s);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        items.push({ id: row.id, scores: parsed as Record<string, number> });
+      }
+    } catch {
+      // Skip the row, but never the cursor — see lastId above.
+    }
+  }
+  return { items, lastId: rows.length ? rows[rows.length - 1].id : null };
+}
+
+// How many tracks carry a stored score map — the figure that decides whether
+// the library is big enough to calibrate against (MIN_BASELINE_TRACKS).
+export function audioMoodScoredCount(): number {
+  return (requireDb().prepare(
+    'SELECT COUNT(*) AS n FROM tracks WHERE audio_mood_scores_json IS NOT NULL',
+  ).get() as { n: number }).n;
+}
+
+// Rewrite only the LABELS for a batch of tracks, leaving audio_mood_scores_json
+// untouched. What a calibration-only change needs: the cosines on disk are
+// still correct, so a relabel must never require the analyzer's text tower.
+export function setTrackAudioMoodLabelsBulk(
+  rows: Array<{ id: string; moods: string[] }>,
+): void {
+  if (rows.length === 0) return;
+  const d = requireDb();
+  const stmt = d.prepare(`UPDATE tracks SET audio_moods = ? WHERE id = ?`);
+  d.transaction((rs: typeof rows) => {
+    for (const r of rs) stmt.run(JSON.stringify(r.moods), r.id);
+  })(rows);
+}
+
+// Tracks whose energy came from tag PROPAGATION (a value inherited from
+// embedding neighbours, not a per-track judgement) and that also carry audio
+// scores — the scope the audio-derived energy correction may act on (#1362).
+//
+// Restricted to source = 'propagated' on purpose: an 'llm'/'manual'/'uncertain-llm'
+// energy is a real decision about THIS track and is never overruled here.
+export function propagatedTracksWithAudioScores(): Array<{
+  id: string;
+  energy: string | null;
+  scores: Record<string, number>;
+}> {
+  const rows = requireDb()
+    .prepare(
+      `SELECT id, energy, audio_mood_scores_json AS s FROM tracks
+        WHERE source = 'propagated' AND audio_mood_scores_json IS NOT NULL
+        ORDER BY id`,
+    )
+    .all() as Array<{ id: string; energy: string | null; s: string }>;
+  const out: Array<{ id: string; energy: string | null; scores: Record<string, number> }> = [];
+  for (const row of rows) {
+    try {
+      const parsed = JSON.parse(row.s);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        out.push({ id: row.id, energy: row.energy, scores: parsed as Record<string, number> });
+      }
+    } catch {
+      // Skip — same reasoning as iterateAudioMoodScores.
+    }
+  }
+  return out;
+}
+
+// Bulk energy write for the correction pass. Touches `energy` ONLY: source,
+// confidence and moods stay as propagation left them, so the row still reports
+// honestly that its MOODS are inherited even once its energy is measured.
+export function setTrackEnergyBulk(rows: Array<{ id: string; energy: string }>): void {
+  if (rows.length === 0) return;
+  const d = requireDb();
+  const stmt = d.prepare(`UPDATE tracks SET energy = ? WHERE id = ?`);
+  d.transaction((rs: typeof rows) => {
+    for (const r of rs) stmt.run(r.energy, r.id);
+  })(rows);
 }
 
 // The vocabulary hash the current audio_moods were scored with, or null (never

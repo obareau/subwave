@@ -37,6 +37,14 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # Stagger the pushes. All 11 images push 4 tags each to ghcr.io, and when
+      # several finish their layer uploads in the same window GHCR answers the
+      # manifest PUT with a 403 "secondary rate limit" (hit on the v1.7.0 run —
+      # subwave-analyzer-heavy failed at `exporting to image` after the layers
+      # were already up, and a re-run of that job alone passed unchanged). The
+      # builds have very different durations, so capping concurrency spreads the
+      # completions out. Costs wall-clock on a release run; tag pushes are rare.
+      max-parallel: 4
       matrix:
         include:
           - image: subwave-caddy
@@ -183,7 +191,11 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-,format=short
+            # Only on an ad-hoc dispatch, where the ref is a branch and nothing
+            # else pins the commit. A tag push already has {{version}} pointing
+            # at exactly one commit, so the sha tag is a redundant fourth
+            # manifest push per image (11 of the 44 a release run makes).
+            type=sha,prefix=sha-,format=short,enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - uses: docker/build-push-action@v6
         with:

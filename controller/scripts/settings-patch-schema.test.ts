@@ -603,7 +603,8 @@ test('the converted keys are exactly the ones with schemas', () => {
   // post-merge cross-field rules, write-throughs into another key).
   assert.deepEqual(Object.keys(SETTINGS_PATCH_SCHEMAS).sort(), [
     'activeDjPromptId', 'archive', 'audio', 'beds', 'crossfadeDuration',
-    'djHouseRules', 'djPrompt', 'djPrompts', 'festivals', 'jingleRatio', 'likes',
+    'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock', 'festivals',
+    'jingleRatio', 'likes',
     'locale', 'loudness', 'maxTrackSeconds', 'moodSchedule', 'moods', 'personas',
     'privacy', 'requests', 'schedule', 'scheduleOverride', 'scrobble', 'search',
     'sfx', 'shows', 'station', 'stationDescription', 'stream', 'theme',

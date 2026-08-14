@@ -58,21 +58,13 @@ export const FADER_FILL_WIDTH: Record<number, readonly string[]> = {
 // Engine descriptors live in components/admin/tts/engineMeta.ts (shared with the
 // Settings voice tab) — import ENGINES from there, not here.
 
-// Every cap and voice pattern below comes from the MIRROR
-// (controller/src/schemas/persona.ts via lib/schemas.generated.ts) rather than
-// being re-typed here. They used to be hand-copied with "keep in lockstep with
-// …" comments, which is the surest sign of a constant about to drift — and one
-// already had: personaValid required a `cloud` voice unconditionally while the
-// controller allows an empty one for openai-compatible, so an operator on a
-// self-hosted TTS server could not save their roster at all.
-//
-// These are re-exported under the names this editor already used, so no call
-// site moved.
+// Every cap and voice pattern below re-exports the mirrored schema's own
+// constant under the name this editor already used, so nothing here can drift
+// from the controller.
 import {
   DJ_PROMPT_LIMIT,
   DJ_PROMPT_NAME_MAX,
   DJ_PROMPT_TEXT_MAX,
-  DJ_PROMPT_TEXT_MIN,
   PERSONA_LANGUAGE_MAX,
   PERSONA_LIMIT,
   PERSONA_NAME_MAX,
@@ -94,7 +86,6 @@ export const NAME_MAX = PERSONA_NAME_MAX;
 export const TAGLINE_MAX = PERSONA_TAGLINE_MAX;
 export const SOUL_MAX = PERSONA_SOUL_MAX;
 export const LANGUAGE_MAX = PERSONA_LANGUAGE_MAX;
-export const PROMPT_MIN = DJ_PROMPT_TEXT_MIN;
 export const PROMPT_MAX = DJ_PROMPT_TEXT_MAX;
 export const PROMPT_PRESET_MAX = DJ_PROMPT_LIMIT;
 export const PROMPT_NAME_MAX = DJ_PROMPT_NAME_MAX;

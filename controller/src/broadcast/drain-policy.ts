@@ -52,7 +52,7 @@ export function remainingSec(
   return (startedAtMs + effective * 1000 - nowMs) / 1000;
 }
 
-export type DrainAction = 'send-pair' | 'send-intrinsic' | 'hold';
+type DrainAction = 'send-pair' | 'send-intrinsic' | 'hold';
 
 // Decide what the drain loop does with the FIRST unsent item:
 //  - 'send-pair'      — its successor is already queued behind it; stamp the

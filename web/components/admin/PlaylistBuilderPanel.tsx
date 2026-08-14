@@ -6,10 +6,27 @@
    picker immediately. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDebounceValue } from 'usehooks-ts';
 import {
-  Plus, X, Search, ArrowUp, ArrowDown, ChevronRight, ChevronUp, ChevronDown,
-  GripVertical, RefreshCw, Trash2, FolderOpen, FilePlus2, Save,
+  Plus, X, Search, ChevronRight, ChevronUp, ChevronDown,
+  RefreshCw, Trash2, FolderOpen, FilePlus2, Save,
 } from 'lucide-react';
+import {
+  DndContext,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import type { Announcements, DragEndEvent } from '@dnd-kit/core';
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
 import { Controller, useWatch } from 'react-hook-form';
 import type { z } from 'zod';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -28,9 +45,8 @@ import {
   Eyeb,
   IconBtn,
   Tog,
-  energyBgClass,
-  energyLabel,
 } from './playlist-builder/bits';
+import { TrackRow } from './playlist-builder/TrackRow';
 import { runGenerationJob } from './playlist-builder/generate';
 import type {
   ArcShape,
@@ -42,7 +58,6 @@ import type {
   View,
 } from './playlist-builder/types';
 import {
-  API,
   ARCS,
   BPM_MAX,
   BPM_MIN,
@@ -64,54 +79,23 @@ import {
   playlistSaveSchema,
 } from '@/lib/schemas.generated';
 
-// ─── The generate-vs-save split (task-11-brief step 2) ─────────────────────
+// ─── The generate-vs-save split ────────────────────────────────────────────
 //
-// This panel drives TWO request bodies: POST /playlists/generate (a preview,
-// never persisted) and POST /playlists (the create/overwrite call). Only the
-// second is "the create body" — but its `recipe` field is the SAME shape
-// /generate takes (playlistRecipeSchema mirrors playlistGenerateSchema minus
-// excludeTrackIds), and `recipe` rides on every save where "Keep in sync" is
-// on. So every recipe-rail input (prompt, seeds, moods, genres, energies,
-// year/bpm/length bounds, artists, arc, count, artistSpacing, the three
-// source/knob switches) genuinely belongs to BOTH bodies, not just the
-// generate one — RecipeFormValues below holds all of them.
+// Two request bodies, two forms. The recipe rail (RecipeFormValues) feeds both
+// POST /playlists/generate and the `recipe` field of POST /playlists, since the
+// two share a shape. `seedArtist` and `genreInput` stay plain state: the latter
+// is an uncommitted text buffer, and neither carries a schema rule.
 //
-// Two fields are deliberately left OUT of RecipeFormValues, per the brief:
-// `seedArtist` and `genreInput`. `genreInput` is a real uncommitted text
-// buffer (only becomes a value on Enter/comma/blur via addGenre). `seedArtist`
-// is arguably not that — once picked from a search result it IS a committed
-// value, same shape as a `seeds` chip — but it carries no schema rule either
-// way (playlistText — free text, unchecked) and buildBody() below reads it
-// directly regardless of where it lives, so keeping it as plain state loses
-// no correctness, only RHF's reset/dirty-tracking for that one field. Kept as
-// plain state per the brief's explicit instruction.
+// `formState.isValid` on the recipe form is inert and never read. The only
+// whole-object rule is `playlistHasIntent`, which the schema's `.refine` reads
+// off the NESTED wire shape (`knobs.moods`, `sources.recentlyAdded`), while
+// this form's fields are flat to match the rail's own UI concepts. So
+// `playlistHasIntent(buildBody())` stays the real Generate gate.
 //
-// The knobs/sources wire shape (playlistLooseRecord) is UNVALIDATED
-// passthrough by design (see schemas/playlist.ts's header comment) — there is
-// no per-field rule anywhere for moods/genres/energies/artists/arc/count/etc.
-// The only whole-object rule in the whole module is `playlistHasIntent`,
-// which playlistGenerateSchema enforces via `.refine`. Binding this form's
-// resolver to playlistGenerateSchema does NOT make `formState.isValid` track
-// that rule, though: the refine reads `input.knobs.moods` /
-// `input.sources.recentlyAdded` / etc, and this form's fields are flat
-// (`moods`, `recentlyAdded`, `yearFrom`/`yearTo` rather than `knobs.eras[]`)
-// to match the rail's own UI concepts, which is what buildBody() below
-// derives the wire shape FROM — so `isValid` here would only ever see
-// `prompt` correctly and stays false-negative for every other case. Per step
-// 6: the schema does not express the rule this form needs, so
-// `playlistHasIntent(buildBody())` stays the real Generate gate, called
-// directly, exactly as before conversion — `isValid` from this binding is
-// otherwise inert and never read.
-//
-// The SAVE modal is a second, separate form (SaveFormValues) bound to
-// playlistSaveSchema itself. `name` is the ONE real rule in that schema (1-120
-// chars) and is the only field this form validates meaningfully — `isValid`
-// on THIS binding correctly reduces to "is name valid", since songIds/
-// playlistId/recipe are assembled at submit time from live component state
-// (tracks/existingId/the recipe form's buildBody()) rather than tracked as
-// interactive fields here. `saveMode` isn't a schema key at all (it only
-// steers which value `playlistId` gets) but travels in this form anyway since
-// it's a real save-time choice, not generation-only state.
+// The SAVE modal is a separate form bound to playlistSaveSchema, where `name`
+// is the one real rule — songIds/playlistId/recipe are assembled at submit time
+// from live component state. `saveMode` isn't a schema key at all; it travels
+// here anyway as a save-time choice, and is read off raw form state.
 interface RecipeFormValues {
   prompt: string;
   seeds: SeedChip[];
@@ -169,15 +153,9 @@ const SAVE_DEFAULTS: SaveFormValues = { name: '', keepInSync: false, saveMode: '
 export default function PlaylistBuilderPanel() {
   const { adminFetch } = useAdminAuth();
 
-  // Both playlistGenerateSchema and playlistSaveSchema are `z.preprocess(...)`
-  // wrapped (see schemas/playlist.ts — the non-object-body fallback), which
-  // makes their inferred `_input` `unknown` rather than a FieldValues-shaped
-  // object, so useZodForm's own generic bound can't be satisfied by passing
-  // them directly. The schema is cast to the form's own field shape here —
-  // same one-cast-not-fought-at-every-callsite move as `Control<T>` elsewhere
-  // in this file, just applied one level up. Nothing about runtime validation
-  // changes: zodResolver(schema) inside useZodForm still runs the real
-  // schema against the real posted values.
+  // Both playlist schemas are `z.preprocess(...)`-wrapped, so their inferred
+  // `_input` is `unknown` and can't satisfy useZodForm's generic bound. Cast to
+  // the form's own field shape; the resolver still runs the real schema.
   const recipeForm = useZodForm(
     playlistGenerateSchema as unknown as z.ZodType<RecipeFormValues, RecipeFormValues>,
     RECIPE_DEFAULTS,
@@ -227,9 +205,8 @@ export default function PlaylistBuilderPanel() {
   const hotTimer = useRef<number | null>(null);
   const [toast, setToast] = useState('');
 
-  // The live mood NAMES off /settings (tts.moods) — moods are operator-editable
-  // (/admin/moods), so a hand-copied vocabulary here was wrong twice over: a
-  // custom mood was unpickable and a deleted one was still offered.
+  // The live mood names off /settings. Moods are operator-editable, so a
+  // hand-copied vocabulary here would miss custom ones and offer deleted ones.
   const [liveMoods, setLiveMoods] = useState<string[]>([]);
 
   const [seedQuery, setSeedQuery] = useState('');
@@ -240,7 +217,17 @@ export default function PlaylistBuilderPanel() {
   const [artistResults, setArtistResults] = useState<string[] | null>(null);
   const [genreList, setGenreList] = useState<{ value: string; songCount: number }[] | null>(null);
 
-  const dragIndex = useRef<number | null>(null);
+  // The three suggestion boxes below all search /dj/search on a 250ms debounce
+  // and all ignore a query under two characters. Blanking the term is what
+  // clears the dropdown, and it happens off the RAW query so backspacing feels
+  // instant; only a term long enough to search waits for the debounce.
+  const [debouncedSeedQuery] = useDebounceValue(seedQuery, 250);
+  const [debouncedAddQuery] = useDebounceValue(addQuery, 250);
+  const [debouncedArtistQuery] = useDebounceValue(artistQuery, 250);
+  const seedTerm = seedQuery.trim().length < 2 ? '' : debouncedSeedQuery.trim();
+  const addTerm = addQuery.trim().length < 2 ? '' : debouncedAddQuery.trim();
+  const artistTerm = artistQuery.trim().length < 2 ? '' : debouncedArtistQuery.trim();
+
   const toastTimer = useRef<number | null>(null);
   const lastMode = useRef<GenMode>('fresh');
   const generatingRef = useRef(false);
@@ -367,12 +354,9 @@ export default function PlaylistBuilderPanel() {
     excludeTrackIds,
   }), [recipeValues, seedArtist]);
 
-  // The SAME intent rule the /generate routes enforce (the schema's own
-  // refinement runs playlistHasIntent too) — the Generate button needs the
-  // answer before a request exists, which is why the predicate is exported
-  // rather than living only inside the schema. See the split comment at the
-  // top of this file for why this stays a direct call rather than
-  // `recipeForm.formState.isValid`.
+  // The same intent rule the /generate route enforces — exported as a predicate
+  // rather than living only inside the schema, because the Generate button needs
+  // the answer before a request exists. See the split comment at the top.
   const hasIntent = useMemo(() => playlistHasIntent(buildBody()), [buildBody]);
 
   const generating = view === 'generating';
@@ -418,34 +402,35 @@ export default function PlaylistBuilderPanel() {
   }, [tracks, adminFetch, buildBody, flash, name]);
 
   // Seed search; `stale` guards a slow response clobbering a newer query.
+  // Only the FETCH waits on the debounce — a query that falls under two
+  // characters clears the dropdown off the raw value, so backspacing out of a
+  // search doesn't leave suggestions hanging for another 250ms.
   useEffect(() => {
-    const q = seedQuery.trim();
-    if (q.length < 2) { setSeedResults(null); return; }
+    if (!seedTerm) { setSeedResults(null); return; }
     let stale = false;
-    const h = window.setTimeout(async () => {
+    void (async () => {
       try {
-        const r = await adminFetch(`/dj/search?q=${encodeURIComponent(q)}&limit=8`);
+        const r = await adminFetch(`/dj/search?q=${encodeURIComponent(seedTerm)}&limit=8`);
         const j = await r.json();
         if (!stale) setSeedResults(j.results || j.songs || j.tracks || []);
       } catch { if (!stale) setSeedResults([]); }
-    }, 250);
-    return () => { stale = true; window.clearTimeout(h); };
-  }, [seedQuery, adminFetch]);
+    })();
+    return () => { stale = true; };
+  }, [seedTerm, adminFetch]);
 
   // Manual add search (debounced, same staleness guard)
   useEffect(() => {
-    const q = addQuery.trim();
-    if (q.length < 2) { setAddResults(null); return; }
+    if (!addTerm) { setAddResults(null); return; }
     let stale = false;
-    const h = window.setTimeout(async () => {
+    void (async () => {
       try {
-        const r = await adminFetch(`/dj/search?q=${encodeURIComponent(q)}&limit=10`);
+        const r = await adminFetch(`/dj/search?q=${encodeURIComponent(addTerm)}&limit=10`);
         const j = await r.json();
         if (!stale) setAddResults(j.results || j.songs || j.tracks || []);
       } catch { if (!stale) setAddResults([]); }
-    }, 250);
-    return () => { stale = true; window.clearTimeout(h); };
-  }, [addQuery, adminFetch]);
+    })();
+    return () => { stale = true; };
+  }, [addTerm, adminFetch]);
 
   // Genre vocabulary — fetched once on first focus; suggestions filter locally.
   const loadGenres = useCallback(async () => {
@@ -468,12 +453,11 @@ export default function PlaylistBuilderPanel() {
 
   // Artist-filter search (debounced) — suggests distinct artist credits.
   useEffect(() => {
-    const q = artistQuery.trim();
-    if (q.length < 2) { setArtistResults(null); return; }
+    if (!artistTerm) { setArtistResults(null); return; }
     let stale = false;
-    const h = window.setTimeout(async () => {
+    void (async () => {
       try {
-        const r = await adminFetch(`/dj/search?q=${encodeURIComponent(q)}&limit=20`);
+        const r = await adminFetch(`/dj/search?q=${encodeURIComponent(artistTerm)}&limit=20`);
         const j = await r.json();
         const seen = new Set(recipeValues.artists.map(a => a.toLowerCase()));
         const names: string[] = [];
@@ -484,9 +468,9 @@ export default function PlaylistBuilderPanel() {
         }
         if (!stale) setArtistResults(names);
       } catch { if (!stale) setArtistResults([]); }
-    }, 250);
-    return () => { stale = true; window.clearTimeout(h); };
-  }, [artistQuery, adminFetch, recipeValues.artists]);
+    })();
+    return () => { stale = true; };
+  }, [artistTerm, adminFetch, recipeValues.artists]);
 
   // Distinct artists in the seed results — the "seed the artist" rows.
   const seedArtists = useMemo(() => {
@@ -512,6 +496,59 @@ export default function PlaylistBuilderPanel() {
     });
   };
   const removeAt = (i: number) => setTracks(prev => prev.filter((_, idx) => idx !== i));
+
+  // A sortable id has to be unique and survive a reorder, and a track id is
+  // neither: the same song can legitimately sit in the deck twice (that is what
+  // the DUPLICATE badge marks), and an index-derived id renames every row below
+  // the one that moved. The deck's own objects are the stable identity — a move
+  // splices them, it doesn't rebuild them — so the uid is minted per object and
+  // parked in a WeakMap. It doubles as the React key, which is why a reorder no
+  // longer remounts the rows below it and re-fetches their artwork.
+  const uids = useRef(new WeakMap<DraftTrack, string>());
+  const nextUid = useRef(0);
+  const uidOf = (t: DraftTrack): string => {
+    let u = uids.current.get(t);
+    if (!u) { u = `row-${nextUid.current++}`; uids.current.set(t, u); }
+    return u;
+  };
+  const rowIds = tracks.map(uidOf);
+
+  // Mouse and touch are separate sensors on purpose. One PointerSensor would
+  // have to claim the touch gesture the moment a finger lands to be able to
+  // drag, which costs the list its scroll; the delay makes a press-and-hold the
+  // drag and leaves a plain swipe scrolling.
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 220, tolerance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const onDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return;
+    const from = rowIds.indexOf(String(active.id));
+    const to = rowIds.indexOf(String(over.id));
+    if (from < 0 || to < 0) return;
+    move(from, to);
+  };
+
+  // dnd-kit announces "item 3" by default; a deck of songs should say which
+  // song. Positions are 1-based to match the number column on screen.
+  const announce = (id: string, at: number | null): string => {
+    const i = rowIds.indexOf(id);
+    const name = tracks[i]?.title || 'Track';
+    return at == null ? name : `${name}, position ${at + 1} of ${tracks.length}`;
+  };
+  const announcements: Announcements = {
+    onDragStart: ({ active }) => `Picked up ${announce(String(active.id), rowIds.indexOf(String(active.id)))}.`,
+    onDragOver: ({ active, over }) => (over
+      ? `${announce(String(active.id), null)} moved to position ${rowIds.indexOf(String(over.id)) + 1} of ${tracks.length}.`
+      : undefined),
+    onDragEnd: ({ active, over }) => (over
+      ? `${announce(String(active.id), null)} dropped at position ${rowIds.indexOf(String(over.id)) + 1} of ${tracks.length}.`
+      : `${announce(String(active.id), null)} returned to its place.`),
+    onDragCancel: ({ active }) => `Reordering cancelled. ${announce(String(active.id), null)} returned to its place.`,
+  };
+
   const addTrack = (t: RawTrackRow) => {
     setTracks(prev => [...prev, rowToDraft(t)]);
     setAddQuery('');
@@ -576,10 +613,9 @@ export default function PlaylistBuilderPanel() {
       keepInSync,
       saveMode: existingId ? 'overwrite' : 'create',
     });
-    // reset() doesn't itself validate, so an empty/over-length default (e.g.
-    // an ungenerated deck with no name typed yet) would leave `isValid` stale
-    // — true — until the operator touches the field. Force it once so the
-    // Save button's initial disabled state is correct from the first paint.
+    // reset() doesn't validate, so an empty default would leave `isValid`
+    // stale-true until the field is touched, and the Save button wrongly
+    // enabled on first paint.
     void saveForm.trigger();
     setModal('save');
   }, [tracks.length, name, existingId, keepInSync, flash, saveForm]);
@@ -587,16 +623,10 @@ export default function PlaylistBuilderPanel() {
   const onSaveSubmit = saveForm.handleSubmit(async (values) => {
     setSaving(true);
     try {
-      // `saveMode` is NOT a key of playlistSaveSchema (only name/songIds/
-      // playlistId/keepInSync/recipe are), so zodResolver's parsed OUTPUT —
-      // what `values` above actually is — silently drops it: z.object()
-      // strips unknown keys and this schema is never `.passthrough()`d.
-      // Reading `values.saveMode` here always saw `undefined`, so `overwrite`
-      // was always false and every "Overwrite existing" save created a new
-      // playlist instead (Fix round 1 — see task-11-report.md). `saveMode`
-      // isn't part of the wire body at all, only a local UI choice, so it's
-      // read straight off the form's raw state instead — the same place
-      // `existingId`/`tracks` already come from.
+      // Read off raw form state, NOT off `values`: `saveMode` is not a key of
+      // playlistSaveSchema, so the resolver's parsed output drops it and
+      // `values.saveMode` is always undefined — which once made every
+      // "Overwrite existing" save create a new playlist instead.
       const saveMode = saveForm.getValues('saveMode');
       const overwrite = saveMode === 'overwrite' && existingId;
       const r = await adminFetch('/playlists', {
@@ -1233,71 +1263,30 @@ export default function PlaylistBuilderPanel() {
 
                 <ScrollArea ref={listRef} className="flex-1">
                   <div className="pb-8">
-                  {tracks.map((t, i) => (
-                    <div
-                      key={`${t.id}-${i}`}
-                      data-row={i}
-                      draggable
-                      onDragStart={() => { dragIndex.current = i; }}
-                      onDragOver={e => e.preventDefault()}
-                      onDrop={() => { if (dragIndex.current != null) move(dragIndex.current, i); dragIndex.current = null; }}
-                      className={cn(
-                        'group grid grid-cols-[24px_44px_minmax(0,1fr)_auto] items-center gap-3 border-b border-separator-soft px-4 py-[9px] transition-colors hover:bg-ink-soft sm:grid-cols-[18px_24px_44px_minmax(0,1fr)_auto] sm:px-6',
-                        hotRow === i && 'bg-vermilion/10',
-                      )}
+                    <DndContext
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      modifiers={[restrictToVerticalAxis]}
+                      onDragEnd={onDragEnd}
+                      accessibility={{ announcements }}
                     >
-                      <div className="hidden cursor-grab place-items-center text-muted sm:grid">
-                        <GripVertical className="size-4" />
-                      </div>
-                      <div className="text-right font-mono text-xs text-muted">{i + 1}</div>
-                      <img
-                        src={`${API}/cover/${encodeURIComponent(t.id)}`}
-                        alt=""
-                        loading="lazy"
-                        className="size-11 border border-ink bg-ink-soft object-cover"
-                      />
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate text-sm font-semibold">{t.title}</span>
-                          {dupeIds.has(t.id) && (
-                            <span className="flex-none border border-[var(--accent)] px-1 py-px font-mono text-[9px] font-bold tracking-[0.08em] text-vermilion">DUPLICATE</span>
-                          )}
-                        </div>
-                        <div className="mt-[3px] truncate font-mono text-[11px] text-muted">
-                          {t.artist}{t.album ? ` · ${t.album}` : ''}
-                        </div>
-                        {((t.moods && t.moods.length > 0) || t.instrumental === true) && (
-                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                            {(t.moods || []).slice(0, 2).map(m => (
-                              <span key={m} className="border border-separator-soft px-[5px] py-px font-mono text-[9px] tracking-[0.04em] text-muted uppercase">{m}</span>
-                            ))}
-                            {t.instrumental === true && (
-                              <span className="border border-separator-soft px-[5px] py-px font-mono text-[9px] tracking-[0.04em] text-muted uppercase">instrumental</span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      {/* Beside three 30px icon buttons this block is ~170px;
-                          stacked it costs 90px and the title keeps the rest. */}
-                      <div className="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
-                        <div className="flex flex-col items-end gap-[3px]">
-                          <span className="font-mono text-xs text-ink">{fmtDur(t.durationSec || 0)}</span>
-                          <span className="flex items-center gap-[5px] font-mono text-[10px] text-muted">
-                            <span className={cn('inline-block size-[7px]', energyBgClass(t.energy))} />
-                            {energyLabel(t.energy)}{t.year ? ` · ${t.year}` : ''}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-0.5 transition-opacity lg:opacity-0 lg:group-hover:opacity-100">
-                          {/* The drag grip is `sm:` only, so on mobile these are
-                              the only way to move a row: size them for a thumb. */}
-                          <IconBtn className="size-9 sm:size-[30px]" onClick={() => move(i, i - 1)} disabled={i === 0} title="Move up"><ArrowUp className="size-[15px]" /></IconBtn>
-                          <IconBtn className="size-9 sm:size-[30px]" onClick={() => move(i, i + 1)} disabled={i === tracks.length - 1} title="Move down"><ArrowDown className="size-[15px]" /></IconBtn>
-                          <IconBtn className="size-9 sm:size-[30px]" onClick={() => removeAt(i)} title="Remove"><X className="size-[15px]" /></IconBtn>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                      <SortableContext items={rowIds} strategy={verticalListSortingStrategy}>
+                        {tracks.map((t, i) => (
+                          <TrackRow
+                            key={uidOf(t)}
+                            id={uidOf(t)}
+                            track={t}
+                            index={i}
+                            total={tracks.length}
+                            duplicate={dupeIds.has(t.id)}
+                            hot={hotRow === i}
+                            onMove={move}
+                            onRemove={removeAt}
+                          />
+                        ))}
+                      </SortableContext>
+                    </DndContext>
+                  </div>
                 </ScrollArea>
               </div>
             )}
@@ -1399,8 +1388,8 @@ export default function PlaylistBuilderPanel() {
       {modal === 'open' && (
         <div
           // Backdrop keeps no role and no tabIndex: `role="button"` would put a
-          // full-viewport control in the tab order and hide the dialog's real
-          // controls from assistive tech. Escape is handled at the document level.
+          // full-viewport control in the tab order, ahead of the dialog's real
+          // controls. Escape is handled at the document level.
           className="fixed inset-0 z-[80] flex items-start justify-center bg-[rgba(20,18,14,0.42)] p-5 pt-16"
           // Only a click on the backdrop itself closes, so the panel needs no
           // stopPropagation of its own.

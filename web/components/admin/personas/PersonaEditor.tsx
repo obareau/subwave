@@ -19,6 +19,9 @@ import { PersonaSkillsCard } from './PersonaSkillsCard';
 interface PersonaEditorProps {
   persona: Persona;
   index: number;
+  // 1-based slot in the DISPLAYED roster, not in the form array — the header
+  // counter has to name the position the operator just clicked.
+  position: number;
   control: Control<PersonasFormValues>;
   personaCount: number;
   activePersonaId: string;
@@ -52,7 +55,7 @@ interface PersonaEditorProps {
 }
 
 export function PersonaEditor({
-  persona, index, control, personaCount, activePersonaId, onAirPersonaId, data, adminFetch, avatarTick, uploadingId,
+  persona, index, position, control, personaCount, activePersonaId, onAirPersonaId, data, adminFetch, avatarTick, uploadingId,
   defaultEngine, cloudIssueText, skillCatalog, editorRef, open, isNew, onClose,
   onUpdate,
   onUploadAvatar, onGenerateAvatar, onClearAvatar, onSetActive, onRemove,
@@ -91,7 +94,7 @@ export function PersonaEditor({
         // width to bite: capped on phones (a 40-char name would push the close
         // button off the edge), unbounded on desktop.
         <span className="caption block max-w-[42vw] truncate sm:max-w-none">
-          {persona.name.trim() || `Persona ${index + 1}`} · {index + 1} of {personaCount}
+          {persona.name.trim() || `Persona ${position}`} · {position} of {personaCount}
         </span>
       )}
       footer={

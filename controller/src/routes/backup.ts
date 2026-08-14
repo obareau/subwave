@@ -13,13 +13,12 @@
 // extracted back under STATE_DIR. See discussion #404.
 //
 // Two restore entry points share one `applyBackupZip()` core:
-//   POST /backup/import       — the zip is the raw request body (browser upload).
-//   POST /backup/import-file  — restore a zip already sitting in STATE_DIR.
-// The disk path exists because a big-library backup (29k tracks ⇒ a tag DB well
-// over 100 MB) can exceed an edge proxy's upload cap (Cloudflare rejects with a
-// 413 before the request ever reaches the controller). Dropping the file into
-// the station's state/ folder and restoring from there bypasses the proxy body
-// limit entirely. GET /backup/restorable lists the candidate zips. See #612.
+//   POST /backup/import       — the zip is the raw request body (browser upload)
+//   POST /backup/import-file  — restore a zip already sitting in STATE_DIR
+// The disk path exists because a big-library backup (29k tracks → a tag DB well
+// over 100 MB) can exceed an edge proxy's upload cap — Cloudflare 413s before
+// the request reaches the controller — and dropping the file into state/
+// bypasses that entirely. GET /backup/restorable lists candidates (#612).
 import express from 'express';
 import AdmZip from 'adm-zip';
 import { existsSync, readFileSync } from 'node:fs';

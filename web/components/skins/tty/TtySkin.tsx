@@ -16,6 +16,7 @@ import { useElapsed } from '@/hooks/useElapsed';
 import { useClock } from '@/lib/hooks';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
 import { cn } from '@/lib/cn';
+import { REQUEST_NAME_MAX } from '@/lib/schemas.generated';
 import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import { useStationClient } from '@/lib/stationClient';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -316,36 +317,57 @@ export default function TtySkin(_props: SkinProps) {
         </div>
 
         {reqOpen ? (
-          <div className="flex flex-none items-baseline gap-3 border border-[var(--accent)] bg-[var(--field)] px-4 py-2.5 text-[12px]">
-            <span className="font-bold text-[var(--accent)] select-none">:req ▸</span>
-            {slip.ack ? (
-              <>
-                <span className="min-w-0 flex-1 truncate">{slip.ack}</span>
-                <button
-                  type="button"
-                  className="v3-focus cursor-pointer border-0 bg-transparent p-0 tracking-[0.1em] text-muted uppercase hover:text-ink"
-                  onClick={() => { slip.reset(); setReqOpen(false); }}
-                >
-                  [esc] close
-                </button>
-              </>
-            ) : (
-              <>
+          <div className="flex flex-none flex-col gap-1.5 border border-[var(--accent)] bg-[var(--field)] px-4 py-2.5 text-[12px]">
+            <div className="flex items-baseline gap-3">
+              <span className="font-bold text-[var(--accent)] select-none">:req ▸</span>
+              {slip.ack ? (
+                <>
+                  <span className="min-w-0 flex-1 truncate">{slip.ack}</span>
+                  <button
+                    type="button"
+                    className="v3-focus cursor-pointer border-0 bg-transparent p-0 tracking-[0.1em] text-muted uppercase hover:text-ink"
+                    onClick={() => { slip.reset(); setReqOpen(false); }}
+                  >
+                    [esc] close
+                  </button>
+                </>
+              ) : (
+                <>
+                  <input
+                    ref={reqInputRef}
+                    value={slip.text}
+                    onChange={e => slip.setText(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') void slip.send();
+                      if (e.key === 'Escape') setReqOpen(false);
+                    }}
+                    placeholder="artist, song, or a vibe… [enter] send · [esc] cancel"
+                    className="v3-focus min-w-0 flex-1 border-0 bg-transparent font-mono text-[12px] text-ink outline-none placeholder:text-muted"
+                  />
+                  <span className={cn('text-muted select-none', slip.sending && 'text-[var(--accent)]')}>
+                    {slip.sending ? 'sending…' : '▊'}
+                  </span>
+                </>
+              )}
+            </div>
+            {/* A second prompt line rather than a labelled field — signing is
+                optional, and a signed slip gets the name read on air (#1347).
+                Enter submits from here too, so a listener can tab down and go. */}
+            {!slip.ack && (
+              <div className="flex items-baseline gap-3">
+                <span className="text-muted select-none">:from ▸</span>
                 <input
-                  ref={reqInputRef}
-                  value={slip.text}
-                  onChange={e => slip.setText(e.target.value)}
+                  value={slip.name}
+                  onChange={e => slip.setName(e.target.value)}
                   onKeyDown={e => {
                     if (e.key === 'Enter') void slip.send();
                     if (e.key === 'Escape') setReqOpen(false);
                   }}
-                  placeholder="artist, song, or a vibe… [enter] send · [esc] cancel"
-                  className="v3-focus min-w-0 flex-1 border-0 bg-transparent font-mono text-[12px] text-ink outline-none placeholder:text-muted"
+                  placeholder="your name (optional)"
+                  maxLength={REQUEST_NAME_MAX}
+                  className="v3-focus min-w-0 flex-1 border-0 bg-transparent font-mono text-[12px] text-ink outline-none placeholder:text-muted/70"
                 />
-                <span className={cn('text-muted select-none', slip.sending && 'text-[var(--accent)]')}>
-                  {slip.sending ? 'sending…' : '▊'}
-                </span>
-              </>
+              </div>
             )}
           </div>
         ) : (

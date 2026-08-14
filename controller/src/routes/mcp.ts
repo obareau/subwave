@@ -11,11 +11,11 @@
 // /api/* proxy handles like any other. GET/DELETE are 405 (nothing to resume).
 //
 // Auth mirrors the REST API: the endpoint is open, but each tool call goes
-// through a loopback SubwaveClient pointed at the controller's own port that
+// through a loopback SubwaveClient — pointed at the controller's own port — that
 // FORWARDS the caller's Authorization header. Public tools work for anyone;
-// admin tools (say/segment/skill/skip/queue/search/sfx/refresh) 401 without
-// valid creds — the exact surface of the endpoints the tools wrap. So the tools
-// reuse the live routes with no handler refactor, and requireAdmin is untouched.
+// admin tools 401 without valid creds, matching the exact surface of the
+// endpoints they wrap. The tools reuse the live routes with no handler refactor,
+// and requireAdmin is untouched.
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';

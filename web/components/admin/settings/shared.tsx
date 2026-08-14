@@ -442,20 +442,12 @@ export type FormUpdater = (updater: (f: FormState) => FormState) => void;
  * Server-side validation errors from the last `/settings` save, keyed by the
  * controller's dotted path ('beds.crossSec', 'personas.0.name').
  *
- * `POST /settings` has answered with a `fieldErrors` payload since the patch
- * registry landed, and until now the panel threw it away and showed a toast
- * instead — which lib/notify's own header calls out as the wrong surface for
- * field-level validation. This is the channel that fixes that.
- *
- * There is deliberately NO client-side pre-flight for these. The registry that
- * maps a settings key to its schema is not itself a schema module, so it is not
- * in the mirror, and hand-rebuilding that map in the browser would be exactly
- * the drift the mirror exists to prevent. The server is the one source, and its
- * answer lands on the input.
+ * There is deliberately NO client-side pre-flight for these: the registry that
+ * maps a settings key to its schema is not a schema module, so it isn't in the
+ * mirror, and rebuilding that map in the browser would be exactly the drift the
+ * mirror exists to prevent.
  */
 export type SettingsFieldErrors = Record<string, string>;
-
-export type FormUpdaterOrErrors = SettingsFieldErrors;
 
 export interface SectionProps {
   data: SettingsData;
@@ -467,24 +459,11 @@ export interface SectionProps {
 }
 
 /**
- * ARIA + rendering for one settings input's server error.
- *
- * Mirrors lib/form.ts's `fieldAria` — deliberately, since these sections are
- * NOT react-hook-form shaped (each control owns its own save button posting a
- * one-key patch, so there is no single submit to bind) and cannot use it
- * directly. The ids and the `-error` suffix follow the same convention, so an
- * operator gets the same behaviour whichever admin form they are on.
- */
-/**
- * One settings input's server error, or nothing.
- *
- * Wraps the same vendored `FieldError` primitive the react-hook-form-bound
- * panels use, so the message looks and announces identically (`role="alert"`)
- * whichever admin form the operator is on — these sections just get their error
- * shape from the controller instead of from a resolver.
- *
- * `path` is the controller's dotted key, so the JSX names the exact string the
- * server sends and a rename on either side is visible at the call site.
+ * One settings input's server error, or nothing. Wraps the same vendored
+ * `FieldError` the react-hook-form-bound panels use, so a message looks and
+ * announces identically whichever admin form the operator is on. `path` is the
+ * controller's dotted key, named at the call site so a rename on either side is
+ * visible.
  */
 export function SettingsFieldError({
   path,
@@ -500,6 +479,12 @@ export function SettingsFieldError({
   return <FieldError id={id} errors={[{ message }]} />;
 }
 
+/**
+ * ARIA for one settings input, following the same id conventions as
+ * lib/form.ts's `fieldAria`. These sections can't use that directly: each
+ * control owns its own save button posting a one-key patch, so there is no
+ * single submit to bind a form to.
+ */
 export function settingsFieldAria(baseId: string, message?: string) {
   const invalid = !!message;
   return {
@@ -612,14 +597,10 @@ export function ownedFieldErrors(
 }
 
 /**
- * Success/failure still goes through the global toaster, but a VALIDATION
- * failure now also lands here, beside the button that caused it.
- *
- * These sections save a whole block at once, so a per-input error would be the
- * wrong shape: the operator pressed one button and several fields could have
- * failed. Listing them at the save point names every one, and each message
- * already carries its own dotted field (that is the settings registry's
- * verbatim-message rule), so the path is not lost by grouping them here.
+ * Success/failure goes through the global toaster; a VALIDATION failure also
+ * lands here, beside the button that caused it. These sections save a whole
+ * block at once, so several fields can fail one click — and each message
+ * already names its own dotted field, so grouping them loses nothing.
  */
 export function SaveBar({ note, busy, onSave, saveLabel, extra, errors, ownedKeys }: SaveBarProps) {
   const owned = ownedFieldErrors(errors, ownedKeys);

@@ -4,19 +4,19 @@
 // broadcast mounts (/stream.mp3 + /stream.opus), so the DJ gates can ask "is
 // anyone listening?" without each one hitting Icecast.
 //
-// The count *folds Safari's double connection* into one (see groupConnections /
+// The count folds Safari's double connection into one (groupConnections /
 // dedupeListeners): iOS/macOS Safari opens two identical sockets per client, so
-// a raw sum double-counts every Apple listener. We can't key on IP, for two
-// reasons that both survive the trusted-proxy work: behind a reverse proxy
-// (Caddy → Icecast) a connection only carries the listener's real address when
-// the operator has named that proxy in icecast's <x-forwarded-for> (rendered by
-// docker/broadcast-entrypoint.sh — unset, and every row is the proxy's own IP);
-// and even with it set, a household behind one NAT is several listeners on one
-// address. Instead we count every non-Safari socket as a listener
-// and pair Safari's two near-simultaneous sockets by user-agent + connect-time.
-// That dedup needs the per-connection admin feed (/admin/listclients); the
-// public status-json.xsl still supplies online/bitrate and the fallback sum
-// when the admin endpoint is unavailable.
+// a raw sum double-counts every Apple listener.
+//
+// Keying on IP is not an option, and neither reason is fixed by the
+// trusted-proxy work: behind a reverse proxy a row carries the listener's real
+// address only when the operator named that proxy in icecast's
+// <x-forwarded-for>, and even then a household behind one NAT is several
+// listeners on one address. So every non-Safari socket counts as a listener and
+// Safari's two near-simultaneous sockets are paired by user-agent + connect
+// time. That needs the per-connection admin feed (/admin/listclients); the
+// public status-json.xsl supplies online/bitrate and the fallback sum when the
+// admin endpoint is unavailable.
 //
 // Fail-open: if Icecast is unreachable the count is null and djCallsAllowed()
 // treats the station as occupied — a stats outage must never silence the DJ.
@@ -256,15 +256,14 @@ export function getListenerCount() {
 // failures reach STALE_STATUS_LIMIT (see gatedCount above).
 //
 // This is what djCallsAllowed() and the idle monitor (stream-idle.ts) must read
-// — never the raw lastCount. Issue #1256: both gates fail OPEN on null, so with
-// the raw count a SINGLE 1.5s fetch timeout was enough to release the idle pause
-// and reopen the LLM gate. The idle monitor forces a poll every 5s while paused
-// (~120 per 10-minute pause), so a sub-1% failure rate fired inside nearly every
-// pause window: the programme paused, resumed ~28s later, and the power save was
-// inactive ~95% of the time it should have been active.
+// — never the raw lastCount. Both fail OPEN on null, so on the raw count a
+// SINGLE fetch timeout released the idle pause and reopened the LLM gate; since
+// the idle monitor forces a poll every 5s while paused (~120 per 10-minute
+// pause), a sub-1% failure rate fired inside nearly every pause window and the
+// power save was inactive ~95% of the time it should have been active (#1256).
 //
 // The fail-open doctrine is unchanged — a genuinely unreachable Icecast still
-// reads null and still resumes/keeps the DJ on air. Only the definition of
+// reads null and still keeps the DJ on air. Only the definition of
 // "unreachable" tightened, from one blip to sustained failure, matching the
 // hysteresis the cached status has had since #461.
 export function gatedListenerCount(): number | null {
@@ -309,15 +308,13 @@ export async function refresh() {
 // skip-history flag.
 //
 // Returns the GATED count, not pollCount's raw result. The quiet gate
-// (music/analyze-quiet-pure.ts) is the THIRD fail-open-on-unknown reader in the
-// codebase, and it needs the same hysteresis as the other two for the same
-// reason (#1256) — its fail-open direction is the opposite one, so a single
-// blip here starts a heavy DSP pass while somebody is listening rather than
-// releasing a pause. The child's own module state carries the hysteresis: it
-// polls once per track (or every 30s while waiting out the window), so
-// consecutive failures accumulate across calls exactly as they do in the
-// monitor loop, and the first call still reads unknown because lastGoodCount
-// is null — boot behaviour is unchanged.
+// (music/analyze-quiet-pure.ts) is the third fail-open-on-unknown reader and
+// needs the same hysteresis for the same reason (#1256) — its fail-open runs the
+// OPPOSITE way, so a single blip here starts a heavy DSP pass while somebody is
+// listening rather than releasing a pause. The child's own module state carries
+// the hysteresis: it polls once per track (or every 30s while waiting out the
+// window), so consecutive failures accumulate across calls exactly as in the
+// monitor loop.
 export async function probeListenerCount(): Promise<number | null> {
   await pollCount(false);
   return gatedListenerCount();
@@ -339,9 +336,9 @@ export function setStreamIdle(v: boolean) {
 //
 // Reads gatedListenerCount(), so "unknown" means sustained failure rather than
 // one timed-out poll (#1256). This also gates POST /request, which forces a
-// fresh poll first: under a real outage that poll's failures reach the limit
-// and requests are accepted exactly as before, so only a single blip — where
-// the held reading is seconds old and accurate — now decides differently.
+// fresh poll first: under a real outage those failures reach the limit and
+// requests are accepted as before, so only a single blip — where the held
+// reading is seconds old and accurate — decides differently.
 //
 // An idle-paused stream blocks DJ calls regardless of the LLM toggle: the
 // voice queues aren't being pulled while the idle gate is up, so any WAV

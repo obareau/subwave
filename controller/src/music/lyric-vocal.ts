@@ -15,7 +15,7 @@
 //
 // Pure + side-effect-free: unit-pinned by scripts/lyric-vocal.test.ts.
 
-export interface LyricLine {
+interface LyricLine {
   startMs: number; // milliseconds from track start; NaN when unsynced
   text: string;
 }

@@ -25,6 +25,7 @@ import { useElapsed } from '@/hooks/useElapsed';
 import { useClock } from '@/lib/hooks';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
 import { cn } from '@/lib/cn';
+import { REQUEST_NAME_MAX } from '@/lib/schemas.generated';
 import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import { useStationClient } from '@/lib/stationClient';
 import {
@@ -401,43 +402,61 @@ export default function SubampSkin(_props: SkinProps) {
           </Conversation>
 
           <form
-            className="mx-4 mb-3 flex shrink-0 items-baseline gap-2.5 border-t border-[var(--line)] pt-2"
+            className="mx-4 mb-3 flex shrink-0 flex-col gap-1.5 border-t border-[var(--line)] pt-2"
             onSubmit={e => { e.preventDefault(); void slip.send(); }}
           >
-              <span className="flex-none text-[10px] tracking-[0.14em] text-muted select-none">DEAR DJ —</span>
-              {slip.ack ? (
-                <>
-                  <span className="min-w-0 flex-1 truncate text-[11px] italic">{slip.ack}</span>
-                  <button
-                    type="button"
-                    onClick={slip.reset}
-                    className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-[10px] font-bold tracking-[0.14em] text-muted uppercase hover:text-ink"
-                  >
-                    new
-                  </button>
-                </>
-              ) : (
-                <>
+              <div className="flex items-baseline gap-2.5">
+                {/* Fixed width on both label cells so the ask and the signature
+                    inputs share a left edge — the labels differ in length. */}
+                <span className="w-[68px] flex-none text-[10px] tracking-[0.14em] text-muted select-none">DEAR DJ —</span>
+                {slip.ack ? (
+                  <>
+                    <span className="min-w-0 flex-1 truncate text-[11px] italic">{slip.ack}</span>
+                    <button
+                      type="button"
+                      onClick={slip.reset}
+                      className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-[10px] font-bold tracking-[0.14em] text-muted uppercase hover:text-ink"
+                    >
+                      new
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <input
+                      ref={reqInputRef}
+                      value={slip.text}
+                      onChange={e => slip.setText(e.target.value)}
+                      placeholder="something with a 303 in it…"
+                      className="v3-focus min-w-0 flex-1 border-0 border-b border-[var(--line)] bg-transparent pb-0.5 font-mono text-[11px] text-ink italic outline-none placeholder:text-muted"
+                    />
+                    <button
+                      type="submit"
+                      disabled={slip.sending || !slip.text.trim()}
+                      className={cn(
+                        'v3-focus border-0 bg-transparent p-0 text-[10px] font-bold tracking-[0.14em] uppercase',
+                        slip.sending || !slip.text.trim()
+                          ? 'cursor-default text-muted opacity-60'
+                          : 'cursor-pointer text-[var(--accent)] hover:opacity-80',
+                      )}
+                    >
+                      {slip.sending ? '…' : 'SEND ↗'}
+                    </button>
+                  </>
+                )}
+              </div>
+              {/* Sign the slip and the DJ says your name on air (#1347).
+                  Hidden once the ack lands — there is nothing left to sign. */}
+              {!slip.ack && (
+                <div className="flex items-baseline gap-2.5">
+                  <span className="w-[68px] flex-none text-[10px] tracking-[0.14em] text-muted select-none">FROM —</span>
                   <input
-                    ref={reqInputRef}
-                    value={slip.text}
-                    onChange={e => slip.setText(e.target.value)}
-                    placeholder="something with a 303 in it…"
-                    className="v3-focus min-w-0 flex-1 border-0 border-b border-[var(--line)] bg-transparent pb-0.5 font-mono text-[11px] text-ink italic outline-none placeholder:text-muted"
+                    value={slip.name}
+                    onChange={e => slip.setName(e.target.value)}
+                    placeholder="your name (optional)"
+                    maxLength={REQUEST_NAME_MAX}
+                    className="v3-focus min-w-0 flex-1 border-0 border-b border-[var(--line)] bg-transparent pb-0.5 font-mono text-[11px] text-ink italic outline-none placeholder:text-muted/70"
                   />
-                  <button
-                    type="submit"
-                    disabled={slip.sending || !slip.text.trim()}
-                    className={cn(
-                      'v3-focus border-0 bg-transparent p-0 text-[10px] font-bold tracking-[0.14em] uppercase',
-                      slip.sending || !slip.text.trim()
-                        ? 'cursor-default text-muted opacity-60'
-                        : 'cursor-pointer text-[var(--accent)] hover:opacity-80',
-                    )}
-                  >
-                    {slip.sending ? '…' : 'SEND ↗'}
-                  </button>
-                </>
+                </div>
               )}
             </form>
         </Window>

@@ -455,40 +455,32 @@ function softShift(ctx: SessionContext, nextKey: string): Session {
 // Consecutive same-role turns are coalesced because some providers (Anthropic)
 // require strictly alternating user/assistant messages.
 //
-// Four turn kinds get filtered out of the window because they derail the
-// picker agent in long sessions:
+// Four turn kinds are filtered out because they derail the picker in long
+// sessions:
 //
-// - `scenario` events (controller restart notes, session boundaries) — infra
-//   noise, not part of the DJ's conversation. Every restart leaves "Controller
-//   restarted — session resumed" in the window, eventually appearing 3-4
-//   times in a single coalesced user message.
+// - `scenario` events (restart notes, session boundaries) — infra noise. Every
+//   restart leaves "Controller restarted", eventually appearing 3-4 times in one
+//   coalesced user message.
 //
-// - `kind: 'play'` track turns ("▶ Title — Artist") — redundant. Every pick
-//   event already contains the current AND previous track ("Now playing X.
-//   Pick the next track (after Y)..."), and recently-played TRACKS are filtered
-//   at the tool layer (recentIds/recentKeys in buildPickerTools) so they can't
-//   be re-picked regardless.
+// - `kind: 'play'` turns ("▶ Title — Artist") — redundant. Every pick event
+//   already names the current AND previous track, and recently-played tracks are
+//   filtered at the tool layer (recentIds/recentKeys) regardless.
 //
-// - `kind: 'sfx'` cue turns (queue.playSfx records the effect NAME as a turn) —
-//   an audio-production cue, not conversation. Left in, a bare effect name like
-//   "whoosh" coalesces into the assistant block and reads as a word the DJ
-//   spoke; the effect already aired, so the picker gains nothing from seeing it.
+// - `kind: 'sfx'` cue turns — an audio-production cue, not conversation. Left
+//   in, a bare effect name like "whoosh" coalesces into the assistant block and
+//   reads as a word the DJ spoke.
 //
-// - OLD `kind: 'pick'` events (role='event') — the "Now playing X. Pick the
-//   next track" user-side instruction is kept only for the LATEST pick.
-//   Previous ones were already answered and just add ambiguity ("which of
-//   these 11 'pick next' requests am I responding to?"). Without this filter,
-//   gemini's reliability drops from 5/5 short → 2-3/5 long in the
-//   picker-test.mjs LONG benchmark, with "No output generated" failures.
+// - OLD `kind: 'pick'` events: only the LATEST is kept. Previous ones were
+//   already answered and just add ambiguity ("which of these 11 'pick next'
+//   requests am I responding to?"). Without this filter gemini drops from 5/5
+//   short to 2-3/5 long, with "No output generated" failures.
 //
-// The DJ's own reasons (role='dj' kind='pick') stay — but only the most recent
-// RATIONALE_WINDOW of them. Each one is the agent's 12-word scratchpad ("Punjabi
-// thread continues, …"); left unbounded, ~15-20 accumulate in the window and the
-// agent reads its own running commentary as a mandate to keep the thread going
-// (one artist re-airing every ~1.2h). Keeping the last few preserves short-term
-// "what did I just play" memory without the momentum. Track-recency is enforced
-// at the tool layer regardless (recentIds/recentKeys in buildPickerTools), so
-// trimming these costs the picker no track-level anti-repeat coverage.
+// The DJ's own reasons (role='dj' kind='pick') stay, but only the most recent
+// RATIONALE_WINDOW of them. Each is the agent's 12-word scratchpad; left
+// unbounded, ~15-20 accumulate and the agent reads its own running commentary as
+// a mandate to keep the thread going (one artist re-airing every ~1.2h). Keeping
+// a few preserves short-term memory without the momentum, and track-recency is
+// enforced at the tool layer either way.
 export function windowMessages() {
   if (!_session) return [];
   const raw: { role: 'user' | 'assistant'; content: string }[] = [];

@@ -171,13 +171,13 @@ export async function stopStream() {
   }
 }
 
-// How long an on-air reading is reused. Every telnet take costs a connection,
-// and radio.liq logs a `New client` / `Client disconnected` pair for each one at
-// its default log level — with the admin UI polling GET /settings every 3s, an
-// uncached read filled the mixer log forever for anyone with an admin tab open
-// (issue #1300, bug 16b). 10s keeps the badge honest (the operator's own on/off
-// toggle invalidates below, so a deliberate change is never stale) while making
-// the connect rate independent of how many admin tabs are watching.
+// How long an on-air reading is reused. Every telnet take costs a connection and
+// radio.liq logs a `New client`/`Client disconnected` pair for each at its
+// default log level, so with the admin UI polling GET /settings every 3s an
+// uncached read filled the mixer log forever for anyone with a tab open (#1300
+// bug 16b). 10s keeps the badge honest — the operator's own toggle invalidates
+// below, so a deliberate change is never stale — while making the connect rate
+// independent of how many admin tabs are watching.
 //
 // What the TTL does NOT cover: a mixer that goes off air OUTSIDE the controller
 // (`docker compose restart broadcast`, an OOM kill, the restart policy cycling

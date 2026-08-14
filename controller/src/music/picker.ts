@@ -249,22 +249,20 @@ function sampleFresh(items: Candidate[], recentIds: Set<string>, cap: number): C
 // The DEDICATED SHOW sources (show-genre, show-playlist) keep the never-starve
 // that sampleFresh drops, because zero from them does not mean the same thing.
 //
-// A discovery source contributing nothing simply removes itself from the pool
-// and the other sources carry the pick. These two are the pool's only in-filter
-// contributors, and the STRICT end-filters below never-starve on an empty
-// result — `if (inPl.length) selectionPool = inPl` keeps the FULL pool when no
-// playlist track survived, and applyStrictLocks(starve:false) skips a dimension
-// with zero matches. So a show pinned to a 40-track playlist whose tracks are
-// all inside the (now library-scaled, up to 36 h) recency window contributes
-// nothing here and the strict show is then handed nothing BUT off-playlist
-// discovery candidates — the exact opposite of what the lock is for. Same path
-// for a strict-genre show and the genre dimension.
+// A discovery source contributing nothing just removes itself and the others
+// carry the pick. These two are the pool's only in-filter contributors, and the
+// STRICT end-filters never-starve on an empty result — `if (inPl.length)` keeps
+// the FULL pool when no playlist track survived, and applyStrictLocks(starve:
+// false) skips a dimension with zero matches. So a show pinned to a 40-track
+// playlist whose tracks all sit inside the recency window would contribute
+// nothing here and then be handed nothing BUT off-playlist candidates: the exact
+// opposite of what the lock is for. Same path for a strict-genre show.
 //
-// Recency still wins whenever anything fresh exists; the fallback only fires
-// when the alternative is abandoning the show's own universe. The hard
-// no-repeat guard (hardRecentIds/hardRecentKeys) is applied later by
-// filterPickerCandidates and is NOT relaxed here, so a track that just aired
-// still cannot come back — this only re-admits the softer time-window set.
+// Recency still wins whenever anything fresh exists; this fires only when the
+// alternative is abandoning the show's own universe. The HARD no-repeat guard is
+// applied later by filterPickerCandidates and is not relaxed here, so a track
+// that just aired still cannot come back — only the softer time-window set is
+// re-admitted.
 function sampleShowSource(items: Candidate[], recentIds: Set<string>, cap: number): Candidate[] {
   const fresh = items.filter(notRecent(recentIds));
   return (fresh.length > 0 ? fresh : items).slice(0, cap);
@@ -628,21 +626,20 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   }
 
   // 7. Exploration slot — ALWAYS contributes, unlike the thin-pool fallback
-  // below (which never fires while a track is on air: source 1 alone clears
-  // its <8 gate, so the old pool contained zero Navidrome randomness in the
-  // common case). A small server-random sample, freshness-ordered
-  // (music/airing.ts) so never-aired tracks lead, is the pool's only
-  // library-wide draw that isn't anchored on the current track or a frozen
-  // album window — without it every source is a similarity neighbourhood or a
-  // fixed crate and the pool can never leave the bubble it is in.
+  // below, which never fires while a track is on air (source 1 alone clears its
+  // <8 gate, so the pool held zero Navidrome randomness in the common case). A
+  // small server-random sample, freshness-ordered so never-aired tracks lead, is
+  // the pool's only library-wide draw not anchored on the current track or a
+  // frozen album window — without it every source is a similarity neighbourhood
+  // or a fixed crate and the pool can never leave its bubble.
   //
   // Skipped for a strict-playlist show, mirroring the coast's identical source
-  // (scheduler.ts §2b — keep the two in step): a library-wide random draw
-  // can't be playlist-filtered, so every track it contributes is either
-  // discarded by the strict end-filter below — a wasted Navidrome round trip on
-  // every pick — or, on the never-starve branch, becomes a live OFF-playlist
-  // candidate for the LLM. Strict GENRE shows keep it: lean() filters it
-  // server-agnostically on the way in, so it still lands in-genre.
+  // (scheduler.ts §2b — keep the two in step): a library-wide random draw can't
+  // be playlist-filtered, so every track it contributes is either discarded by
+  // the strict end-filter (a wasted round trip per pick) or, on the never-starve
+  // branch, becomes a live OFF-playlist candidate for the LLM. Strict GENRE
+  // shows keep it — lean() filters it on the way in, so it still lands
+  // in-genre.
   if (!strictPlaylist) {
     try {
       const wide = await subsonic.getRandomSongs({ size: 12 });

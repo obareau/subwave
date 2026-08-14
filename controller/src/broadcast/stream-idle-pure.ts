@@ -3,7 +3,7 @@
 // in the monitor's heavy imports (queue.ts → llm/tts/subsonic), same split
 // as programme-pure.ts.
 
-export type IdleAction = 'pause' | 'resume' | 'reassert' | null;
+type IdleAction = 'pause' | 'resume' | 'reassert' | null;
 
 export interface IdleState {
   idle: boolean;

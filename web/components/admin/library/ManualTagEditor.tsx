@@ -32,7 +32,10 @@ export function ManualTagEditor(props: {
   const energyVal = energy === 'none' ? null : energy;
 
   return (
-    <div className="grid gap-3 border-b border-ink bg-[var(--ink-softer)] px-4 py-3">
+    // The editor renders as a SIBLING of .lib-row, not inside it, and its chips
+    // are Pills like any other — so a test has no way to scope to this panel
+    // without a hook of its own.
+    <div data-testid="manual-tag-editor" className="grid gap-3 border-b border-ink bg-[var(--ink-softer)] px-4 py-3">
       <div className="grid gap-1.5">
         <Eyebrow>moods · up to 3</Eyebrow>
         <div className="flex flex-wrap gap-1.5">

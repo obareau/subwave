@@ -1,9 +1,8 @@
 // The `POST /settings` patch registry (#1348).
 //
 // `settings.update()` takes a PARTIAL patch over 42 top-level keys and validates
-// it in a ~1,100-line chain of `if ('<key>' in patch)` branches. #1337 put every
-// single-feature admin form on a shared zod schema and deliberately held this
-// one back, because a route that owns forty-two shapes doesn't fit the recipe.
+// it in a long chain of `if ('<key>' in patch)` branches — a route that owns
+// forty-two shapes doesn't fit #1337's one-schema-per-form recipe.
 //
 // This module is the frame the conversion lands in, one key at a time:
 //
@@ -18,18 +17,16 @@
 //
 // WHY UNKNOWN-KEY REJECTION IS A ROUTE POSTURE AND NEVER AN update() RULE
 // ----------------------------------------------------------------------
-// The issue asks for unknown top-level keys to be rejected rather than silently
-// dropped, and at the route that is right: every admin panel posts keys from
-// this inventory, so an unknown one is a typo that today saves nothing and
-// still answers 200.
+// At the route, rejecting an unknown top-level key is right: every admin panel
+// posts keys from this inventory, so an unknown one is a typo that would
+// otherwise save nothing and still answer 200.
 //
-// Inside update() the same rule would be a data-loss bug. routes/backup.ts:218
-// parses a backup's settings.json and hands the WHOLE object to update(); so
-// does onboarding, and so does every internal caller. A backup written by a
-// newer version carries keys this one has never heard of, and refusing the
-// patch would turn "one setting didn't come across" into "the restore failed".
-// Hence: the inventory is enforced at the boundary the operator types at, and
-// update() stays tolerant of keys it doesn't know.
+// Inside update() the same rule would be a data-loss bug. routes/backup.ts hands
+// a whole backup settings.json to update(), as do onboarding and every internal
+// caller. A backup written by a newer version carries keys this one has never
+// heard of, and refusing the patch would turn "one setting didn't come across"
+// into "the restore failed". So the inventory is enforced at the boundary the
+// operator types at, and update() stays tolerant of keys it doesn't know.
 import { ZodError, type ZodType } from 'zod';
 import {
   archivePatchSchema,
@@ -37,6 +34,7 @@ import {
   bedsPatchSchema,
   crossfadeDurationSchema,
   djHouseRulesSchema,
+  djSpeakClockSchema,
   festivalsSchema,
   jingleRatioSchema,
   likesPatchSchema,
@@ -119,6 +117,7 @@ export const SETTINGS_PATCH_KEYS = [
   'activeDjPromptId',
   'djPrompt',
   'djHouseRules',
+  'djSpeakClock',
   'personas',
   'shows',
   'schedule',
@@ -194,6 +193,7 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   stationDescription: stationDescriptionSchema,
   locale: localeSchema,
   djHouseRules: djHouseRulesSchema,
+  djSpeakClock: djSpeakClockSchema,
   search: searchPatchSchema,
   audio: audioPatchSchema,
   transitions: transitionsPatchSchema,

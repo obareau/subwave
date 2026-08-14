@@ -37,7 +37,7 @@ export type BlendTrack = loudness.LoudnessTrack & {
   gainDb?: number;
 };
 
-export interface BlendPlan {
+interface BlendPlan {
   clipPath: string;
   blendStartSec: number; // X's liq_cue_out
   inCueSec: number;      // Y's liq_cue_in

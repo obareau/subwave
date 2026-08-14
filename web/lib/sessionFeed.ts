@@ -12,6 +12,51 @@ import type { SessionTurn } from './types';
 
 export type TurnDisplayClass = 'voice' | 'dj' | 'track' | 'system';
 
+// A spoken turn is stamped with `meta.airedAt` — the LIVE-EDGE moment the words
+// left the mixer (issue #1382). This listener is `leadMs` behind that edge for
+// their whole connection (#1114), so a line shown the moment it appears in the
+// feed is shown before it is spoken *here*, which is exactly the complaint the
+// air-time stamp exists to answer. Same trick useStationFeed already plays with
+// the track switch: hold the line until its audio has actually arrived.
+//
+// Turns with no stamp (every non-voice turn, and any voice turn from a mixer
+// that couldn't measure its air time) are shown immediately — degrading to the
+// old behaviour, never to a line that is hidden forever.
+const MAX_HOLD_MS = 120_000;
+
+export function airedAtMs(turn: SessionTurn | null | undefined): number | null {
+  const raw = turn?.meta?.airedAt;
+  if (typeof raw !== 'string') return null;
+  const t = Date.parse(raw);
+  return Number.isFinite(t) ? t : null;
+}
+
+// Split a feed into what this listener can already have heard and when the next
+// held turn becomes audible (null = nothing pending). Pure, so the hook can run
+// it on both a poll and a timer without re-deriving the rule.
+export function splitAudibleTurns(
+  messages: SessionTurn[] | null | undefined,
+  leadMs: number,
+  nowMs: number,
+): { visible: SessionTurn[]; nextChangeMs: number | null } {
+  const visible: SessionTurn[] = [];
+  let nextChangeMs: number | null = null;
+  for (const turn of messages || []) {
+    const at = airedAtMs(turn);
+    const audibleAt = at == null ? null : at + Math.max(0, leadMs);
+    // A stamp far enough in the future to be implausible (a skewed station
+    // clock, an absurd buffer setting) is treated as unknown rather than
+    // withheld — the failure mode of this hold must always be "shown early",
+    // never "never shown".
+    if (audibleAt == null || audibleAt <= nowMs || audibleAt - nowMs > MAX_HOLD_MS) {
+      visible.push(turn);
+      continue;
+    }
+    if (nextChangeMs == null || audibleAt < nextChangeMs) nextChangeMs = audibleAt;
+  }
+  return { visible, nextChangeMs };
+}
+
 export function turnClass(turn: SessionTurn | null | undefined): TurnDisplayClass {
   switch (turn?.role) {
     case 'segment': return 'voice';

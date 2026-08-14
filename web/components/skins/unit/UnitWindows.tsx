@@ -15,6 +15,7 @@ import styles from './Unit.module.css';
 import { usePlayerFeed } from '@/components/player/PlayerCore';
 import { useStationClient } from '@/lib/stationClient';
 import { cn } from '@/lib/cn';
+import { REQUEST_NAME_MAX } from '@/lib/schemas.generated';
 import { normalizeStationLocale, zonedDayHour } from '@/lib/format';
 import type { SchedulePayload, ScheduleShow, StationLocale } from '@/lib/types';
 import { boothLines, contextLine, lastVoiceLine, stationIdentity, turnClock } from '../shared';
@@ -530,35 +531,51 @@ export function RequestWindow({
           ) : (
             <>
               <form
-                className="flex border border-white/18 bg-white/3"
+                className="flex flex-col border border-white/18 bg-white/3"
                 onSubmit={e => {
                   e.preventDefault();
                   void slip.send();
                 }}
               >
-                <input
-                  ref={inputRef}
-                  value={slip.text}
-                  onChange={e => slip.setText(e.target.value)}
-                  placeholder="type it here"
-                  aria-label="Your request"
-                  className={cn(
-                    styles.doto,
-                    'v3-focus min-w-0 flex-1 border-0 bg-transparent p-5 text-[clamp(18px,2vw,24px)] text-[#f4f0e6] uppercase outline-none placeholder:text-[#7c7669]',
-                  )}
-                />
-                <button
-                  type="submit"
-                  disabled={slip.sending || !slip.text.trim()}
-                  className={cn(
-                    'v3-focus flex flex-none items-center border-0 bg-[var(--accent)] px-[26px] font-mono text-[11px] font-bold tracking-[0.2em] text-[#0e0d0b] uppercase',
-                    slip.sending || !slip.text.trim()
-                      ? 'cursor-default opacity-60'
-                      : 'cursor-pointer hover:opacity-90',
-                  )}
-                >
-                  {slip.sending ? '…' : 'send'}
-                </button>
+                <div className="flex">
+                  <input
+                    ref={inputRef}
+                    value={slip.text}
+                    onChange={e => slip.setText(e.target.value)}
+                    placeholder="type it here"
+                    aria-label="Your request"
+                    className={cn(
+                      styles.doto,
+                      'v3-focus min-w-0 flex-1 border-0 bg-transparent p-5 text-[clamp(18px,2vw,24px)] text-[#f4f0e6] uppercase outline-none placeholder:text-[#7c7669]',
+                    )}
+                  />
+                  <button
+                    type="submit"
+                    disabled={slip.sending || !slip.text.trim()}
+                    className={cn(
+                      'v3-focus flex flex-none items-center border-0 bg-[var(--accent)] px-[26px] font-mono text-[11px] font-bold tracking-[0.2em] text-[#0e0d0b] uppercase',
+                      slip.sending || !slip.text.trim()
+                        ? 'cursor-default opacity-60'
+                        : 'cursor-pointer hover:opacity-90',
+                    )}
+                  >
+                    {slip.sending ? '…' : 'send'}
+                  </button>
+                </div>
+                {/* A second, quieter row inside the same chassis — signing is
+                    optional, and a signed request gets the name read on air
+                    (#1347). Inside the form, so Enter still sends from here. */}
+                <div className="flex items-center gap-3 border-t border-white/18 px-5 py-3">
+                  <span className={cn(CAPTION, 'flex-none select-none')}>from</span>
+                  <input
+                    value={slip.name}
+                    onChange={e => slip.setName(e.target.value)}
+                    placeholder="your name (optional)"
+                    aria-label="Your name (optional)"
+                    maxLength={REQUEST_NAME_MAX}
+                    className="v3-focus min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[12px] tracking-[0.08em] text-[#e6e0d4] outline-none placeholder:text-[#7c7669]"
+                  />
+                </div>
               </form>
               <div className="flex flex-col gap-3">
                 <div className={EYEBROW}>or send a feeling</div>

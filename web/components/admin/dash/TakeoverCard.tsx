@@ -131,10 +131,9 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setOverride(null);
-      // Back to a clean picker rather than re-showing the just-cancelled pick —
-      // the hand-rolled version left the old selection sitting in state too,
-      // but with a single form now standing behind both branches of the
-      // ternary, that stale value would otherwise survive the remount.
+      // Back to a clean picker rather than re-showing the just-cancelled pick:
+      // one form stands behind both branches of the ternary, so a stale value
+      // would otherwise survive the remount.
       form.reset({ showId: '', minutes: 60 });
       notify.ok('Takeover cancelled — back to the weekly schedule.');
     } catch (e) {

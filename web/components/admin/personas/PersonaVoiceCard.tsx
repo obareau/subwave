@@ -3,21 +3,14 @@
 // tts/EngineVoiceFields, which the station-wide TTS fallback slot uses too.
 //
 // `tts` is bound as ONE `useController` over the whole {engine, cloudProvider,
-// voice, gainDb, speed} object, not a `SelectField` per subfield — two
-// independent reasons, not just a style choice. (1) EngineVoiceFields already
-// does real cross-field work on change (switching engine resets `voice` to a
-// value the NEW engine accepts, e.g. a Kokoro id after Chatterbox), which
-// needs one callback over the whole slot the way `SelectField`'s hardcoded
-// `onValueChange={field.onChange}` cannot express — the same class of
-// deviation Task 6 established for BlockRulesCard's "Match on" field. (2) The
-// controller's own fieldErrors for this block are ALSO block-level: traced
-// `ttsVoiceSlotSchema` (controller/src/schemas/persona.ts) — it's a single
-// `.transform()` over the whole slot and every `ctx.addIssue` inside it omits
-// an explicit `.path()`, so a bad voice for a bad engine/provider combination
-// comes back keyed at `personas.<i>.tts`, never `.tts.voice` — there is no
-// deeper field to attach a per-input error to even in principle. Binding one
-// controller at exactly that path is what lets `field.error` — and the
-// operator-visible message below — actually catch it.
+// voice, gainDb, speed} object rather than a SelectField per subfield, for two
+// independent reasons. (1) EngineVoiceFields does real cross-field work on
+// change — switching engine resets `voice` to one the new engine accepts —
+// which needs a callback over the whole slot, not SelectField's hardcoded
+// `onValueChange={field.onChange}`. (2) The controller's fieldErrors here are
+// block-level too: `ttsVoiceSlotSchema` is one `.transform()` over the slot and
+// its issues carry no explicit path, so a bad engine/voice combination comes
+// back keyed at `personas.<i>.tts` and never at `.tts.voice`.
 import { useId } from 'react';
 import { useController, type Control } from 'react-hook-form';
 import type { Persona, PersonasFormValues, SettingsResponse } from './types';

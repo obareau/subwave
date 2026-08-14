@@ -175,11 +175,10 @@ export function trackIdsByGenreDecade(): Map<string, string[]> {
 
 // ---------------------------------------------------------------------------
 // Per-genre embedding centroids — the mean text-embedding vector across every
-// tagged+embedded track in each genre. Powers the genre-cloud 2D projection
-// (music/genre-cloud.ts): semantically similar genres land near each other.
-// One streaming SQL join so a multi-thousand-track library stays light on
-// memory — vectors are accumulated into per-genre running sums, never all held
-// at once.
+// tagged+embedded track in each genre, so semantically similar genres land near
+// each other. Consumed by music/genre-suggest.ts. One streaming SQL join keeps a
+// multi-thousand-track library light on memory — vectors accumulate into
+// per-genre running sums rather than all being held at once.
 // ---------------------------------------------------------------------------
 export function genreCentroids(): Array<{ genre: string; count: number; centroid: Float32Array }> {
   // json_each over the multi-genre array: a Hip-Hop + Rap track contributes

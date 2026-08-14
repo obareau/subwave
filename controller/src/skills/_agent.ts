@@ -1,28 +1,23 @@
-// Segment-director agent — the agentic replacement for the registry's old
-// filter-and-random-pick skills tick.
+// Segment-director agent.
 //
-// The 5-minute cron (scheduler.skillsTick) calls agenticTick(). Instead of
-// mechanically picking an eligible skill, it hands a focused snapshot of the
-// moment (what's on air, what the DJ has already said recently) plus a set of
-// real-world data tools (llm/segment-tools.js) to a tool-loop agent and asks
-// one question: "is there anything worth saying between tracks right now —
-// and if so, what?" The agent may look at the weather, the headlines, or
-// artist news, then either writes ONE spoken line or stays silent.
+// The 5-minute cron (scheduler.skillsTick) calls agenticTick(), which hands a
+// tool-loop agent a snapshot of the moment (what's on air, what the DJ said
+// recently) plus real-world data tools (llm/segment-tools.js) and asks one
+// question: is there anything worth saying between tracks right now? The agent
+// may check the weather, headlines or artist news, then writes ONE spoken line
+// or stays silent.
 //
-// It is deliberately NOT given the full track-pick session history: that
-// history is mostly "pick the next song" chatter, which small models latch
-// onto and start reasoning about music instead of the segment decision. The
-// anti-repeat context it needs is queue.getDjRecap() — what actually aired.
+// It is deliberately NOT given the track-pick session history: that is mostly
+// "pick the next song" chatter, which small models latch onto and start
+// reasoning about music instead of the segment decision. The anti-repeat context
+// it needs is queue.getDjRecap() — what actually aired.
 //
-// Both the autonomous tick AND the operator override now run through this
-// agent. `agenticTick()` is the 5-minute cron; `runCapability()` is the
-// /dj/skill manual override — same tool-loop, but forced to one capability
-// with cooldowns bypassed. The capability registry is loaded by skills/loader.js
-// from the single load root state/skills/<slug>/ (the seven built-ins are seeded
-// there on first boot from src/skills/builtins/ templates; see skills/scaffold.js).
-// This module consumes it (allCapabilities) and backs the admin catalogue via
-// `skillCatalog()`. The skill modules left in this directory — news.js,
-// web-search.js, curiosity.js — are pure fetch helpers behind station-services.
+// `runCapability()` is the /dj/skill manual override: the same tool-loop forced
+// to one capability with cooldowns bypassed. The capability registry is loaded
+// by skills/loader.js from state/skills/<slug>/ (built-ins seeded on first boot
+// from src/skills/builtins/); this module consumes it via allCapabilities and
+// backs the admin catalogue via skillCatalog(). The skill modules left in this
+// directory are pure fetch helpers behind station-services.
 //
 // Guard rails the autonomous tick cannot talk its way past (the operator
 // override bypasses all of them — when the operator asks, they get a segment):
@@ -42,6 +37,7 @@ import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase } from '../
 import { buildSegmentTools, fetchSegmentData } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
+import { skillEligible } from './eligibility.js';
 import * as sfx from '../broadcast/sfx.js';
 
 // The capability registry now lives entirely in skills/loader.js, which loads
@@ -92,18 +88,17 @@ function unionContextFields(caps): string[] {
   return [...out];
 }
 
-// Schema factories, resolved per run (defineAgent's function-schema form): the
-// spoken-line length follows the on-air persona's scriptLength via
-// lengthPhrase('segment'), so an 'extended' storytelling persona stretches its
-// segments the way it already stretches intros and links. A hard-coded
-// description here previously pinned every persona to one-liners.
-// Field order is deliberate: models generate JSON in property order, so
-// `reason` comes FIRST (decide and justify before writing the line — a free
-// mini chain-of-thought), then the explicit `air` boolean, then the segment.
-// The boolean exists because a nullable nested object alone proved hard for
-// small models to encode "stay silent" with — they emitted bare top-level
-// `null` or prose instead (see isBareNullSilent / isSilentFailure below);
-// `air: false` gives them an unambiguous silence token to reach for.
+// Schema factories, resolved per run (defineAgent's function-schema form) so the
+// spoken-line length can follow the on-air persona's scriptLength — a hard-coded
+// description here pinned every persona to one-liners.
+//
+// Field order is deliberate: models generate JSON in property order, so `reason`
+// comes FIRST (decide and justify before writing the line — a free mini
+// chain-of-thought), then the `air` boolean, then the segment. The boolean
+// exists because small models struggled to encode "stay silent" through a
+// nullable nested object alone, emitting bare top-level `null` or prose instead
+// (isBareNullSilent / isSilentFailure below); `air: false` gives them an
+// unambiguous silence token.
 function segmentSchema() {
   return modelTolerant(z.object({
     reason: z.string().describe('one short internal sentence on why this segment (or why silent) — never shown to the listener; write this BEFORE deciding the segment'),
@@ -209,12 +204,19 @@ function availableCapabilities(ctx, now: Date) {
   const persona = settings.getEffectivePersona(now);
   const out: ReturnType<typeof allCapabilities> = [];
   for (const cap of allCapabilities()) {
-    // Seeded built-ins are enabled unless explicitly turned off; operator skills
-    // are DISCOVERED-BUT-DISABLED — they must be explicitly enabled before they
-    // can air, so dropping a folder never auto-airs unreviewed content/code.
-    const isEnabled = cap.seeded ? enabled[cap.skill] !== false : enabled[cap.skill] === true;
-    if (!isEnabled) continue;
-    if (persona?.skills && !persona.skills.includes(cap.skill)) continue;
+    // Enabled + owned-by-the-on-air-persona. Both rules live in
+    // skills/eligibility.ts because the cron timer owes the same two answers
+    // and reaches runCapability() without passing through here.
+    if (!skillEligible({
+      seeded: cap.seeded,
+      skill: cap.skill,
+      enabled,
+      personaSkills: persona?.skills,
+    }).allowed) continue;
+    // cronOnly withholds the skill from the autonomous director entirely — it
+    // fires only when its dedicated cron task calls runCapability() directly
+    // (scheduler.ts syncSkillCrons), which bypasses this function altogether.
+    if (cap.cronOnly) continue;
     if (now.getTime() - (lastFired.get(cap.kind) || 0) < cap.cooldownMs) continue;
     // Window gating: custom skills opt into commute-hours-only firing via
     // `window: commute` in their SKILL.md frontmatter. (No built-in is
@@ -327,21 +329,17 @@ export function buildSituation(ctx, { forced = false, contextFields, recentCurio
 // ---------------------------------------------------------------------------
 // Simple (non-agentic) director — the pool-mode counterpart of directorAgent.
 //
-// When the operator has set the picker to "candidate pool"
-// (settings.llm.pickerAgent off — the admin UI's signal that the model can't
-// be trusted with multi-step tool loops), the segment path must not be the
-// one place still running a tool-loop agent: on small local models the
-// director mostly degrades to silence (isSilentFailure) or done-tool stalls
-// (issue #555), so segments are effectively broken for those operators.
+// `settings.llm.pickerAgent` off is the operator's signal that the model can't
+// be trusted with multi-step tool loops, so the segment path must not be the one
+// place still running one: on small local models the director degrades to
+// silence (isSilentFailure) or done-tool stalls (#555).
 //
-// This path replaces the agent's judgment with code + ONE structured call:
-// code picks the capability (weather-on-change first, then least-recently
-// aired), calls its data tool directly (fetchSegmentData — the same tool.mjs
-// the agent would have called, minus the model-steered inputs), inlines the
-// result into the prompt, and asks for the same {air, text, sfx} decision the
-// agent schema carries — the model still gets to choose silence when the data
-// is dull. Everything downstream (announce, cooldowns, curiosity ledger, sfx
-// validation) is shared with the agent path in agenticTick.
+// This path replaces the agent's judgment with code + ONE structured call: code
+// picks the capability (weather-on-change first, then least-recently aired),
+// calls its data tool directly (fetchSegmentData — the same tool.mjs, minus the
+// model-steered inputs), inlines the result, and asks for the same
+// {air, text, sfx} decision, so the model still gets to choose silence when the
+// data is dull. Everything downstream is shared with agenticTick.
 // ---------------------------------------------------------------------------
 
 // Which capability the simple path airs this tick. Weather wins when the
@@ -715,8 +713,7 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
   return text;
 }
 
-// Skill metadata for the admin command-center UI — derived straight from
-// CAPABILITIES. Previously lived in the now-deleted skills/_registry.js.
+// Skill metadata for the admin command-center UI, derived from CAPABILITIES.
 export function skillCatalog() {
   const s = settings.get();
   const enabledMap = s.skills?.enabled || {};

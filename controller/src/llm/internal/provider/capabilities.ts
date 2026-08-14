@@ -7,15 +7,13 @@
 // Pure: every function here is a function of the passed `cfg` only — no settings
 // or SDK imports — so the mappings are unit-pinned (controller/scripts/llm-pure.test.ts).
 //
-// Thinking control rides AI SDK 7's top-level `reasoning` call option
-// ('none'|'minimal'|'medium'|…), which each first-party provider — and
-// ai-sdk-ollama v4 — translates to its native knob per call. That replaced the
-// old per-provider providerOptions fragments (thinkingBlock): the SDK NEVER
-// merges the two, and reasoning-related providerOptions silently win over the
-// top-level param, so the fragments had to go entirely when this migrated.
-// Providers with no per-call channel (OpenRouter, and the body-injection
-// openai-compatible/locca path) return undefined here and keep their
-// construction-time wiring in registry.ts.
+// Thinking control rides AI SDK 7's top-level `reasoning` call option, which
+// each first-party provider — and ai-sdk-ollama v4 — translates to its native
+// knob per call. Never mix it with providerOptions: the SDK does NOT merge the
+// two, and reasoning-related providerOptions silently win. Providers with no
+// per-call channel (OpenRouter, and the body-injection openai-compatible/locca
+// path) return undefined here and keep their construction-time wiring in
+// registry.ts.
 
 interface ThinkingArgs {
   modelId: string;
@@ -60,22 +58,21 @@ export interface ProviderCapabilities {
   // forceNoThink opt). Everyone else suppresses per-call and leaves this false.
   reasoningConstructionOnly?: boolean;
   // How many FREE discovery steps the tool-loop agent gets before `done` is
-  // forced (gatedDiscoveryPrepareStep in strategy/agent.ts). Absent → DISCOVERY_STEPS_MIN.
+  // forced (gatedDiscoveryPrepareStep in strategy/agent.ts). Absent →
+  // DISCOVERY_STEPS_MIN.
   //
-  // This is the loop-shape knob, and it is per-provider for the same reason
-  // objectStrategy is: the ceiling that keeps a local GGUF model compliant is
-  // not the ceiling a frontier model needs. The forced-tool providers emit
-  // schema-valid objects WITHOUT exploring and ignore `toolChoice` when several
-  // tools are visible, so they keep the single cornered discovery call that was
-  // the global value. Native-strategy providers honour tool_choice and reason
-  // across results, so they get room to seed, refine, and cross-check.
+  // Per-provider for the same reason objectStrategy is: the ceiling that keeps a
+  // local GGUF model compliant is not the one a frontier model needs. Forced-tool
+  // providers emit schema-valid objects WITHOUT exploring and ignore
+  // `toolChoice` with several tools visible, so they keep a single cornered
+  // discovery call; native-strategy providers get room to seed, refine and
+  // cross-check.
   //
-  // Widening this does NOT widen the number of `done` attempts: the effective
-  // step cap is derived as `discoverySteps + 1`, so the main run always makes
-  // exactly ONE forced-done attempt before handing off to agent.ts's recovery
-  // cascade — which is the invariant the GLM finding in dj-agent/agents.ts
-  // depends on (extra done steps grow an "I already declined" trail and make
-  // compliance worse, so the rescue is recovery, never more steps).
+  // Widening this does NOT widen the number of `done` attempts — the step cap is
+  // derived as `discoverySteps + 1`, so the main run always makes exactly ONE
+  // forced-done attempt before handing off to agent.ts's recovery cascade. Extra
+  // done steps grow an "I already declined" trail and make compliance worse, so
+  // the rescue is recovery, never more steps (see dj-agent/agents.ts).
   discoverySteps?: number;
 }
 

@@ -2,29 +2,26 @@
 // track/album/artist granularity, persisted to <stateDir>/blocklist.json
 // (sibling to schedule.json; deliberately NOT in library.db so Library →
 // Reset/Reconcile can't wipe it). Enforced through isBlocked() at the subsonic
-// reject chokepoint, the library-db song sources, and the final queue.push()
-// gate — see docs/superpowers/specs/2026-07-12-never-play-blocklist-design.md.
+// reject chokepoint, the library-db song sources, and the final queue.push() gate.
 //
 // matchOf() is the one matcher; isBlocked() is a predicate over it. The admin
 // listing surfaces use annotate() instead of rejectBlocked(), so the operator
-// can SEE a blocked track (and which entry blocks it) rather than wondering
-// why one of two identical songs never airs — see
-// docs/superpowers/specs/2026-08-01-never-play-visibility-design.md.
+// can SEE a blocked track and which entry blocks it, rather than wondering why
+// one of two identical songs never airs.
 //
 // Matching is id-first (song.id / albumId / artistId), with a normalised-name
 // fallback for album/artist entries because library-db rows carry only name
 // strings — without it an artist block would leak through the mood/vector
 // sources. Track entries never name-match (covers/re-recordings share titles).
 //
-// RULE entries (#1300 FR 1, closes #752) live beside the id entries in the
-// same file: attribute/tag predicates ("anything tagged christmas"), optional
-// seasonal allow-window, optional show scope — see
-// docs/superpowers/specs/2026-08-05-exclusion-rules-design.md. Pure matching
-// lives in blocklist-rules.ts; this module owns state, persistence, and the
-// evaluation context (station-zone clock, active show, playlist member sets).
-// Because every song source already flows through rejectBlocked/isBlocked,
-// rules are enforced at every chokepoint the id entries cover, with zero new
-// enforcement sites. hitOf() is the one entries-then-rules answer.
+// RULE entries (#1300 FR 1, closes #752) live beside the id entries in the same
+// file: attribute/tag predicates ("anything tagged christmas"), an optional
+// seasonal allow-window, an optional show scope. Pure matching lives in
+// blocklist-rules.ts; this module owns state, persistence, and the evaluation
+// context (station-zone clock, active show, playlist member sets). Since every
+// song source already flows through rejectBlocked/isBlocked, rules are enforced
+// at every chokepoint the id entries cover with zero new enforcement sites.
+// hitOf() is the one entries-then-rules answer.
 import { config } from '../config.js';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -146,12 +143,6 @@ function activeCompiledRules(): CompiledRule[] {
   ruleCtxCache = { at: now, active };
   maybeRefreshPlaylistMembers();
   return active;
-}
-
-// Test seam + rule-mutation hook: drop the memo so the next evaluation
-// re-reads the clock and show.
-export function invalidateRuleContext() {
-  ruleCtxCache = null;
 }
 
 // ── Playlist member sets (field: 'playlist' rules) ──────────────────────────

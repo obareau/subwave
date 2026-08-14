@@ -1,12 +1,10 @@
 // Pure helpers for multi-station profiles — no fs, no config import (config.ts
 // depends on stations/resolve.ts, which depends on this file; keep it leaf-level).
-// Spec: docs/superpowers/specs/2026-07-24-multi-station-profiles-design.md
-
-// STATION_ID_RE, MAX_STATIONS and slugifyStationName now live in
-// schemas/station.ts so the admin form validates against them directly (the
-// slug preview was a hand-copied second implementation, and it had drifted).
-// Re-exported here because this is the import path every caller already uses,
-// and schemas/station.ts imports only zod, so the leaf-level rule above holds.
+//
+// STATION_ID_RE, MAX_STATIONS and slugifyStationName live in schemas/station.ts
+// so the admin form validates against them directly; they are re-exported here
+// because this is the import path every caller already uses, and that module
+// imports only zod, so the leaf-level rule above holds.
 import { STATION_ID_RE } from '../schemas/station.js';
 
 export {

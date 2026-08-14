@@ -298,24 +298,19 @@ export function resolveIndexTextMode(
   return preferredTextMode();
 }
 
-// What text format the index as a whole should be RECORDED as, given what's
-// already in it (#1246). Mirrors resolveIndexTextMode above, and answers a
-// question with the same shape: the meta row describes the vectors that exist,
-// not the recipe the current build happens to use.
+// What text format the index should be RECORDED as, given what's already in it
+// (#1246). The meta row describes the vectors that EXIST, not the recipe this
+// build happens to use — same shape as resolveIndexTextMode above.
 //
-// A normal forward run embeds only tracks that have no vector yet, so an
-// existing index becomes a MIX — old rows at the stored format, new rows at the
-// current one. Recording the current version there would erase the only signal
-// that a re-embed is worth running, so the stored (older) format wins and the
-// advisory stays up until a reseed genuinely rebuilds everything. An empty
-// index has nothing to be inconsistent with, so it adopts the current format —
-// which is why a fresh install never sees the advisory at all.
+// A forward run embeds only vectorless tracks, so the index becomes a MIX. The
+// stored (older) format therefore wins: recording the current one would erase
+// the only signal that a re-embed is worth running. An empty index has nothing
+// to be inconsistent with and adopts the current format, which is why a fresh
+// install never sees the advisory.
 //
-// A stored format NEWER than this build (a downgraded controller) clamps to
-// this build's version for the same mixed-index reason: this run embeds any
-// new vectors at ITS shape, so the oldest shape now present is its own — and
-// recording it means the newer controller, once restored, sees the mix and
-// raises the advisory again.
+// A stored format NEWER than this build (a downgraded controller) clamps down
+// for the same reason — this run embeds at ITS shape, so the oldest shape now
+// present is its own, and the newer controller sees the mix once restored.
 //
 // `reseed` is the one case that rewrites every vector, so it always adopts.
 export function resolveIndexTextFormat(
@@ -373,7 +368,7 @@ export async function embedQueryText(
 // instead of a Node stack trace. Issue #174.
 // ---------------------------------------------------------------------------
 
-export type ProbeCode =
+type ProbeCode =
   | 'ok'
   | 'disabled'
   | 'not_found'           // Ollama 404 — model isn't pulled

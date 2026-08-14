@@ -60,6 +60,7 @@ import {
   walkNavidrome,
 } from './tag-library/flags.js';
 import { llmTagInBatches, resolveTagConsumers } from './tag-library/tag.js';
+import { runPropagatedEnergyPass } from './propagated-energy.js';
 
 
 // Close (and TRUNCATE-checkpoint) the library DB on every exit path — this CLI
@@ -178,18 +179,19 @@ async function main() {
       ? embedCfg.seedCount
       : null;
 
-  // Shared vote plumbing for phase 3, the phase-4 re-propagation rounds and
-  // the post-run self-check: KNN → neighbour-tag lookup → similarity-weighted
-  // vote. Same-album+artist neighbours vote at half weight — a track's text
-  // embedding is dominated by artist/album, so its KNN list is mostly its own
-  // album mates; at full weight one mistagged seed swept its whole album, and
-  // cross-album corroboration never got a say (the same-album echo chamber).
+  // Shared vote plumbing for phase 3, the phase-4 re-propagation rounds and the
+  // post-run self-check: KNN → neighbour-tag lookup → similarity-weighted vote.
   //
-  // When the track has a CLAP "sounds-like" vector, audio-KNN neighbours are
-  // fused into the list at audioFusionWeight before the vote — sound is the
-  // stronger mood signal for instrumentals / thin-metadata tracks, and CLAP
-  // doesn't cluster by album. knnAudioById returns [] for un-analysed tracks,
-  // so fusion degrades to text-only per track, not per run.
+  // Same-album+artist neighbours vote at HALF weight: a text embedding is
+  // dominated by artist/album, so a track's KNN list is mostly its own album
+  // mates, and at full weight one mistagged seed swept the whole album while
+  // cross-album corroboration never got a say.
+  //
+  // With a CLAP "sounds-like" vector, audio-KNN neighbours fuse in at
+  // audioFusionWeight before the vote — sound is the stronger mood signal for
+  // instrumentals and thin-metadata tracks, and CLAP doesn't cluster by album.
+  // knnAudioById returns [] for un-analysed tracks, so fusion degrades to
+  // text-only per track, not per run.
   const SAME_ALBUM_WEIGHT = 0.5;
   // Same artist, DIFFERENT album — damped too. On a label-only text index (no
   // Last.fm key, no lyrics, no CLAP) "nearest neighbours" is mostly the
@@ -563,6 +565,19 @@ async function main() {
       console.log(`[tag] propagation self-check failed: ${err?.message || err}`);
     }
     lap('eval');
+
+    // ---- Audio-derived energy over the rows phases 3-4 just propagated -----
+    // A propagated energy is inherited from neighbours, not judged from this
+    // track; where the analyzer's stored mood cosines are decisive about the
+    // track's arousal, they overrule it (#1362). Runs here rather than inside
+    // the propagation loop so there is ONE correction path shared with the
+    // analysis pass — a library can gain audio scores long after it was
+    // tagged, and that case has to work too. Best-effort: never fails the run.
+    try {
+      runPropagatedEnergyPass();
+    } catch (err: any) {
+      console.log(`[tag] audio energy pass failed: ${err?.message || err}`);
+    }
   } else if (flags.skipTag) {
     console.log('[tag] --skip-tag: skipping embed + mood tagging (phases 1-4)');
   } // end forward "Tag moods" step (plan.forwardTag)

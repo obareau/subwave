@@ -3,10 +3,8 @@
 // 0=Sun..6=Sat). Everything the screen renders derives from that one grid through
 // the block helpers here, so the board and the listing can never disagree.
 //
-// The grid's DIMENSIONS come from the shared schema
-// (controller/src/schemas/schedule.ts, mirrored into lib/schemas.generated.ts),
-// which is also what validates every save — this file used to spell 7 and 24 as
-// bare literals in a dozen places.
+// The grid's DIMENSIONS come from the mirrored schedule schema, which is also
+// what validates every save.
 import {
   SCHEDULE_DAYS,
   SCHEDULE_HOURS,

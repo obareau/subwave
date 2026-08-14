@@ -79,11 +79,17 @@ const PAYLOADS: PayloadDoc[] = [
   },
   {
     event: 'dj.link',
-    blurb: 'A between-track auto-DJ link (the light-ducked voice). The chattiest stream, so most relays filter this one out.',
+    blurb: 'A between-track auto-DJ link (the light-ducked voice). The chattiest stream, so most relays filter this one out. Fires when the words reach the stream, not when the clip was handed to the mixer.',
     json: `{
   "event": "dj.link",
   "t": "2026-06-02T19:07:55.020Z",
-  "text": "That was Massive Attack — staying in the deep end for this next one."
+  "text": "That was Massive Attack — staying in the deep end for this next one.",
+  "kind": "link",
+  "voiceId": "9f3a7c21b408",
+  "channel": "intro",
+  "durationMs": 6200,
+  "airedAt": "2026-06-02T19:07:54.980Z",
+  "estimated": false
 }`,
   },
   {
@@ -93,7 +99,61 @@ const PAYLOADS: PayloadDoc[] = [
   "event": "dj.say",
   "t": "2026-06-02T20:00:01.300Z",
   "text": "You're locked into SUB/WAVE — eight o'clock.",
-  "kind": "hourly-check"
+  "kind": "hourly-check",
+  "voiceId": "1c88de40aa72",
+  "channel": "say",
+  "durationMs": 4100,
+  "airedAt": "2026-06-02T20:00:01.260Z",
+  "estimated": false
+}`,
+  },
+  {
+    event: 'voice.queued',
+    blurb: 'Fired when the station commits to a spoken clip — before the queue wait, the mixer poll and the lead-in, so it lands ahead of the words. For consumers that must PREPARE for speech (hand back from a live call, close a reply gate, start a duck ramp) rather than react once it has started. `estimatedAirInMs` is a forecast, never a measurement, which is what `estimated: true` says here — `voice.start` is the truth, and the same `voiceId` pairs them. The head start is however long the wait happens to be: behind another segment it is many seconds, on an idle chain about a second.',
+    json: `{
+  "event": "voice.queued",
+  "t": "2026-06-02T19:07:53.700Z",
+  "voiceId": "9f3a7c21b408",
+  "kind": "link",
+  "channel": "intro",
+  "text": "That was Massive Attack — staying in the deep end for this next one.",
+  "durationMs": 6200,
+  "estimatedAirInMs": 1300,
+  "expectedAirAt": "2026-06-02T19:07:55.000Z",
+  "estimated": true,
+  "streamBufferSeconds": 22
+}`,
+  },
+  {
+    event: 'voice.start',
+    blurb: 'The same speech as dj.say/dj.link, but as a window rather than a ping — subscribe to this pair when you need to know exactly WHEN the DJ is talking (ducking a companion app, syncing an overlay, honest timestamps in a chat relay). `airedAt` is the live edge; every listener is `streamBufferSeconds` behind it for their whole connection, so sync to `airedAt + streamBufferSeconds` for what people actually hear. `durationMs` is the clip’s measured length. `estimated: true` means the air time could not be measured (a mixer older than this feature) and the timestamps are omitted rather than guessed. Note `airedAt` is the first word — the ducking starts up to a second earlier, under the silent lead-in the mixer pushes ahead of every clip.',
+    json: `{
+  "event": "voice.start",
+  "t": "2026-06-02T19:07:55.020Z",
+  "voiceId": "9f3a7c21b408",
+  "kind": "link",
+  "channel": "intro",
+  "text": "That was Massive Attack — staying in the deep end for this next one.",
+  "durationMs": 6200,
+  "airedAt": "2026-06-02T19:07:54.980Z",
+  "endsAt": "2026-06-02T19:08:01.180Z",
+  "estimated": false,
+  "streamBufferSeconds": 22
+}`,
+  },
+  {
+    event: 'voice.end',
+    blurb: 'The close of the window opened by voice.start — same `voiceId`, fired when the clip finishes. Derived from the measured duration, so it needs no second look at the mixer.',
+    json: `{
+  "event": "voice.end",
+  "t": "2026-06-02T19:08:01.190Z",
+  "voiceId": "9f3a7c21b408",
+  "kind": "link",
+  "channel": "intro",
+  "durationMs": 6200,
+  "airedAt": "2026-06-02T19:07:54.980Z",
+  "endedAt": "2026-06-02T19:08:01.180Z",
+  "estimated": false
 }`,
   },
   {

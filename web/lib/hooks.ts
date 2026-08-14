@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useInterval } from 'usehooks-ts';
 import { isIOSDevice } from './platform';
 
 // SSR-safe iOS flag: false on the server and the first client render (so the
@@ -12,13 +13,13 @@ export function useIsIOS(): boolean {
   return ios;
 }
 
+// Null until mount, for the same SSR reason as useIsIOS: the server has no
+// clock the client would agree with. The first tick lands on mount, then
+// useInterval owns the cadence (and its own cleanup).
 export function useClock(): Date | null {
   const [t, setT] = useState<Date | null>(null);
-  useEffect(() => {
-    setT(new Date());
-    const id = setInterval(() => setT(new Date()), 1000);
-    return () => clearInterval(id);
-  }, []);
+  useEffect(() => { setT(new Date()); }, []);
+  useInterval(() => setT(new Date()), 1000);
   return t;
 }
 

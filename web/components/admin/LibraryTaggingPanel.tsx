@@ -385,17 +385,12 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const audioStatus = p.coverage?.audioStatus;
   const vocalStatus = p.coverage?.vocalStatus;
 
-  // How you actually GET the heavy analyzer depends on which backend is running,
-  // and the two answers don't overlap. 'local' is the in-process venv — the
-  // all-in-one image, or a dev ANALYZE_PYTHON venv — where ANALYZER_HEAVY is a
-  // docker-compose variable with no analyzer service to select, so setting it
-  // does precisely nothing (#1300 bug 9). This panel telling AIO operators to
-  // set it is a large part of why they set it, saw no change, and filed the
-  // feature as broken. Mirrors the doctor's split in doctor/checks-station.ts.
-  //
-  // Unknown backend (older controller, or still probing) keeps the compose
-  // wording: it's the majority install and the AIO advice would be actively
-  // wrong there, where this one is merely incomplete.
+  // How you GET the heavy analyzer depends on the backend, and the two answers
+  // don't overlap. On 'local' (the AIO image, or a dev ANALYZE_PYTHON venv)
+  // ANALYZER_HEAVY does nothing — it picks a compose service that isn't running
+  // (#1300 bug 9). An unknown backend keeps the compose wording: that's the
+  // majority install, where the AIO advice would be actively wrong. Mirrors the
+  // doctor's split in doctor/checks-station.ts.
   const analyzerIsLocal = p.coverage?.analysisBackend === 'local';
   const heavyUpgradeShort = analyzerIsLocal
     ? 'Needs the heavy build (subwave-aio-heavy, or heavy Python deps on a dev venv).'
@@ -422,17 +417,12 @@ export default function TaggingPanel(p: TaggingPanelProps) {
     </>
   );
 
-  // A model that IS installed and failed to load. Distinct from 'pending-heavy'
-  // on purpose: the advice there ("get the heavy build") is advice to do the
-  // thing already done, which is how this went unexplained. Audio first —
-  // one banner is enough, and CLAP is the dimension people enable.
-  // The latch is sticky by design, so the retry sentence is the operator's only
-  // exit — and the process to restart isn't the same on every install. A
-  // sidecar remembers the failure in the analyzer container; an AIO or local
-  // venv has no analyzer container at all (the worker is a child of the
-  // controller, and the latch is controller state), so pointing there is the
-  // same dead end as telling a heavy-image operator to switch to the heavy
-  // image. Mirrors retryHint() in controller/src/music/analyze-capability.ts.
+  // For a model that IS installed and failed to load — distinct from
+  // 'pending-heavy', whose "get the heavy build" advice would be advice to do
+  // the thing already done. The latch is sticky, so a restart is the operator's
+  // only exit, and what to restart differs per install: a sidecar holds the
+  // failure in the analyzer container, an AIO/local venv has no analyzer
+  // container at all. Mirrors retryHint() in music/analyze-capability.ts.
   const restartHint =
     p.coverage?.analysisBackend === 'sidecar'
       ? 'restart the analyzer'

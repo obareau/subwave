@@ -91,7 +91,7 @@ export function probeDurationSec(filePath: string): Promise<number | null> {
   });
 }
 
-export type TranscodeFormat = 'wav' | 'mp3';
+type TranscodeFormat = 'wav' | 'mp3';
 
 // ffmpeg's atempo filter only accepts 0.5–2.0 per instance; factors outside
 // that range are reached by chaining instances (e.g. 4.0 → atempo=2.0,atempo=2.0).

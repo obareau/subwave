@@ -264,12 +264,21 @@ export default function SchedulePanel() {
     setSchedule(setRange(schedule, days, line.start, line.end, value));
   };
 
+  // Booking was the one write on this board that confirmed nothing. Filling a
+  // day, filling an hour, resizing and removing all toast; the single most
+  // common action did not, so the brush — the only booking path a finger or a
+  // keyboard has — landed silently. Sonner's toast is also the live region, so
+  // that silence was a screen reader hearing nothing at all for the write it is
+  // most likely to make. Same sentence shape as its siblings, deliberately.
   const dropShow = (b: Block, showId: string) => {
     if (!schedule || !showById(showId)) return;
     setSchedule(setRange(schedule, [b.day], b.start, b.start + b.span, showId));
     setLine({ day: b.day, start: b.start, end: b.start + b.span });
     setLineDays([b.day]);
     setLineShowId(showId);
+    notify.ok(
+      `“${showById(showId)?.name ?? 'show'}” now ${dayName(b.day)} ${hhmm(b.start)} – ${hhmm(b.start + b.span)} — unsaved until you save the week.`,
+    );
   };
 
   // Vacated hours fall silent; gained ones overwrite whatever was there, so a run

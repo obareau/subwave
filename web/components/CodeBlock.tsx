@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useCopyToClipboard } from 'usehooks-ts';
 
 interface CodeBlockProps {
   children: string;
@@ -9,14 +10,13 @@ interface CodeBlockProps {
 
 export default function CodeBlock({ children, lang }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
+  const [, copyToClipboard] = useCopyToClipboard();
   const text = String(children).trim();
 
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
-    } catch {}
+    if (!(await copyToClipboard(text))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1400);
   };
 
   const label = (lang || 'sh').toUpperCase();

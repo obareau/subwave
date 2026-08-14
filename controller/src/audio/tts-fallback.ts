@@ -24,6 +24,33 @@ export interface RescueSlot {
   personaTts: { engine: string; voice: string; cloudProvider: string } | null;
 }
 
+export interface TtsTarget {
+  engine: string;
+  cloudProvider?: string | null;
+}
+
+function slotTarget(slot: RescueSlot): TtsTarget {
+  return {
+    engine: slot.engine,
+    cloudProvider: slot.personaTts?.cloudProvider ?? null,
+  };
+}
+
+// Engines normally identify a render target on their own. Cloud is the one
+// exception: OpenAI-compatible/Fish, ElevenLabs, and OpenAI share the `cloud`
+// dispatcher but are independent failure domains. A failed provider must not
+// blacklist a healthy provider configured as the operator's rescue.
+export function sameTtsTarget(
+  left: TtsTarget,
+  right: TtsTarget,
+  defaultCloudProvider: string | null | undefined = null,
+): boolean {
+  if (left.engine !== right.engine) return false;
+  if (left.engine !== 'cloud') return true;
+  const provider = (target: TtsTarget) => target.cloudProvider || defaultCloudProvider || null;
+  return provider(left) === provider(right);
+}
+
 export interface TtsFallbackConfig {
   enabled?: boolean;
   engine?: string;
@@ -72,15 +99,25 @@ export function configuredSlot(
 // replaced by the engine's global default on exactly the station where both
 // were pointed at the same engine.
 //
+// Note dedup stays engine-keyed even though EXCLUSION is provider-keyed for
+// cloud (see sameTtsTarget). That asymmetry is deliberate: a failed provider
+// must not blacklist a healthy sibling, but once one cloud rung is in the
+// chain a second one buys another network round-trip on the same dispatcher
+// while the local floor is still waiting below. One cloud attempt per rescue.
+//
 // `usable` receives the slot's own cloud provider for the configured rung and
 // null for the hardcoded ones — the probe must agree with the call, and a
 // hardcoded cloud rung speaks with the station default's credentials.
 export function orderedFallbacks(
-  primary: string,
+  primary: string | TtsTarget,
   configured: RescueSlot | null,
   defaultEngine: string | null | undefined,
   usable: (engine: string, cloudProvider?: string | null) => boolean,
+  defaultCloudProvider: string | null | undefined = null,
 ): RescueSlot[] {
+  const primaryTarget: TtsTarget = typeof primary === 'string'
+    ? { engine: primary }
+    : primary;
   const candidates: RescueSlot[] = [
     ...(configured ? [configured] : []),
     ...[defaultEngine, 'piper', 'kokoro'].map((engine) => ({
@@ -91,7 +128,12 @@ export function orderedFallbacks(
   const out: RescueSlot[] = [];
   for (const slot of candidates) {
     const { engine } = slot;
-    if (!engine || engine === primary || out.some((s) => s.engine === engine)) continue;
+    const target = slotTarget(slot);
+    if (
+      !engine
+      || sameTtsTarget(target, primaryTarget, defaultCloudProvider)
+      || out.some((s) => s.engine === engine)
+    ) continue;
     if (!usable(engine, slot.personaTts?.cloudProvider ?? null)) continue;
     out.push(slot);
   }

@@ -12,8 +12,8 @@ import { SkeletonRows } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import { Terminal, TerminalContent } from '../ai-elements/terminal';
 import { BudgetMeter } from './debug/BudgetMeter';
+import { StateTree } from './debug/StateTree';
 import { DjContext } from './debug/DjContext';
-import { FilesTable } from './debug/FilesTable';
 import { LlmCalls } from './debug/LlmCalls';
 import { MountsTable } from './debug/MountsTable';
 import { SessionChat } from './debug/SessionChat';
@@ -211,22 +211,13 @@ export default function DebugPanel() {
             </Terminal>
           </Card>
 
-          <div className="stack-mobile grid grid-cols-2 gap-4">
-            <Card title="State dir" sub="/var/sub-wave">
-              <ScrollArea className="max-h-80">
-                <FilesTable files={data.stateFiles} />
-              </ScrollArea>
-            </Card>
-
-            <Card
-              title="DJ voice WAVs"
-              sub={`${Array.isArray(data.voiceFiles) ? data.voiceFiles.length : 0} files`}
-            >
-              <ScrollArea className="max-h-80">
-                <FilesTable files={data.voiceFiles} />
-              </ScrollArea>
-            </Card>
-          </div>
+          {/* One card, not two: voice/ is just a directory in the state dir, and
+              it is expanded by default so the DJ voice WAVs stay one glance away. */}
+          <Card title="State dir" sub="read-only · lazy">
+            <ScrollArea className="max-h-[480px]">
+              <StateTree />
+            </ScrollArea>
+          </Card>
 
           <div className="stack-mobile grid grid-cols-[1fr_1.2fr] gap-4">
             <Card title="Queue" sub="current served request">

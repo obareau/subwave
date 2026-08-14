@@ -5,17 +5,15 @@
 // from pickViaAgent (broadcast/dj-agent.ts) to the tools as a single
 // `PickerScope` object that is never destructured into fields along the way.
 //
-// That is the fix for a real defect class, not a style preference. The old shape
-// passed ~13 separate keys through an untyped args bag: pickViaAgent listed them,
-// agents.ts re-listed them in a destructure, then re-listed them AGAIN in the
-// buildPickerTools call. A lock named in one list and forgotten in another was
-// not a type error and not a crash — it fell through to a `null` default and that
-// whole dimension silently stopped being enforced on the agent path, while the
-// pool picker still honoured it. The two pick paths then disagreed about the same
-// show, which is precisely what music/show-filter.ts exists to prevent. It
-// happened for real on #1300 FR 13 (vocalLock resolved, passed, dropped by both
-// lists) and needed a source-scraping test to catch, because there was no runtime
-// seam between "passed" and "destructured".
+// That fixes a real defect class, not a style preference. The old shape passed
+// ~13 keys through an untyped args bag, listed three times over (pickViaAgent,
+// agents.ts's destructure, the buildPickerTools call). A lock named in one list
+// and forgotten in another was neither a type error nor a crash — it fell
+// through to a `null` default and that whole dimension silently stopped being
+// enforced on the agent path while the pool picker still honoured it, so the two
+// pick paths disagreed about the same show. That happened for real (#1300 FR 13,
+// vocalLock) and needed a source-scraping test to catch, because there was no
+// runtime seam between "passed" and "destructured".
 //
 // With one object there are no lists to disagree. Adding a lock means adding a
 // field here; nothing downstream re-names it. Do NOT reintroduce a per-field
@@ -263,23 +261,20 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
 
   // Seed-similarity with a cross-index rescue (#1247).
   //
-  // A seed tool that comes back empty is far more expensive than a slow one: on
-  // a forced-tool provider the harness allows exactly ONE discovery call
-  // (discoveryStepsFor, llm/internal/provider/capabilities.ts) and then pins
-  // activeTools to `done`, so an empty result leaves the model cornered with
-  // nothing to commit — and the only real, well-formed track id anywhere in its
-  // context is the on-air seed it was handed to pass in here. Both salvage
-  // stages in pickViaAgent then no-op on an empty `seen` (nearestId has no keys
-  // to match, repickFromSeen returns null on its first line), so the whole run
-  // is discarded to the pool picker.
+  // An empty seed tool is far more expensive than a slow one: on a forced-tool
+  // provider the harness allows exactly ONE discovery call and then pins
+  // activeTools to `done`, so an empty result corners the model with nothing to
+  // commit — and the only real, well-formed track id in its context is the
+  // on-air seed it was handed. Both salvage stages in pickViaAgent then no-op on
+  // an empty `seen`, so the whole run is discarded to the pool picker.
   //
-  // Both indexes answer the same question ("tracks like this seed"), and each is
-  // registered on whether it holds ANY vectors — never on whether it covers THIS
-  // seed. Coverage is routinely partial and uneven (CLAP analysis backfills over
-  // days; the text index needs the tagger to have reached the track), so the
-  // seed falling in the other index's gap is ordinary, not exceptional. When the
-  // index the model reached for doesn't cover the seed, answer from the other one
-  // and SAY so, rather than handing back a result that can only end the run.
+  // Both indexes answer the same question, and each is registered on whether it
+  // holds ANY vectors — never on whether it covers THIS seed. Coverage is
+  // routinely partial and uneven (CLAP backfills over days; the text index needs
+  // the tagger to have reached the track), so the seed falling in the other
+  // index's gap is ordinary. When the index the model reached for doesn't cover
+  // the seed, answer from the other one and SAY so, rather than handing back a
+  // result that can only end the run.
   //
   // Deliberately gated on the primary index returning NOTHING AT ALL (matched
   // === 0 — the seed has no vector there). A primary that DID match but whose

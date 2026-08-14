@@ -40,6 +40,7 @@ import {
   linkAirDate,
   linkClockAt,
   linkClockDrifted,
+  linkClockStampFor,
 } from '../src/broadcast/queue/pure.js';
 import { DRAIN_DEADLINE_SEC, HARD_DEADLINE_SEC } from '../src/broadcast/drain-policy.js';
 
@@ -133,6 +134,45 @@ function main() {
 
   test('drift is absolute — an early seam is just as wrong', () => {
     assert.equal(linkClockDrifted(NOW, NOW - 4 * 60_000), true);
+  });
+
+  console.log('\nwhat may be stamped in the first place (linkClockStampFor):');
+
+  // The stamp is the only thing standing between "a link written under a clock
+  // ban" and the drift guard above, which cannot tell the difference — it sees a
+  // number or it sees nothing. Both pick paths reach one enqueuePick from code
+  // 170 lines apart, so this is where they are made to agree.
+  const AIR = new Date(NOW + 4 * 60_000);
+
+  test('a clock the model was offered is stamped', () => {
+    assert.equal(linkClockStampFor(AIR, true), AIR);
+  });
+
+  test('a forecastable air moment the model was NOT offered is not stamped', () => {
+    // The station clock switch (djSpeakClock: false) and, on the agent path, a
+    // context carrying no clock at all. The link named no time, so it must not
+    // be droppable for naming the wrong one.
+    assert.equal(linkClockStampFor(AIR, false), null);
+  });
+
+  test('no forecast is never stamped, offered or not', () => {
+    for (const airAt of [null, undefined] as const) {
+      assert.equal(linkClockStampFor(airAt, true), null, `airAt=${String(airAt)}, offered`);
+      assert.equal(linkClockStampFor(airAt, false), null, `airAt=${String(airAt)}, banned`);
+    }
+  });
+
+  test('a withheld stamp survives the drift guard at any distance', () => {
+    // The property the two halves exist to produce, asserted end to end rather
+    // than as two independent facts: a banned clock cannot cost the link.
+    const banned = linkClockStampFor(AIR, false);
+    for (const aired of [NOW, NOW + 4 * 60_000, NOW + 40 * 60_000, NOW - 40 * 60_000]) {
+      assert.equal(linkClockDrifted(banned?.getTime() ?? null, aired), false, `aired=${aired}`);
+    }
+    // ...while the same seam DOES drop the link when a clock really was offered,
+    // so the case above can't pass by the guard being toothless.
+    const offered = linkClockStampFor(AIR, true);
+    assert.equal(linkClockDrifted(offered?.getTime() ?? null, NOW + 40 * 60_000), true);
   });
 
   console.log('\nident collision defers to the same drop (boundaryCarriesTrackVoice):');

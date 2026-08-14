@@ -12,14 +12,12 @@
 // settings/vocab.ts as ID_RE rather than living in a shared module.
 //
 // WHY A FACTORY. Unlike webhooks and stations, a show cannot be validated
-// against itself: `personaId` has to name a real persona, `moods` a live mood,
-// `themeId` an installed theme, and `maxTrackSeconds` clears a floor derived
-// from the station's crossfade. Those four travel as ONE ShowSchemaContext
-// value rather than as separate arguments — the shape the old four-parameter
-// validateShowsStrict(raw, personas, allowedThemeIds, moodNames) grew into, and
-// the same "one scope value, never unpacked" rule PickerScope follows. Both
-// sides can build it: the admin panel already fetches personas, moods, themes
-// and the station settings.
+// against itself: `personaId` must name a real persona, `moods` a live mood,
+// `themeId` an installed theme, and `maxTrackSeconds` clears a crossfade-derived
+// floor. Those four travel as ONE ShowSchemaContext value rather than separate
+// arguments — the same "one scope value, never unpacked" rule PickerScope
+// follows. Both sides can build it; the admin panel already fetches personas,
+// moods, themes and the station settings.
 //
 // Rules that are NOT pure functions of the submitted value — id minting and
 // cross-row de-duplication — live in show-server.ts, which is NOT mirrored.

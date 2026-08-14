@@ -2,9 +2,8 @@
 // Radio-card grid for picking a Cloud TTS provider, shared by the Settings voice
 // tab and the per-persona voice slot. Deliberately the same affordance as
 // EngineSelector one level up — picking OpenAI vs ElevenLabs is the same kind of
-// decision as picking Cloud vs Piper, and it used to be a tab strip, which read
-// as page navigation rather than a form field. The badge makes "this one has no
-// key" visible before the click instead of after it.
+// decision as picking Cloud vs Piper. The badge makes "this one has no key"
+// visible before the click instead of after it.
 import type { ReactNode } from 'react';
 import { cn } from '../../../lib/cn';
 import {

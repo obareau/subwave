@@ -5,7 +5,6 @@
 import { useRef } from 'react';
 import { X } from 'lucide-react';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
-import { Switch } from '../../ui/switch';
 import { cn } from '../../../lib/cn';
 import { EN_HIGH, EN_HIGH_BG, EN_LOW, EN_LOW_BG, EN_MED, EN_MED_BG } from './types';
 
@@ -117,18 +116,5 @@ export function DualRange({ min, max, step, lo, hi, disabled, onLo, onHi, loLabe
   );
 }
 
-export function SwitchRow({ label, hint, on, onToggle, mutedLabel }: {
-  label: string; hint: string; on: boolean; onToggle: (v: boolean) => void; mutedLabel?: boolean;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div>
-        <div className={cn('text-[13px] font-semibold', mutedLabel && 'text-muted')}>{label}</div>
-        <div className="font-mono text-[10px] text-muted">{hint}</div>
-      </div>
-      <Switch checked={on} onCheckedChange={onToggle} aria-label={label} />
-    </div>
-  );
-}
 
 

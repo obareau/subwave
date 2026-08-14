@@ -17,6 +17,7 @@ export { matchRequest, identifyTrackFromText } from './internal/prompts/request.
 export {
   AIR_TIME_CLAUSE,
   REQUESTER_NAME_CLAUSE,
+  REQUESTER_GREETING_CLAUSE,
   generateIntro,
   generateStationId,
   generateSignoff,

@@ -6,10 +6,6 @@ import { useStationOrigin } from '@/lib/stationOrigin';
 import { withStreamAuth } from '@/lib/stationAuth';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
-// MP3 vs Ogg-Opus is picked on the client via canPlayType. Mount URLs come from
-// StationOriginContext and are mirrored into a ref, so the long-lived watchdog
-// listeners still read fresh values when a consumer retargets the player.
-
 // Reconnect backoff for the watchdog's error path: quick first retry, doubling
 // to a minute so an abandoned tab on a downed station can't hammer reconnects.
 const RECONNECT_BASE_MS = 500;
@@ -40,9 +36,8 @@ export interface Player {
   /** Ref callback the consumer MUST put on its <audio> element instead of
    *  audioRef: it keeps audioRef on the live node AND tells the hook when that
    *  node is replaced so the media listeners re-attach. The private-station gate
-   *  remounts the element mid-session, and a plain object ref left the fresh node
-   *  with no listeners — status stuck on 'connecting', no stall recovery
-   *  (issue #1232). Stable identity. */
+   *  remounts the element mid-session, and with a plain object ref the fresh
+   *  node got no listeners at all (issue #1232). Stable identity. */
   attachAudio: (el: HTMLAudioElement | null) => void;
   tunedIn: boolean;
   status: PlayerStatus;
@@ -66,9 +61,8 @@ export interface UsePlayerOptions {
   opusEnabled?: boolean | null;
 }
 
-// Owns the <audio> element + tune-in state. audioRef must be attached to an
-// <audio> tag rendered by the consumer, so the Waveform's Web Audio API can
-// also reach it.
+// Owns the <audio> element + tune-in state. The consumer renders the <audio>
+// tag, so skins can also reach it for their Web Audio taps.
 export function usePlayer({ initialVolume = 1, opusEnabled = null }: UsePlayerOptions = {}): Player {
   const { streams } = useStationOrigin();
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -129,10 +123,9 @@ export function usePlayer({ initialVolume = 1, opusEnabled = null }: UsePlayerOp
     if (audioRef.current) audioRef.current.volume = volume;
   }, [volume]);
 
-  // Restore the listener's last-used volume (issue #783). localStorage is
-  // effect-only (never read during render) so SSR + first paint stay on the
-  // default and there's no hydration mismatch. `hydrated` gates persistence so
-  // this restoring setVolume doesn't race the persist effect.
+  // Restore the listener's last-used volume (issue #783). Effect-only, so SSR
+  // and first paint stay on the default with no hydration mismatch; `hydrated`
+  // keeps this restoring setVolume from racing the persist effect below.
   const hydratedRef = useRef(false);
   useEffect(() => {
     const stored = loadVolumePref();
@@ -152,40 +145,26 @@ export function usePlayer({ initialVolume = 1, opusEnabled = null }: UsePlayerOp
     return () => clearTimeout(id);
   }, [volume]);
 
-  // Pick Opus only where the browser *definitively* decodes it (Chrome, Edge
-  // return 'probably'). Two families claim Opus but choke on the chained Ogg
-  // stream Icecast emits at a crossfade boundary, going silent at the first
-  // track change with no error/stalled event for the watchdog to catch — both
-  // stay on the universal MP3 mount:
-  //   • Safari iOS/iPadOS — optimistic 'maybe'; its AVFoundation decoder can't
-  //     tolerate the Ogg page-chain boundary.
-  //   • Firefox/Gecko — says 'probably' and decodes Opus fine in general, but
-  //     can't follow the chained Ogg stream (issue #212).
-  // Hence three defences: require 'probably' (drops Safari's 'maybe'), skip
-  // iOS-family devices (iPadOS 13+ reports the desktop Macintosh UA, so
-  // maxTouchPoints is checked too), and skip Firefox by UA.
+  // Four gates guard the Opus upgrade; MP3 is the universal floor.
   //
-  // FOURTH defence, and the one that isn't about codecs: the station has to be
-  // configured to serve the mount at all. `stream.opusEnabled` rides
-  // /now-playing and Opus is OFF by default, so on most installs the upgrade
-  // used to point Chrome at a 404 — playback sat on "acquiring" until the load
-  // failed and `onError` pinned MP3 back (issue #1300, bug 5). null means "not
-  // polled yet"; only an explicit true upgrades, so an older controller that
-  // omits the key stays on MP3 rather than guessing.
+  // Three are about codecs. Two browser families claim Opus but choke on the
+  // chained Ogg stream Icecast emits at a crossfade, going silent at the first
+  // track change with no event for the watchdog to catch: Safari iOS/iPadOS
+  // (optimistic 'maybe') and Firefox/Gecko (says 'probably', still can't follow
+  // the page chain — issue #212). So: require 'probably', skip the iOS family,
+  // skip Firefox by UA.
   //
-  // It reports the SETTING, not a live mount probe: the flag reaches Liquidsoap
-  // through `liquidsoap_opus_enabled.txt`, read once at mixer startup, so
-  // between an operator saving it and restarting the mixer this still points at
-  // a 404. That shrinks the bad window from "every install with Opus off" to
-  // "one operator action", which is why the `onError` self-heal below stays.
+  // The fourth is that the station has to serve the mount at all. Opus is off
+  // by default, so without this the upgrade pointed Chrome at a 404 (#1300 bug
+  // 5). Only an explicit true upgrades — null is "not polled yet". It reports
+  // the SETTING, and the mixer only reads that at startup, so a saved-but-not-
+  // restarted station can still 404; hence the `onError` self-heal below.
   //
-  // No live retarget, deliberately: setStreamUrl only reaches the element on
-  // the next tune()/reconnect(), so a listener who taps play before the first
-  // poll lands rides MP3 for that session — any later reconnect picks Opus up,
-  // since reconnect() reads streamUrlRef. Swapping src under a playing element
-  // to upgrade a working stream would cut audio, and this hook's regressions
-  // have all come from extra src-assignment paths (#1232, #1234). MP3 is the
-  // universal floor, so losing that race costs quality, never playback.
+  // No live retarget, deliberately: setStreamUrl reaches the element only on
+  // the next tune()/reconnect(), so tapping play before the first poll rides
+  // MP3 for that session. Swapping src under a playing element would cut audio,
+  // and every regression in this hook has come from an extra src assignment
+  // (#1232, #1234).
   useEffect(() => {
     if (opusEnabled !== true) return;
     if (!streams.opus || opusFailedRef.current) return;

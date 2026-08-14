@@ -258,25 +258,17 @@ const NOTICE_CLASS =
 
 // Why the palette on screen isn't the one the station picker says is active.
 //
-// Three levels resolve a theme and each silently outranks the one below it:
-// this browser's own override (localStorage, set from the player's palette
-// menu) → the on-air show's themeId → the station default set right here. Save
-// a station theme while either of the upper two is in play and it applies, then
-// appears to revert seconds later when the next poll repaints — which is #1300
-// bug 12, reported as the setting not sticking.
+// Three levels resolve a theme, each silently outranking the one below: this
+// browser's override → the on-air show's themeId → the station default set
+// here. Save a station theme while either of the upper two is in play and it
+// applies, then appears to revert on the next poll — #1300 bug 12, reported as
+// the setting not sticking. Nothing failed, so this is a note (role="status",
+// since it can appear right after a save) and it renders only when a higher
+// level is actually winning.
 //
-// Nothing about the save failed, so this is a note rather than a warning, and
-// role="status" because it can appear in response to a save the operator just
-// made rather than at first paint. It renders only when a level above the
-// station default is actually winning; otherwise the picker's own "active" pill
-// already tells the whole story.
-//
-// Every input comes from ThemeProvider, which polls /themes every 30s and paints
-// from the same response. That is deliberate: which show is on air changes on
-// the clock, not on anything this page does, so a snapshot taken when the panel
-// mounted would go stale in both directions — silent through a show that starts
-// while the page is open (the exact flip this note exists to explain), and
-// lingering after one ends.
+// Every input comes from ThemeProvider's own 30s /themes poll, deliberately:
+// which show is on air changes on the clock, so a snapshot taken at mount would
+// go stale in both directions.
 function EffectiveThemeNotice({
   activeSource,
   active,

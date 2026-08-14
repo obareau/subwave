@@ -49,6 +49,12 @@ np_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/now-playing")
 jingle_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle")
 bed_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/bed")
 starve_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/starve")
+# One per voice channel, not one for both: they write the SAME marker file, and
+# the stdlib always names its staging file `atomic.write` inside the dir it is
+# given, so a shared dir is a torn write waiting for the one tick where a
+# heavy-duck segment and a talk-over link land together.
+voice_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/voice")
+intro_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/intro")
 
 # MUSIC STARVE GUARD (#1300 bug 7) — the latch only; the tick that drives it is
 # registered far below, after idle_mode exists. Declared up here because the
@@ -924,6 +930,46 @@ music = cross(
 # ---------------------------------------------------------------------------
 voice_queue = request.queue(id="voice_queue")
 intro_queue = request.queue(id="intro_queue")
+
+# AIR-TIME MARKER (#1382) — the controller learns everything else about a
+# spoken segment at HANDOFF time (it wrote the path into say.txt/intro.txt), and
+# that is 0.5s of poll plus the queue and the duck ramp before a listener hears
+# a word. Every signal keyed off that moment — the booth log, the dj.say/dj.link
+# webhook, the player's own line — therefore ran ahead of the stream.
+#
+# on_metadata fires as the clip starts feeding, so `startedAt` here IS the
+# live-edge moment the words begin (the same clock now-playing.json is stamped
+# on). The controller matches it back to the segment via `subwave_voice`, the id
+# it stamped into the clip's annotate: URI — which also filters out the silent
+# lead-in, pushed as its own un-annotated request just before every clip.
+#
+# Same shape and rationale as jingle-playing.json (#997) and bed-playing.json:
+# one marker file, never deleted, deduped by the controller on a value it
+# carries rather than on the file's existence.
+def voice_marker(channel, tmp_dir) =
+  fun (m) ->
+    begin
+      voice_id = m["subwave_voice"]
+      if voice_id != "" then
+        file.write(
+          data=json.stringify(compact=true, {
+            voiceId = voice_id,
+            channel = channel,
+            filename = m["filename"],
+            startedAt = time()
+          }),
+          atomic=true,
+          temp_dir=tmp_dir,
+          "#{state_dir}/voice-playing.json"
+        )
+      end
+    end
+end
+
+# synchronous=false: this does file I/O and must not sit on the streaming
+# thread — the same reason on_meta is registered that way.
+voice_queue.on_metadata(synchronous=false, voice_marker("say", voice_tmp_dir))
+intro_queue.on_metadata(synchronous=false, voice_marker("intro", intro_tmp_dir))
 
 # Sound-effects channel — short pre-rendered stingers the DJ agent plays UNDER
 # its voice, path written into sfx.txt (broadcast/sfx.js + queue.playSfx). Not

@@ -78,6 +78,8 @@ export default function CustomSkills() {
 name: moon-phase          # the slug (defaults to the folder name)
 label: Moon phase         # label shown in admin (defaults to a title-cased name)
 cooldown: 6h              # min gap between auto firings — "90m" | "6h" | "2d" | "45" (minutes)
+cron: 0 8 * * *           # OPTIONAL: also fire on a fixed schedule, station time
+cronOnly: true            # OPTIONAL: with a cron, never fire at random too
 window: any               # "any" (default) | "commute" — commute hours only
 context: time, festival   # OPTIONAL: "right now" fields it may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; unset → stays inert
@@ -277,6 +279,21 @@ export const configFields = {
           <em>and</em> assigned to the persona on air (Personas page). <strong>Run now</strong>{' '}
           is an operator override that ignores the toggle, the persona, the frequency gate,
           and the cooldown.
+        </p>
+        <p>
+          A <code className="bs-code-inline">cron:</code> timer sits between the two. It
+          ignores the frequency gate and the cooldown the way <strong>Run now</strong> does,
+          but it is not an operator pressing a button, so it still stands down when the
+          skill is off, when the on-air DJ doesn&rsquo;t run it, when the station voice is
+          off, mid-programme, with nobody listening, or once the daily token budget is
+          spent. Each stand-down says which of those it was in the booth log.
+        </p>
+        <p className="text-muted">
+          Worth knowing before you add one: a cron <em>always speaks</em>. The ordinary
+          between-track tick lets the DJ decide there&rsquo;s nothing worth saying, and it
+          often does. A cron takes the forced path instead, where staying silent isn&rsquo;t
+          on offer. Good for a fixed daily moment; poor for a skill written to speak only
+          when something is notable.
         </p>
         <p className="text-muted">
           Full reference, including the example skill, lives in{' '}

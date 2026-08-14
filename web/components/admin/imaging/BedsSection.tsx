@@ -241,15 +241,9 @@ export function BedsSection({ bedsData, busy, createBed, uploadBed, onDelete, da
   const thresholdSec = beds?.thresholdSec ?? 12;
   const crossSec = beds?.crossSec ?? 6;
 
-  // Pre-flight against the SAME schema the controller enforces
-  // (controller/src/schemas/settings.ts, mirrored). This used to hand-check
-  // `v >= 0 && v <= max` against a bare 60 / 15 copied from BOUNDS — two
-  // literals with nothing keeping them in step with the controller.
-  //
-  // It also no longer swallows a bad value. The old branch dropped anything
-  // out of range and reset the input, so typing 99 silently reverted to the
-  // stored number with no explanation; now the schema's own message says why,
-  // matching what the server would have answered.
+  // Pre-flight against the SAME schema the controller enforces, so the bounds
+  // can't drift and an out-of-range value gets the server's own message rather
+  // than silently reverting to the stored number.
   //
   // This inline pair (threshold/cross) is deliberately NOT converted to
   // react-hook-form — see ImagingPanel.tsx's saveSettings comment: each one

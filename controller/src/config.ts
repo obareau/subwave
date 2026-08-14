@@ -3,6 +3,7 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { resolveActiveStationDir } from './stations/resolve.js';
+import { envEnum, envFloat, envInt, envStr, envUrl } from './util/env.js';
 
 // The shared state ROOT — the compose files mount <repo>/state → /var/sub-wave
 // and pass STATE_DIR=/var/sub-wave. Native dev (`npm run dev` from controller/)
@@ -30,7 +31,7 @@ export const SOUNDS_DIR = process.env.SOUNDS_DIR
 // independently with its own var (PIPER_SPEED / KOKORO_SPEED / CLOUD_TTS_SPEED).
 // The multiplier semantics are consistent everywhere — piper.js inverts it
 // internally because Piper expresses rate as length_scale (higher = slower).
-const TTS_SPEED = process.env.TTS_SPEED || '1.0';
+const TTS_SPEED = envFloat('TTS_SPEED', 1.0, { min: 0.1 });
 
 // Shared directory for operator-uploaded reference WAVs. Both Chatterbox and
 // PocketTTS read from here for zero-shot voice cloning. `TTS_VOICE_DIR` is the
@@ -38,9 +39,7 @@ const TTS_SPEED = process.env.TTS_SPEED || '1.0';
 // operators who pinned the old chatterbox-only path. The legacy folder
 // (state/chatterbox-voices/) is still read at list/resolve time so pre-existing
 // installs keep working without a manual file move.
-const VOICES_DIR = process.env.TTS_VOICE_DIR
-  || process.env.CHATTERBOX_VOICE_DIR
-  || `${STATE_DIR}/voices`;
+const VOICES_DIR = envStr('TTS_VOICE_DIR', envStr('CHATTERBOX_VOICE_DIR', `${STATE_DIR}/voices`));
 const LEGACY_VOICES_DIR = `${STATE_DIR}/chatterbox-voices`;
 
 export const config = {
@@ -51,15 +50,15 @@ export const config = {
   stateRoot: STATE_ROOT,
   soundsDir: SOUNDS_DIR,
   navidrome: {
-    url: process.env.NAVIDROME_URL || 'http://navidrome:4533',
-    user: process.env.NAVIDROME_USER || '',
+    url: envUrl('NAVIDROME_URL', 'http://navidrome:4533'),
+    user: envStr('NAVIDROME_USER', ''),
     password: process.env.NAVIDROME_PASS || '',
     apiVersion: '1.16.1',
     clientName: 'sub-wave',
     // Per-request cap on Subsonic API calls. Without one, a slow or hung
     // Navidrome leaves fetches pending forever and admin routes stack up
     // behind them (#786's "recent failed (500)").
-    timeoutMs: parseInt(process.env.NAVIDROME_TIMEOUT_MS || '', 10) || 30_000,
+    timeoutMs: envInt('NAVIDROME_TIMEOUT_MS', 30_000),
   },
   ollama: {
     // Default-when-blank server URL + model. The admin Settings UI
@@ -69,11 +68,11 @@ export const config = {
     model: 'nemotron-3-super:cloud',
   },
   piper: {
-    binary: process.env.PIPER_BIN || '/usr/local/bin/piper',
-    voice: process.env.PIPER_VOICE || '/opt/piper/voices/en_GB-alan-medium.onnx',
-    voiceConfig: process.env.PIPER_VOICE_CONFIG || '/opt/piper/voices/en_GB-alan-medium.onnx.json',
-    outDir: process.env.PIPER_OUT || `${STATE_DIR}/voice`,
-    speed: parseFloat(process.env.PIPER_SPEED || TTS_SPEED),
+    binary: envStr('PIPER_BIN', '/usr/local/bin/piper'),
+    voice: envStr('PIPER_VOICE', '/opt/piper/voices/en_GB-alan-medium.onnx'),
+    voiceConfig: envStr('PIPER_VOICE_CONFIG', '/opt/piper/voices/en_GB-alan-medium.onnx.json'),
+    outDir: envStr('PIPER_OUT', `${STATE_DIR}/voice`),
+    speed: envFloat('PIPER_SPEED', TTS_SPEED, { min: 0.1 }),
   },
   // Acoustic analysis (bpm/key/intro) — runs librosa, which deliberately does
   // NOT live in the controller image. Two backends, resolved in music/
@@ -86,31 +85,31 @@ export const config = {
     // analyzer.ts probes /health and uses it when it reports the 'analyze'
     // engine. tts-heavy no longer carries the analyzer (it's TTS-only), so there
     // is no TTS_HEAVY_URL fallback here anymore.
-    urls: [process.env.ANALYZE_URL].filter((u): u is string => !!u),
-    python: process.env.ANALYZE_PYTHON || '',   // empty → no local backend
-    workerScript: process.env.ANALYZE_WORKER || '/app/scripts/analyze_worker.py',
+    urls: [envUrl('ANALYZE_URL', '')].filter((u): u is string => !!u),
+    python: envStr('ANALYZE_PYTHON', ''),   // empty → no local backend
+    workerScript: envStr('ANALYZE_WORKER', '/app/scripts/analyze_worker.py'),
     // 40s is enough for stable BPM (beat_track) / key (chroma); intro
     // detection only needs the first ~20-30s. Env-overridable; Demucs cost
     // scales linearly with the window. Keep in sync with analyze_worker.py
     // and docker/analyzer/server.py.
-    seconds: parseFloat(process.env.ANALYZE_SECONDS || '40'),
-    requestTimeoutMs: parseInt(process.env.ANALYZE_REQUEST_TIMEOUT_MS || '120000', 10),
+    seconds: envFloat('ANALYZE_SECONDS', 40, { min: 1 }),
+    requestTimeoutMs: envInt('ANALYZE_REQUEST_TIMEOUT_MS', 120_000),
     // Transition renders (stem-blend transitions) get their own, shorter
     // deadline: they run inside the pair-drain window and must lose the race
     // to the drain's hard fallback — a render past this is abandoned and the
     // seam falls back to a plain pair-aware crossfade. Also what absorbs a
     // render queued behind a long bulk-analyze item on the single-flight
     // worker.
-    renderTimeoutMs: parseInt(process.env.ANALYZE_RENDER_TIMEOUT_MS || '60000', 10),
+    renderTimeoutMs: envInt('ANALYZE_RENDER_TIMEOUT_MS', 60_000),
   },
   kokoro: {
-    python: process.env.KOKORO_PYTHON || '/opt/kokoro/venv/bin/python',
-    workerScript: process.env.KOKORO_WORKER || '/app/scripts/kokoro_worker.py',
-    model: process.env.KOKORO_MODEL || '/opt/kokoro/models/kokoro-v1.0.onnx',
-    voices: process.env.KOKORO_VOICES || '/opt/kokoro/models/voices-v1.0.bin',
-    voice: process.env.KOKORO_VOICE || 'bf_isabella',   // British female, BBC-ish
-    lang: process.env.KOKORO_LANG || '',
-    speed: parseFloat(process.env.KOKORO_SPEED || TTS_SPEED),
+    python: envStr('KOKORO_PYTHON', '/opt/kokoro/venv/bin/python'),
+    workerScript: envStr('KOKORO_WORKER', '/app/scripts/kokoro_worker.py'),
+    model: envStr('KOKORO_MODEL', '/opt/kokoro/models/kokoro-v1.0.onnx'),
+    voices: envStr('KOKORO_VOICES', '/opt/kokoro/models/voices-v1.0.bin'),
+    voice: envStr('KOKORO_VOICE', 'bf_isabella'),   // British female, BBC-ish
+    lang: envStr('KOKORO_LANG', ''),
+    speed: envFloat('KOKORO_SPEED', TTS_SPEED, { min: 0.1 }),
   },
   // Chatterbox is opt-in: the default controller image does not bundle the
   // runtime. Build with `--build-arg WITH_CHATTERBOX=1` (see
@@ -120,17 +119,17 @@ export const config = {
   // to Piper. The defaults below are the in-image locations; env vars override
   // them for non-default layouts (e.g. a host venv during native dev).
   chatterbox: {
-    python: process.env.CHATTERBOX_PYTHON || '/opt/chatterbox/venv/bin/python',
-    workerScript: process.env.CHATTERBOX_WORKER || '/app/scripts/chatterbox_worker.py',
+    python: envStr('CHATTERBOX_PYTHON', '/opt/chatterbox/venv/bin/python'),
+    workerScript: envStr('CHATTERBOX_WORKER', '/app/scripts/chatterbox_worker.py'),
     // 'cpu' or 'cuda'. CPU works but is slow; CUDA needs a GPU-enabled image.
-    device: process.env.CHATTERBOX_DEVICE || 'cpu',
+    device: envEnum('CHATTERBOX_DEVICE', ['cpu', 'cuda'] as const, 'cpu'),
     // Directory where the operator drops per-persona reference WAVs. Each
     // persona stores a filename (relative to here) in its `tts.voice` field.
     // Shared with PocketTTS — see `voices` below.
     voiceDir: VOICES_DIR,
     // Global fallback reference WAV used when a persona has no voice set.
     // Empty → use Chatterbox's built-in default voice.
-    referenceWav: process.env.CHATTERBOX_REFERENCE_WAV || '',
+    referenceWav: envStr('CHATTERBOX_REFERENCE_WAV', ''),
   },
   // PocketTTS is opt-in alongside Chatterbox — build with
   // `--build-arg WITH_POCKETTTS=1` (see docker/Dockerfile.controller) to
@@ -140,12 +139,12 @@ export const config = {
   // is small (~CPU-only) but the runtime drag of torch is the reason it's
   // opt-in rather than baked into the default image.
   pocketTts: {
-    python: process.env.POCKET_TTS_PYTHON || '/opt/pocket-tts/venv/bin/python',
-    workerScript: process.env.POCKET_TTS_WORKER || '/app/scripts/pocket_tts_worker.py',
+    python: envStr('POCKET_TTS_PYTHON', '/opt/pocket-tts/venv/bin/python'),
+    workerScript: envStr('POCKET_TTS_WORKER', '/app/scripts/pocket_tts_worker.py'),
     // Built-in voice id. Settings layer constrains the UI to a curated list
     // (POCKET_TTS_VOICES); anything else still passes through to the worker,
     // which falls back to the default when an id isn't recognised.
-    defaultVoice: process.env.POCKET_TTS_VOICE || 'alba',
+    defaultVoice: envStr('POCKET_TTS_VOICE', 'alba'),
     // Shared with Chatterbox — see `voices` below. When a persona's voice
     // value matches a .wav filename in here, the worker switches to
     // reference-WAV cloning mode; built-in voice ids stay as-is.
@@ -167,27 +166,27 @@ export const config = {
   // to the in-process WITH_*=1 build path when it isn't. See
   // docker/Dockerfile.tts-heavy + docker/tts-heavy/server.py for the service.
   ttsHeavy: {
-    url: process.env.TTS_HEAVY_URL || '',
+    url: envUrl('TTS_HEAVY_URL', ''),
     // isAvailable() in remote mode caches the result of a /health probe and
     // re-runs it on this interval so a sidecar that comes up after the
     // controller is reflected without a restart, and one that goes down
     // flips to unavailable within ~30s (dispatcher then falls back to Piper).
-    probeIntervalMs: parseInt(process.env.TTS_HEAVY_PROBE_MS || '30000', 10),
+    probeIntervalMs: envInt('TTS_HEAVY_PROBE_MS', 30_000),
     // Per-request HTTP timeout. Inference itself is bounded by the engine
     // modules' own request timeouts (CHATTERBOX_REQUEST_TIMEOUT_MS,
     // POCKET_TTS_REQUEST_TIMEOUT_MS); this is the network/connect ceiling.
-    requestTimeoutMs: parseInt(process.env.TTS_HEAVY_TIMEOUT_MS || '180000', 10),
+    requestTimeoutMs: envInt('TTS_HEAVY_TIMEOUT_MS', 180_000),
   },
   icecast: {
     // Public status JSON — listener counts + per-mount metadata. No auth.
     // Icecast lives inside the merged `broadcast` container; its hostname on
     // the compose network is the service name.
-    statusUrl: process.env.ICECAST_STATUS_URL || 'http://broadcast:7702/status-json.xsl',
+    statusUrl: envUrl('ICECAST_STATUS_URL', 'http://broadcast:7702/status-json.xsl'),
     // Admin listclients endpoint — per-connection detail (IP, user-agent,
     // connected-for). Basic-auth gated; credentials resolved at call time from
     // ICECAST_ADMIN_PASSWORD or state/icecast-secrets.env (see listeners.ts).
-    adminUrl: process.env.ICECAST_ADMIN_URL || 'http://broadcast:7702/admin/listclients',
-    adminUser: process.env.ICECAST_ADMIN_USER || 'admin',
+    adminUrl: envUrl('ICECAST_ADMIN_URL', 'http://broadcast:7702/admin/listclients'),
+    adminUser: envStr('ICECAST_ADMIN_USER', 'admin'),
   },
   liquidsoap: {
     queueFile: `${STATE_DIR}/next.txt`,
@@ -213,6 +212,14 @@ export const config = {
     // controller learns to air the link OVER the bed rather than over the next
     // song. Mirrors jinglePlayingFile; same {filename, startedAt} shape.
     bedPlayingFile: `${STATE_DIR}/bed-playing.json`,
+    // Written by radio.liq the moment voice_queue/intro_queue starts a spoken
+    // clip: {voiceId, channel, filename, startedAt}. `voiceId` is the id the
+    // controller stamped into the clip's `annotate:` URI (airVoice), which is
+    // how a marker is matched back to the segment that produced it — and how
+    // the silent lead-in clip, which carries no id, is skipped. This is the
+    // ONLY signal that says "the words are on the stream now": everything else
+    // the controller knows about a segment is handoff-time (issue #1382).
+    voicePlayingFile: `${STATE_DIR}/voice-playing.json`,
     // Written by radio.liq's starve guard (#1300 bug 7): {starved, since, at},
     // unix SECONDS. `at` is a heartbeat refreshed every tick WHILE starved, so
     // the controller can tell a live outage from a marker left behind by a
@@ -242,20 +249,19 @@ export const config = {
     // both honestly suppliable from the sidecar, with margin. ~300KB of JSON,
     // rewritten once per play — negligible either way.
     recentPlaysMax: 2500,
-    // Count-based hard no-repeat guard: the picker (both pool and agent paths)
-    // never re-airs any of the last N DISTINCT plays. Unlike the time-window
-    // guard (recencyWindowsForLibrary) this is non-relaxable — it survives the
-    // filterPickerCandidates starvation cascade, closing the hole where a
-    // thin/over-visited mood cluster let the cascade drop the recent-track guard
-    // and re-serve a just-played song. Clamped to library size at use
-    // (effectiveNoRepeatWindow) so a small catalogue never fully blocks; 0
-    // disables. Seeds settings.llm.noRepeatWindow — the live, admin-tunable
-    // value; env wins. Listener requests stay exempt (request path is untouched).
-    // Default 250 (was 100): 100 distinct blocked ~6-8h of air — a bubble of
-    // ~300 tracks satisfied it forever. 250 is still auto-scaled DOWN on small
-    // libraries by effectiveNoRepeatWindow's 37.5% ceiling, so only catalogues
-    // that can absorb the memory actually carry it.
-    noRepeatWindow: parseInt(process.env.NO_REPEAT_WINDOW || '250', 10),
+    // Count-based hard no-repeat guard: neither pick path re-airs any of the
+    // last N DISTINCT plays. Unlike the time-window guard this is non-relaxable
+    // — it survives the filterPickerCandidates starvation cascade, closing the
+    // hole where a thin mood cluster let the cascade drop the recent-track guard
+    // and re-serve a just-played song. Clamped to library size at use so a small
+    // catalogue never fully blocks; 0 disables. Seeds the live, admin-tunable
+    // settings.llm.noRepeatWindow (env wins); listener requests stay exempt.
+    //
+    // 250 rather than 100 because 100 distinct blocked only ~6-8h of air, which
+    // a bubble of ~300 tracks satisfied forever. effectiveNoRepeatWindow's 37.5%
+    // ceiling still scales it DOWN on small libraries, so only catalogues that
+    // can absorb the memory carry it.
+    noRepeatWindow: envInt('NO_REPEAT_WINDOW', 250, { min: 0 }),
   },
   curiosity: {
     // Durable dedup ledger for the `curiosity` segment capability. Holds every
@@ -281,12 +287,12 @@ export const config = {
     units: 'metric' as 'metric' | 'imperial',
   },
   news: {
-    feedUrl: process.env.NEWS_FEED_URL || 'http://feeds.bbci.co.uk/news/rss.xml',
-    maxItems: parseInt(process.env.NEWS_MAX_ITEMS || '10', 10),
+    feedUrl: envUrl('NEWS_FEED_URL', 'http://feeds.bbci.co.uk/news/rss.xml'),
+    maxItems: envInt('NEWS_MAX_ITEMS', 10),
   },
   search: {
     // Tavily API key for the web-search skill. Blank → the skill stays inert.
-    apiKey: process.env.SEARCH_API_KEY || '',
+    apiKey: envStr('SEARCH_API_KEY', ''),
   },
   // Community catalog (skills / personas / shows / stations) fetched live from
   // the `community` repo — see community/registry.ts. Default is raw GitHub
@@ -294,24 +300,25 @@ export const config = {
   // with COMMUNITY_CATALOG_URL to point at a fork, a self-hosted mirror, or the
   // jsDelivr CDN (`https://cdn.jsdelivr.net/gh/getsubwave/community@main/catalog.json`).
   community: {
-    catalogUrl:
-      process.env.COMMUNITY_CATALOG_URL ||
+    catalogUrl: envUrl(
+      'COMMUNITY_CATALOG_URL',
       'https://raw.githubusercontent.com/getsubwave/community/main/catalog.json',
+    ),
     // In-memory TTL before a browse triggers a refetch. 30 min mirrors the
     // weather / web-search memos; a manual refresh (POST /community/refresh)
     // busts it immediately.
-    ttlMs: parseInt(process.env.COMMUNITY_CATALOG_TTL_MS || '', 10) || 30 * 60 * 1000,
+    ttlMs: envInt('COMMUNITY_CATALOG_TTL_MS', 30 * 60 * 1000),
   },
   server: {
-    port: parseInt(process.env.PORT || '7701', 10),
+    port: envInt('PORT', 7701, { min: 1, max: 65_535 }),
   },
   show: {
-    autoQueueRefreshMinutes: parseInt(process.env.AUTO_QUEUE_REFRESH_MINUTES || '60', 10),
+    autoQueueRefreshMinutes: envInt('AUTO_QUEUE_REFRESH_MINUTES', 60),
   },
   tts: {
     // Speech-rate multiplier for the cloud engine (OpenAI / ElevenLabs).
     // 1.0 = normal, lower = slower. speech.js clamps it to each provider's
     // supported range before the request.
-    cloudSpeed: parseFloat(process.env.CLOUD_TTS_SPEED || TTS_SPEED),
+    cloudSpeed: envFloat('CLOUD_TTS_SPEED', TTS_SPEED, { min: 0.1 }),
   },
 };

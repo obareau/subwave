@@ -37,6 +37,7 @@
 //   - every tool.mjs runs behind a timeout + try/catch (llm/segment-tools.js)
 
 import { readdir, readFile, stat } from 'node:fs/promises';
+import { parse as parseYaml } from 'yaml';
 import { join, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { STATE_DIR } from '../config.js';
@@ -85,16 +86,41 @@ let importCounter = 0;        // cache-buster for re-importing edited tool.mjs
 // identical footing. Read live so a rescan takes effect without a restart.
 export function loadedCapabilities(): any[] { return loadedSkills; }
 
-// Minimal flat-YAML frontmatter parser. The frontmatter we accept is a small,
-// flat key: value block — no nesting, lists, or multiline scalars — so a tiny
-// parser keeps the dependency surface at zero (no gray-matter). Returns
-// { data, body }; body is everything after the closing `---`.
-export function parseFrontmatter(raw: string): { data: Record<string, string>; body: string } {
-  const text = raw.replace(/^﻿/, '');
-  const m = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/.exec(text);
-  if (!m) return { data: {}, body: text.trim() };
+// Frontmatter parsing. SKILL.md is operator-authored — by hand on disk as much
+// as through /admin/skills — so the block is parsed as REAL YAML rather than by
+// the flat `key: value` line splitter this module shipped with. That splitter
+// silently mangled anything an operator would reasonably write: a list
+// (`tags:\n  - factual`) parsed as an empty value and then dropped every entry,
+// a `#` comment mid-value survived into the value, and a block scalar became
+// one key with the literal text `|-`.
+//
+// `data` stays a flat Record<string, string> — every consumer downstream (the
+// tool's 4th `config` arg, config-fields coercion, preservedFrontmatter,
+// parseTags) is built on strings, and widening that contract is a much larger
+// change than the parse itself. Lists flatten to the comma-joined form those
+// consumers already accept, so `tags: [a, b]` and `tags: a, b` now mean the
+// same thing. Nested maps have no consumer and are dropped.
+//
+// A block YAML REFUSES falls back to the legacy line parser rather than
+// failing the skill: the sharp case is an unquoted colon (`label: News: Today`),
+// which the old parser accepted and which therefore exists on operators' disks
+// today. `malformed` carries the YAML error so loadSkillDir can warn — the
+// operator should fix it, but not by having their skill vanish at boot.
+
+function flattenFrontmatterValue(value: unknown): string | null {
+  if (value == null) return '';
+  if (Array.isArray(value)) {
+    const parts = value.map(flattenFrontmatterValue).filter((p): p is string => p !== null && p !== '');
+    return parts.join(', ');
+  }
+  if (typeof value === 'object') return null; // nested map — no consumer speaks it
+  return String(value).trim();
+}
+
+// The pre-YAML parser, kept as the fallback for blocks YAML rejects.
+function parseFrontmatterLines(block: string): Record<string, string> {
   const data: Record<string, string> = {};
-  for (const line of m[1].split('\n')) {
+  for (const line of block.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
     const idx = trimmed.indexOf(':');
@@ -106,7 +132,33 @@ export function parseFrontmatter(raw: string): { data: Record<string, string>; b
     }
     if (key) data[key] = val;
   }
-  return { data, body: m[2].trim() };
+  return data;
+}
+
+export function parseFrontmatter(raw: string): { data: Record<string, string>; body: string; malformed?: string } {
+  const text = raw.replace(/^﻿/, '');
+  const m = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/.exec(text);
+  if (!m) return { data: {}, body: text.trim() };
+  const body = m[2].trim();
+
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(m[1]);
+  } catch (err: any) {
+    return { data: parseFrontmatterLines(m[1]), body, malformed: String(err?.message || err).split('\n')[0] };
+  }
+  // A scalar or list at the top level isn't frontmatter — same posture as YAML
+  // refusing it outright, so fall back rather than returning nothing.
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { data: parseFrontmatterLines(m[1]), body };
+  }
+
+  const data: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    const flat = flattenFrontmatterValue(value);
+    if (flat !== null) data[String(key).trim()] = flat;
+  }
+  return { data, body };
 }
 
 // "90m" | "6h" | "2d" | "45s" | "45" (bare = minutes) → ms. Defaults to 60 min.
@@ -240,7 +292,13 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
   } catch {
     return null; // directory without a SKILL.md — not a skill
   }
-  const { data, body } = parseFrontmatter(raw);
+  const { data, body, malformed } = parseFrontmatter(raw);
+  if (malformed) {
+    // Parsed by the legacy line fallback, so the skill still loads — but an
+    // operator editing this file will keep hitting it (a list or block scalar
+    // added below the offending line reads as nothing), so say so once per scan.
+    queue.log('warn', `[skills] "${slug}" SKILL.md frontmatter is not valid YAML — read with the legacy parser: ${malformed}`);
+  }
   const name = (data.name || slug).trim();
   if (!SLUG_RE.test(name)) {
     queue.log('error', `[skills] "${slug}" rejected — name "${name}" must be a lowercase slug`);
@@ -281,6 +339,16 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // The skill's own frontmatter, handed to the tool as its 4th arg so a skill
     // can read its own knobs (e.g. news' feed / feedMaxItems).
     config: data,
+    // Cron expression — when set, the scheduler registers a dedicated cron that
+    // fires this skill on that schedule, bypassing frequency/cooldown gating (same
+    // posture as the operator override). Stored raw; scheduler validates + registers.
+    cronExpression: data.cron ? String(data.cron).trim() : undefined,
+    // When true, withheld from the autonomous director's random selection
+    // (availableCapabilities() in skills/_agent.ts) — fires ONLY on its cron
+    // timer. Meaningless without a cron expression, but read independently so
+    // a skill that later loses its cron line doesn't silently start firing at
+    // random again without the operator noticing the coupled field too.
+    cronOnly: String(data.cronOnly).trim().toLowerCase() === 'true',
     // Operator-editable knobs this skill declares for itself (tool.mjs
     // `configFields`). Drives the admin editor's settings section — see
     // config-fields.ts. Empty for a prompt-only or undeclared skill.

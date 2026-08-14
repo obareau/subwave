@@ -105,11 +105,10 @@ function tagCoversGenre(tag: string, target: string): boolean {
 //   show "Pop Punk"  ← track "Pop"                ✗ broader than asked
 //   show "Rap"       ← track "Trap"               ✗ not a word boundary
 //
-// Matching the reverse way too (a track tag that merely CONTAINS the show's
-// genre as a substring) is what let strict emo / pop-punk shows fill up with
-// anything tagged plain "Pop" or "Rock", and unbounded substrings pulled Trap
-// into a Rap show. Both directions were deliberate once; neither survives
-// contact with a strict show.
+// Do NOT reintroduce the reverse direction: matching a track tag that merely
+// CONTAINS the show's genre let strict emo / pop-punk shows fill with anything
+// tagged plain "Pop" or "Rock", and unbounded substrings pulled Trap into a Rap
+// show.
 export function genreMatches(t: FilterTrack | null | undefined, targetNorms: string[]): boolean {
   if (!targetNorms.length) return false;
   const tags = trackGenres(t).filter(Boolean);
@@ -465,21 +464,20 @@ export type StrictLocks = {
 // source of truth for "make this pool strict", shared by both pick paths and
 // the auto-playlist coast so they can't drift on what strict means.
 //
-//   starve: true  — every dimension drops hard, even to empty. The agent-tool
-//     contract (llm/internal/tools/picker-tools.ts): a tool that ends up empty
-//     contributes nothing, and dead-air is guarded at a WIDER scope — a run
-//     with zero candidates fails into the pool picker, which never-starves.
+//   starve: true  — every dimension drops hard, even to empty. That is the
+//     agent-tool contract: an empty tool contributes nothing, and dead air is
+//     guarded at a WIDER scope, since a run with zero candidates fails into the
+//     pool picker, which never-starves.
 //   starve: false — never-starve PER DIMENSION: a dimension whose filter would
-//     empty the running pool is skipped, so the OTHER dimensions' purity
-//     survives. This replaces the old all-or-nothing joint revert, where one
-//     zero-coverage tag class (e.g. a mood on an un-tagged library) threw away
-//     an otherwise genre- and era-pure pool and leaked off-filter tracks back.
+//     empty the running pool is skipped, so the others' purity survives. Not an
+//     all-or-nothing joint revert, which let one zero-coverage tag class (a mood
+//     on an un-tagged library) throw away an otherwise genre- and era-pure pool.
 //
 // Order is genre → era → mood → energy → vocals; with starve:false each step
 // commits only if it left something, so a starved late dimension can't undo an
-// earlier one's tightening. Vocals goes last deliberately: it's the dimension
-// most likely to have no coverage at all (Demucs is the opt-in heavy tier), and
-// last is where a skipped step costs the least.
+// earlier one's tightening. Vocals goes last because it is the dimension most
+// likely to have no coverage at all (Demucs is the opt-in heavy tier), and last
+// is where a skipped step costs least.
 export function applyStrictLocks<T extends FilterTrack>(
   tracks: T[],
   locks: StrictLocks,

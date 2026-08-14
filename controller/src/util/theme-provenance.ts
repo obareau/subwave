@@ -31,20 +31,20 @@
 //     client can destructure it without a presence check.
 
 /** The subset of a resolved show this read touches. */
-export interface ActiveShowLike {
+interface ActiveShowLike {
   id?: unknown;
   name?: unknown;
   themeId?: unknown;
 }
 
 /** The show that outranked the station default, as published. */
-export interface ProvenanceShow {
+interface ProvenanceShow {
   id: string;
   name: string;
   themeId: string;
 }
 
-export interface ThemeProvenance {
+interface ThemeProvenance {
   /** The effective theme — what a client should actually paint. Unchanged. */
   active: string;
   /** Which level decided `active`. */

@@ -20,14 +20,14 @@
 // The messages ARE the contract here: this is the only place an operator with a
 // broken analyzer finds out what broke.
 
-export type AnalysisDimension = 'audio' | 'vocal' | 'stem';
+type AnalysisDimension = 'audio' | 'vocal' | 'stem';
 
 // Which backend is answering, so the retry advice names something that exists.
 // 'sidecar' has an analyzer container to restart; 'local' (a librosa venv, and
 // every AIO image) runs the worker as a child of the controller, so restarting
 // "the analyzer" is either impossible or a no-op there — the latch lives in the
 // controller process and goes when that does.
-export type AnalysisBackend = 'sidecar' | 'local' | string | null;
+type AnalysisBackend = 'sidecar' | 'local' | string | null;
 
 export interface CapabilityInputs {
   dimension: AnalysisDimension;

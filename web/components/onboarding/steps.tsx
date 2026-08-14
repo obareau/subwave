@@ -88,9 +88,8 @@ function NextButton({ disabled }: { disabled: boolean }) {
 // routes/onboarding.ts both persist empty creds fine — the only thing that
 // requires all three fields is the PROBE), so this step's own schema carries
 // no format rules at all: Next stays enabled regardless of content. The
-// stricter, shared navidromeProbeSchema (imported) gates only the Test
-// button, replacing the old hand-rolled `!url || !user || !pass` check with
-// the exact rule the controller enforces server-side.
+// stricter, shared navidromeProbeSchema gates only the Test button, with the
+// exact rule the controller enforces server-side.
 const navidromeStepSchema = z.object({
   url: z.string(),
   user: z.string(),
@@ -196,17 +195,11 @@ export function NavidromeStep({ w }: { w: WizardController }) {
 // Provider list, labels and blurbs come from admin/llm/providerMeta so
 // onboarding and the admin Settings tab never drift.
 //
-// llmProbeSchema itself can't be handed to useZodForm directly: it's rooted
-// at `z.unknown()` (a POST-body probe schema, not a structural z.object), so
-// its z.input is genuinely `unknown` — unlike the imaging/skill schemas'
-// z.preprocess-wrapped LEAF fields (whose object ROOT still satisfies
-// react-hook-form's FieldValues bound), an unknown ROOT has no shape to
-// widen. This step's own schema is a real z.object with the exact fields it
-// collects, and its superRefine calls llmProbeSchema to run the ACTUAL rule
-// — one source of truth for "provider+model required, baseUrl required for
-// openai-compatible" — so formState.isValid (gating both this step's Next
-// and the Test button below) is exactly llmProbeSchema's verdict, just
-// wrapped in a shape RHF can bind fields against directly.
+// llmProbeSchema can't be handed to useZodForm directly: it's rooted at
+// `z.unknown()`, so there is no object shape for RHF to bind fields against.
+// This step's schema is a real z.object whose superRefine calls llmProbeSchema
+// to run the ACTUAL rule, so formState.isValid is exactly that schema's verdict
+// in a shape RHF can use.
 const llmStepSchema = z.object({
   provider: z.string(),
   model: z.string(),

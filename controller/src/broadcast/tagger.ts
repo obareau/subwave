@@ -141,13 +141,14 @@ export function startTagger(
   // documented per-flag, full-library meaning.)
   //
   // Exception — the reseed-only "then tag" chain: dropping --rescan runs raw
-  // --reseed, whose forward pass drops all vectors, RE-EMBEDS THE WHOLE LIBRARY
-  // (phaseEmbed's allTaggedIds sweep re-vectorises the tagged set the drop wiped),
-  // then seed→propagate→active-learn tags the untagged remainder — exactly the run
-  // the stale-embedding banner was blocking. Only when reseed is the sole re-*
-  // pass: mixing forward discovery into a targeted reEnrich/reAnalyze/upgrade
-  // re-scan isn't well-defined, so any other re-* flag keeps today's --rescan
-  // scoping and ignores thenTag.
+  // --reseed, whose forward pass drops all vectors, re-embeds the whole library
+  // (phaseEmbed's allTaggedIds sweep re-vectorises what the drop wiped), then
+  // seed→propagate→active-learn tags the untagged remainder. That is exactly the
+  // run the stale-embedding banner was blocking.
+  //
+  // ONLY when reseed is the sole re-* pass: mixing forward discovery into a
+  // targeted reEnrich/reAnalyze/upgrade re-scan isn't well-defined, so any other
+  // re-* flag keeps --rescan scoping and ignores thenTag.
   const reseedOnly = !!reseed && !reEnrich && !reAnalyze && !upgrade;
   const chainTag = reseedOnly && thenTag === true;
   const rescan = !!(reseed || reEnrich || reAnalyze || upgrade) && !chainTag;

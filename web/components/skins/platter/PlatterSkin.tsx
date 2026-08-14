@@ -18,6 +18,7 @@ import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/cn';
+import { REQUEST_NAME_MAX } from '@/lib/schemas.generated';
 import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import { useStationClient } from '@/lib/stationClient';
 import {
@@ -481,27 +482,42 @@ export default function PlatterSkin(_props: SkinProps) {
                 </button>
               </div>
             ) : (
-              <div className="flex items-baseline gap-3">
-                <span className="flex-none font-mono text-[10px] font-bold tracking-[0.16em] text-muted uppercase">Dear DJ —</span>
-                <input
-                  ref={reqInputRef}
-                  value={slip.text}
-                  onChange={e => slip.setText(e.target.value)}
-                  placeholder="a song, an artist, a feeling…"
-                  className="v3-focus min-w-0 flex-1 border-0 border-b border-soft-border bg-transparent pb-1 text-[13px] text-ink italic outline-none placeholder:text-muted"
-                />
-                <button
-                  type="submit"
-                  disabled={slip.sending || !slip.text.trim()}
-                  className={cn(
-                    'v3-focus flex-none border-0 bg-transparent p-0 font-mono text-[10px] font-bold tracking-[0.14em] uppercase',
-                    slip.sending || !slip.text.trim()
-                      ? 'cursor-default text-muted opacity-60'
-                      : 'cursor-pointer text-[var(--accent)] hover:opacity-80',
-                  )}
-                >
-                  {slip.sending ? 'sending…' : 'send ↗'}
-                </button>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-baseline gap-3">
+                  <span className="w-[76px] flex-none font-mono text-[10px] font-bold tracking-[0.16em] text-muted uppercase">Dear DJ —</span>
+                  <input
+                    ref={reqInputRef}
+                    value={slip.text}
+                    onChange={e => slip.setText(e.target.value)}
+                    placeholder="a song, an artist, a feeling…"
+                    className="v3-focus min-w-0 flex-1 border-0 border-b border-soft-border bg-transparent pb-1 text-[13px] text-ink italic outline-none placeholder:text-muted"
+                  />
+                  <button
+                    type="submit"
+                    disabled={slip.sending || !slip.text.trim()}
+                    className={cn(
+                      'v3-focus flex-none border-0 bg-transparent p-0 font-mono text-[10px] font-bold tracking-[0.14em] uppercase',
+                      slip.sending || !slip.text.trim()
+                        ? 'cursor-default text-muted opacity-60'
+                        : 'cursor-pointer text-[var(--accent)] hover:opacity-80',
+                    )}
+                  >
+                    {slip.sending ? 'sending…' : 'send ↗'}
+                  </button>
+                </div>
+                {/* The slip already reads as a letter, so the name is its
+                    sign-off. Optional — but when it's filled the DJ says it on
+                    air (#1347). */}
+                <div className="flex items-baseline gap-3">
+                  <span className="w-[76px] flex-none font-mono text-[10px] font-bold tracking-[0.16em] text-muted uppercase">Yours —</span>
+                  <input
+                    value={slip.name}
+                    onChange={e => slip.setName(e.target.value)}
+                    placeholder="your name (optional)"
+                    maxLength={REQUEST_NAME_MAX}
+                    className="v3-focus min-w-0 flex-1 border-0 border-b border-soft-border bg-transparent pb-1 text-[12px] text-ink italic outline-none placeholder:text-muted/70"
+                  />
+                </div>
               </div>
             )}
           </form>

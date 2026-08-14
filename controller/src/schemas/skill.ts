@@ -43,6 +43,24 @@ export const SKILL_COOLDOWN_RE = /^\d+\s*[smhd]?$/;
 // A skill may declare an env var it needs before it can fire (`requiresKey`).
 export const SKILL_ENV_KEY_RE = /^[A-Z][A-Z0-9_]*$/;
 
+// Optional dedicated cron schedule ("0 * * * *") that fires the skill
+// immediately, bypassing the cooldown/frequency gate.
+//
+// SHAPE ONLY — 5 fields, or 6 with node-cron's optional leading SECONDS field.
+// This file may import only zod, so the per-field range check (`59 * * * *` is
+// shape-valid and `99 * * * *` is not) belongs to node-cron's own validate(),
+// which routes/dj.ts runs at save time and scheduler.ts runs again at
+// registration. Both halves are needed and neither is redundant: the route
+// catches what an operator types, the scheduler catches what a hand-edited
+// SKILL.md carries.
+//
+// The 6-field arm is not decoration. node-cron 3.x accepts `0 0 8 * * *`, so a
+// disk-authored one registers and fires — and a 5-only pattern here would then
+// refuse the admin form's save of ANY field on that skill, because the editor
+// round-trips the cron value it loaded. A working config the UI cannot edit is
+// worse than one it never accepted.
+export const SKILL_CRON_RE = /^\S+(?:\s+\S+){4,5}$/;
+
 // When a custom skill may air. 'commute' restricts it to the commute hours;
 // 'any' is the default and is NOT written to frontmatter.
 export const SKILL_WINDOWS = ['any', 'commute'] as const;
@@ -216,10 +234,40 @@ const skillRequiresKeySchema = z.preprocess(
     .transform((v) => v || undefined),
 );
 
+const skillCronSchema = z.preprocess(
+  skillNullToUndefined,
+  z
+    .string({ error: 'must be text' })
+    .trim()
+    .optional()
+    .refine(
+      (v) => !v || SKILL_CRON_RE.test(v),
+      'must be a cron expression of 5 fields, or 6 with seconds (e.g. "0 * * * *")',
+    )
+    .transform((v) => v || undefined),
+);
+
+// Optional companion to `cron:` — when true, the skill is withheld from the
+// autonomous segment director's random selection (availableCapabilities() in
+// skills/_agent.ts) and fires ONLY when its cron timer ticks. Without this a
+// skill with a `cron:` expression is still off-cooldown eligible for random
+// picks between timer fires, which is surprising for a skill authored to
+// speak at a specific, meaningful moment (e.g. "7:10, dabbers").
+//
+// Absent → false, same posture as persona djMode: present must be a real
+// boolean rather than silently coerced, since a truthy typo here would
+// silently withhold a skill from ever airing outside its cron window.
+const skillCronOnlySchema = z.preprocess(
+  skillNullToUndefined,
+  z.boolean({ error: 'cronOnly must be a boolean' }).default(false),
+);
+
 // The fields every skill's SKILL.md carries, built-in or custom.
 export const builtinSkillFileSchema = z.object({
   label: skillLabelSchema,
   cooldown: skillCooldownSchema,
+  cron: skillCronSchema,
+  cronOnly: skillCronOnlySchema,
   context: skillContextSchema,
   tags: skillTagsSchema,
   brief: skillBriefSchema,
@@ -260,6 +308,8 @@ export function skillFieldsFrom(kind: string, parsed: SkillFileParsed) {
     kind,
     label: parsed.label,
     cooldown: parsed.cooldown,
+    cron: parsed.cron,
+    cronOnly: parsed.cronOnly,
     contextFields: parsed.context,
     window: parsed.window,
     requiresKey: parsed.requiresKey,

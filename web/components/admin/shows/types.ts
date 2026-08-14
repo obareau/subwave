@@ -1,12 +1,7 @@
 // Shapes the shows panel and its editor share.
 //
-// Every CAP below is now a re-export of the shared show schema
-// (controller/src/schemas/show.ts, mirrored into lib/schemas.generated.ts and
-// drift-checked in CI) rather than a hand-copied number. Each of these used to
-// carry a "keep in lockstep with the controller" comment and a test whose only
-// job was to catch the drift; there is nothing left to drift.
-//
-// The local names are kept so no call site moves.
+// Every cap below re-exports the shared show schema's own constant under a
+// local name, so nothing here can drift from the controller.
 
 import {
   EXCLUDED_PLAYLISTS_PER_SHOW,
@@ -25,7 +20,7 @@ export const TOPIC_MAX = SHOW_TOPIC_MAX;
 export const SHOWS_MAX = SHOWS_LIMIT;
 export const GUESTS_MAX = GUESTS_PER_SHOW;
 export const PLAYLISTS_MAX = PLAYLISTS_PER_SHOW;
-// Its own constant now. The two caps are the same figure today, and one name
+// Deliberately separate from PLAYLISTS_MAX: the same figure today, but one name
 // covering both is how they would silently stop being.
 export const EXCLUDED_PLAYLISTS_MAX = EXCLUDED_PLAYLISTS_PER_SHOW;
 
@@ -183,19 +178,14 @@ export interface FormState {
   schedule: Schedule;
 }
 
-// The react-hook-form shape: just the shows field array. `schedule` is NOT
-// form data — ShowsPanel loads it read-only for the hours-a-week counts and
-// never saves it from this panel (the weekly grid + PUT /schedule live on the
-// separate Rundown page), so it stays a plain useState alongside the form.
+// The react-hook-form shape. `schedule` is not form data — the panel reads it
+// for the hours-a-week counts and the Rundown page owns PUT /schedule.
 //
-// TYPE-ONLY, not derived from z.input<typeof showSchema>: showSchema's outer
-// z.preprocess (the legacy-field migration, #929) plus most of its own field
-// pipelines (z.preprocess(nullToUndefined, ...), showBool()'s z.unknown())
-// all declare their z.input as `unknown`, so no nested path
-// (`shows.0.personaId`) would type-check as a FieldPath. Show is the shape
-// the schema's own parse actually produces and the shape this editor already
-// edits — same type-only-cast technique Task 3/9 established for
-// festivalsSchema/moodsSchema/personaSchema.
+// Hand-written rather than derived from z.input<typeof showSchema>: that input
+// type is `unknown` all the way down (the legacy-field migration wraps the
+// object in a z.preprocess, and most fields are pipelines of their own), so no
+// nested path would type-check as a FieldPath. `Show` is what the schema's
+// parse actually produces.
 export interface ShowsFormValues {
   shows: Show[];
 }

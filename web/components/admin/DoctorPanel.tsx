@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCopyToClipboard } from 'usehooks-ts';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { Card, Btn, Pill } from './ui';
@@ -113,6 +114,7 @@ function parseSseFrame(frame: string): { event: string | null; data: unknown } {
 
 export default function DoctorPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
+  const [, copyToClipboard] = useCopyToClipboard();
   const [report, setReport] = useState<DoctorReport | null>(null);
   const [review, setReview] = useState<DoctorReview | null>(null);
   const [running, setRunning] = useState(false);
@@ -276,13 +278,15 @@ export default function DoctorPanel() {
     }
   };
 
+  // The browser's own reason (NotAllowedError and friends) isn't actionable to
+  // an operator and useCopyToClipboard console.warns it for anyone debugging,
+  // so the toast just reports the failure.
   const copyMarkdown = async () => {
     if (!report) return;
-    try {
-      await navigator.clipboard.writeText(toMarkdown(report, review));
+    if (await copyToClipboard(toMarkdown(report, review))) {
       notify.ok('report copied — paste into a GitHub issue');
-    } catch (e) {
-      notify.err(`copy failed: ${errorMessage(e)}`);
+    } else {
+      notify.err('copy failed — the browser blocked clipboard access');
     }
   };
 
@@ -294,11 +298,8 @@ export default function DoctorPanel() {
     const full = `${HQ_ISSUES_NEW}?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
     // Too long to ride in the URL — copy it and prefill a pointer instead.
     if (full.length > HQ_URL_LIMIT) {
-      try {
-        await navigator.clipboard.writeText(body);
-      } catch {
-        /* clipboard may be blocked; the short form still opens */
-      }
+      // Clipboard may be blocked; the short form still opens either way.
+      await copyToClipboard(body);
       const note =
         `_Filed from DJ Doc._\n\n` +
         `**${report.counts.ok} ok · ${report.counts.warn} warn · ${report.counts.fail} fail · ${report.counts.skip} skip**\n\n` +

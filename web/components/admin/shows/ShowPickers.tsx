@@ -59,59 +59,6 @@ function Swatch({ color }: { color?: string }) {
   return <span ref={ref} className="h-5 w-5" aria-hidden="true" />;
 }
 
-export function PersonaPicker({
-  personas,
-  value,
-  onChange,
-  apiBase,
-}: {
-  personas: PersonaOpt[];
-  value: string;
-  onChange: (id: string) => void;
-  apiBase: string;
-}) {
-  if (!personas.length) return null;
-  return (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-      {personas.map((p) => {
-        const selected = p.id === value;
-        const src = p.avatar ? `${apiBase}/persona-avatar/${encodeURIComponent(p.id)}` : null;
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => onChange(p.id)}
-            aria-pressed={selected}
-            className={cn(cardClass(selected), 'gap-2.5 p-2.5')}
-          >
-            {/* Initials sit behind the image so a broken avatar still
-                shows a readable placeholder. */}
-            <span className="relative grid size-9 flex-none place-items-center overflow-hidden border border-ink bg-[var(--ink-softer)]">
-              <span className="text-[11px] font-extrabold text-muted">{initials(p.name)}</span>
-              {src && (
-                <img
-                  src={src}
-                  alt=""
-                  className="absolute inset-0 h-full w-full object-cover"
-                  onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }}
-                />
-              )}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] font-extrabold text-ink">
-                {p.name?.trim() || 'Unnamed'}
-              </span>
-              <span className="block truncate text-[11px] text-muted">
-                {p.tagline?.trim() || 'no tagline'}
-              </span>
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 // The host is excluded by the caller; unselected cards go inert once `max` guests
 // are picked.
 export function GuestPersonaPicker({
@@ -212,18 +159,15 @@ interface PlaylistOpt {
 
 // Checkbox list for the show's playlist anchor / exclusion sets.
 //
-// Ids pinned on the show that no longer resolve get a row of their own. A playlist
-// deleted (or deleted and recreated) in Navidrome leaves its old id behind on the
-// show, and rendering only the live index meant that id had no checkbox — invisible
-// and unremovable from the UI, while failing to resolve on every pick cycle. The
-// only way out was hand-editing settings.json.
+// Pinned ids that no longer resolve get a row of their own: a playlist deleted
+// in Navidrome leaves its id behind on the show, and rendering only the live
+// index left it with no checkbox — invisible and unremovable, while failing to
+// resolve on every pick cycle.
 //
-// `status` gates the whole idea: a pending or failed `/dj/playlists` fetch also
-// leaves the index empty, and flagging every working anchor as missing there would
-// invite the operator to delete good config. Unknown means "say nothing", not
-// "say gone" — and each flavour of unknown says why, because an empty index is
-// only genuinely empty under `ready`. Rendering the three states the same way is
-// what made a slow or unreachable Navidrome read as "you have no playlists".
+// `status` gates that: a pending or failed /dj/playlists fetch also leaves the
+// index empty, and flagging every working anchor as missing there would invite
+// the operator to delete good config. Unknown means "say nothing", not "say
+// gone" — an empty index is only genuinely empty under `ready`.
 export function PlaylistPicker({
   playlists,
   status,

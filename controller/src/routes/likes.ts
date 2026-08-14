@@ -10,16 +10,14 @@
 //   DELETE /likes     admin    clear the store
 //
 // A like optionally mirrors to Navidrome as a Subsonic star
-// (settings.likes.starInNavidrome) — fire-and-forget, so a slow or down
-// Navidrome never blocks the tap. Deleting likes here does NOT unstar in
-// Navidrome: stars there are the operator's catalogue data; prune them in a
-// Subsonic client if wanted.
+// (settings.likes.starInNavidrome), fire-and-forget so a slow Navidrome never
+// blocks the tap. Deleting likes here does NOT unstar: those are the operator's
+// catalogue data, to prune from a Subsonic client.
 //
-// The ONE exception is the operator un-heart, and only when the song has no
-// likes left at all. That is the operator toggling their own heart rather than
-// pruning listener data, and a toggle that stars on but never off is a bug.
-// The "no likes remain" guard is what keeps it safe: a star earned by twenty
-// listener likes is never discarded because the operator un-hearted.
+// The ONE exception is the operator un-heart, and only when no likes remain —
+// that is the operator toggling their own heart rather than pruning listener
+// data, and a toggle that stars on but never off is a bug. The "none remain"
+// guard is what stops a star earned by twenty listener likes being discarded.
 
 import express from 'express';
 import { queue } from '../broadcast/queue.js';

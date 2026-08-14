@@ -50,13 +50,11 @@ import type {
 } from './shows/types';
 import { SHOWS_MAX } from './shows/types';
 
-// The RHF resolver. `showSchema` is a FACTORY — unlike every other schema in
-// this migration it cannot be validated against itself, so the object built
-// here is re-created whenever `showCtx` changes identity (below) rather than
-// once at module scope. `schedule` is deliberately NOT part of this shape:
-// this panel loads it read-only for the hours-a-week counts and never saves
-// it (the weekly grid + PUT /schedule live on the separate Rundown page), so
-// it stays a plain useState alongside the form instead of a validated field.
+// `showSchema` is a factory (a show can't be validated against itself — it has
+// to name a real persona, mood and theme), so the resolver is rebuilt whenever
+// `showCtx` changes identity rather than built once at module scope. `schedule`
+// is deliberately not part of the shape: this panel only reads it, for the
+// hours-a-week counts.
 function showsFormSchema(ctx: ShowSchemaContext) {
   return z.object({ shows: z.array(showSchema(ctx)) });
 }
@@ -113,17 +111,12 @@ export default function ShowsPanel() {
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); return null; }
   };
 
-  // Memoised because showCtx depends on them and `x || []` is a fresh array
-  // every render — which would rebuild the context, and with it re-run the
-  // resolver's schema construction, on each one.
+  // Memoised because `x || []` is a fresh array every render, and showCtx
+  // identity is what decides whether the resolver is rebuilt.
   const personas: Persona[] = useMemo(() => data?.values?.personas || [], [data?.values?.personas]);
   const moods: string[] = useMemo(() => data?.tts?.moods || [], [data?.tts?.moods]);
-  // The four inputs the shared show schema needs. Built once here so the row
-  // badges, the Save gate and the editor all judge a show the same way — and
-  // the same way the controller will. `themes` loads from a SEPARATE public
-  // fetch (below) that can resolve after `data` (personas/moods) already has —
-  // exactly the "context changes asynchronously" case the ctx-triggered
-  // revalidation effect further down exists to handle.
+  // The four inputs the shared show schema needs, built once so the row badges,
+  // the Save gate and the editor all judge a show the way the controller will.
   const showCtx = useMemo(
     () => showContext({
       personas, moods,
@@ -132,18 +125,15 @@ export default function ShowsPanel() {
     }),
     [personas, moods, themes, data?.values?.minTrackSeconds],
   );
-  // A NEW z.object() every time showCtx changes identity — showSchema(ctx) is
-  // documented as a heavyweight factory that returns a fresh schema per call,
-  // so this must stay memoised on ctx identity rather than rebuilt every
-  // render (Step 2 of the task brief).
+  // showSchema(ctx) builds a fresh schema per call, so keep this memoised on
+  // ctx identity rather than rebuilding it every render.
   const formSchema = useMemo(() => showsFormSchema(showCtx), [showCtx]);
 
   const form = useZodForm(formSchema, { shows: [] });
-  // Every field in showSchema's output is reached through at least one
-  // z.preprocess/z.unknown() pipeline (the outer legacy-field migration alone
-  // wraps the whole object), so z.input<> types the whole thing `unknown` and
-  // no nested path (`shows.0.personaId`) would type-check as a FieldPath.
-  // Type-only cast — same runtime object, same technique Task 3/9 established.
+  // showSchema's output is reached through z.preprocess/z.unknown() pipelines
+  // (the legacy-field migration wraps the whole object), so z.input<> types it
+  // `unknown` and no nested path would type-check as a FieldPath. Type-only
+  // casts onto the shape the resolver actually produces.
   const control = form.control as unknown as Control<ShowsFormValues>;
   const setValue = form.setValue as unknown as UseFormSetValue<ShowsFormValues>;
   const getValues = form.getValues as unknown as UseFormGetValues<ShowsFormValues>;
@@ -151,33 +141,19 @@ export default function ShowsPanel() {
   const resetForm = form.reset as unknown as UseFormReset<ShowsFormValues>;
   const trigger = form.trigger as unknown as UseFormTrigger<ShowsFormValues>;
 
-  // `keyName: '_rhfKey'` is load-bearing — shows carry their own `id`, and
-  // RHF's default keyName ('id') would clobber it. `fields` itself is unused:
-  // every render below reads live values via `watch('shows')`, matching
-  // PersonasPanel's convention (personas/djPrompts).
+  // `keyName: '_rhfKey'` is load-bearing — shows carry their own `id`, which
+  // RHF's default keyName ('id') would clobber. `fields` goes unused: renders
+  // below read live values via `watch('shows')`, as PersonasPanel does.
   const { append: appendShowField, remove: removeShowField } =
     useFieldArray({ control, name: 'shows', keyName: '_rhfKey' });
 
-  // useZodForm takes the schema at first render, and `showCtx` genuinely DOES
-  // change after mount — `data` (personas/moods) and `themes` resolve from two
-  // separate fetches that can land in either order, and even a single load
-  // races itself: `resetForm({shows})` below runs synchronously in the same
-  // callback as `setData(j)`, before React has re-rendered with the fresh
-  // `showCtx` that `setData` will produce, so a `trigger()` called right there
-  // would still see the STALE (empty-context) resolver.
-  //
-  // The fix is this effect, not a remount: react-hook-form's own `useForm`
-  // writes `control._options = props` unconditionally on every render (read
-  // directly from node_modules/react-hook-form/dist/index.cjs.js — the
-  // assignment sits in the function body, not gated behind a ref or a
-  // useEffect), so by the time THIS effect runs (after the render that
-  // produced the new showCtx/resolver has committed), `form.trigger()` is
-  // guaranteed to read the CURRENT resolver, not one captured at mount.
-  // Confirmed empirically too, by sabotage — see shows() in verify-forms.py:
-  // deleting this effect reproduces a real bug (every already-valid show
-  // reads as "incomplete" immediately after load, because the very first
-  // trigger() a naive version would fire runs before personas/moods exist),
-  // and restoring it fixes it, with no remount anywhere in the diff.
+  // `showCtx` changes after mount: personas/moods and themes come from separate
+  // fetches, and `resetForm({shows})` below runs in the same callback as
+  // `setData(j)`, before the render that produces the fresh ctx. Re-validating
+  // from an effect (rather than remounting the form) is enough — RHF rewrites
+  // `control._options` on every render, so by the time this runs `trigger()`
+  // reads the current resolver. Without it every valid show reads as
+  // "incomplete" after load; verify-forms.py's shows() covers the regression.
   useEffect(() => {
     void form.trigger();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -197,11 +173,9 @@ export default function ShowsPanel() {
         setSchedule(week);
         const shows: Show[] = (j.values.shows || []).map(hydrateShow);
         resetForm({ shows });
-        // No explicit trigger() here — the ctx-effect above fires on this
-        // same render (personas/moods just changed identity too, since they
-        // derive from the SAME `data` this callback just set), and it runs
-        // AFTER shows are populated, so it validates the right rows against
-        // the right context in one pass. See that effect's comment.
+        // No trigger() here: the ctx-effect above fires on this same render
+        // (personas/moods derive from the `data` just set) and runs after the
+        // shows are populated, validating both in one pass.
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -224,9 +198,7 @@ export default function ShowsPanel() {
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Themes for the per-show override. Public endpoint, so it runs before
-  // sign-in; on failure the picker offers only "Station default". Resolves
-  // independently of `data` — the async race the ctx-revalidation effect
-  // above exists to cover.
+  // sign-in; on failure the picker offers only "Station default".
   useEffect(() => {
     if (!hydrated) return;
     const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
@@ -262,9 +234,8 @@ export default function ShowsPanel() {
     let cancelled = false;
     (async () => {
       // Every exit that isn't a well-formed list lands on 'error', including a
-      // 200 with no `results` array: the index is unknown either way, and leaving
-      // it on 'loading' would spin forever. `cancelled` is checked before each
-      // set so an unmount/re-run never reports a state for a dead effect.
+      // 200 with no `results` array — the index is unknown either way, and
+      // 'loading' would spin forever.
       try {
         const r = await adminFetch('/dj/playlists');
         if (cancelled) return;
@@ -307,10 +278,8 @@ export default function ShowsPanel() {
 
   const focusShow = (i: number) => { scrollToEditorRef.current = true; setCreatingId(null); setFocusIdx(i); };
 
-  // The one remaining multi-field bulk patch — the AI-draft "apply" hands back
-  // several fields at once. Every keystroke field is bound straight to
-  // `control` elsewhere, so this is its only caller (mirrors PersonasPanel's
-  // applyPersonaPatch).
+  // Only used by the AI-draft "apply", which hands back several fields at once;
+  // every keystroke field binds straight to `control` instead.
   const applyShowPatch = (i: number, patch: Partial<Show>) => {
     const current = getValues(`shows.${i}`);
     if (!current) return;
@@ -331,11 +300,8 @@ export default function ShowsPanel() {
       playlistIds: [], playlistStrict: false, excludedPlaylistIds: [],
       programme: false, segmentSkill: '',
     });
-    // RHF only populates formState.errors for a field once IT has been
-    // touched — a freshly-appended row's empty `name` correctly disables the
-    // roster's isValid-derived reading, but without an explicit trigger() the
-    // "incomplete" badge would stay silent about why until the operator
-    // happens to touch a field (Task 9's precedent).
+    // errors populate only once a field is touched, so without this the new
+    // row's "incomplete" badge stays silent about why.
     void form.trigger();
     scrollToEditorRef.current = true;
     setCreatingId(id);
@@ -417,11 +383,8 @@ export default function ShowsPanel() {
         error?: string; show?: Partial<Show> | null; fieldErrors?: Record<string, string>;
       };
       if (!r.ok) {
-        // The route validates the body under the key `show` (POST /shows
-        // sends ONE show, not the whole array), so a server-only refusal
-        // comes back keyed `show.<field>` — remapped onto this row's own
-        // field-array path before landing it, the same idea webhooks/
-        // personas use for their own dotted-path fieldErrors.
+        // POST /shows sends ONE show, so refusals come back keyed `show.<field>`
+        // and need remapping onto this row's own field-array path.
         if (j.fieldErrors) {
           const remapped: Record<string, string> = {};
           for (const [k, v] of Object.entries(j.fieldErrors)) {
@@ -464,10 +427,7 @@ export default function ShowsPanel() {
   // focusIdx can briefly point past the end after a removal, so an out-of-range
   // index coerces to "nothing open".
   const focused = focusIdx != null ? (shows[focusIdx] ?? null) : null;
-  // form.formState.errors is typed off the schema's z.input (`unknown` for
-  // most of Show's fields, per showsFormSchema's own factory shape), so this
-  // is a type-only cast onto the shape the resolver's parse actually produces
-  // — same technique as the `control`/`setValue`/etc. casts above.
+  // Same type-only cast as `control`/`setValue` above.
   const focusedErrors = (focusIdx != null ? form.formState.errors.shows?.[focusIdx] : undefined) as
     FieldErrors<Show> | undefined;
 

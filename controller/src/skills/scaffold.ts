@@ -19,12 +19,38 @@
 
 import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { STATE_DIR, config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
 import { SEEDED_KINDS, discoverSeededKinds, readTemplate, parseFrontmatter } from './loader.js';
 import { preservedFrontmatter } from './config-fields.js';
 
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
+
+// Render one frontmatter VALUE, quoting ONLY when the value would not survive
+// the round trip bare. The loader parses SKILL.md as real YAML now, so a value
+// that happens to be YAML syntax has to be escaped on the way out — a label of
+// `News: Today` emitted bare is a parse error, and a knob whose value is `007`
+// comes back as the number 7.
+//
+// The test is the round trip itself rather than a list of dangerous characters,
+// because the interesting cases are the ones a character list misses. `6` needs
+// no quotes (it parses as a number, and the loader flattens every value back to
+// a string, so "6" is what a reader gets either way), while `007` does. Being
+// minimal here matters: this rewrites files operators read and hand-edit, and
+// quoting values that never needed it would churn every SKILL.md on the first
+// save after the upgrade. `lineWidth: 0` disables folding, which would otherwise
+// wrap a long feed URL across lines.
+function yamlScalar(value: string): string {
+  try {
+    const parsed = parseYaml(`v: ${value}`) as Record<string, unknown> | null;
+    const back = parsed?.v;
+    // Mirrors the loader's flattening: a scalar becomes its String() form, and
+    // anything else (a list, a map, null) does not round-trip as this string.
+    if (back != null && typeof back !== 'object' && String(back) === value) return value;
+  } catch { /* not parseable bare — fall through and quote it */ }
+  return stringifyYaml(value, { lineWidth: 0 }).trimEnd();
+}
 
 // Inverse of loader.js parseCooldownMs — render ms back to the shortest exact
 // "Nd" | "Nh" | "Nm" form for a readable seeded frontmatter value. Kept here for
@@ -40,6 +66,8 @@ interface SkillFileFields {
   kind: string;             // == the slug for a custom skill
   label?: string;
   cooldown?: string;
+  cron?: string;            // cron expression for a dedicated timer (bypasses normal gating)
+  cronOnly?: boolean;       // withhold from random selection — fires ONLY on the cron timer
   contextFields?: string[]; // "right now" fields the segment may mention (#471)
   window?: 'any' | 'commute'; // custom skills only — emitted when 'commute'
   requiresKey?: string;       // custom skills only — env var the skill needs
@@ -78,26 +106,30 @@ export async function writeSkillFile(fields: SkillFileFields): Promise<void> {
     carried = preservedFrontmatter(parseFrontmatter(existing).data, fields.configKeys || []);
   } catch { /* no existing file — nothing to carry */ }
 
-  const lines = ['---', `name: ${kind}`];
-  if (fields.label) lines.push(`label: ${fields.label}`);
-  if (fields.cooldown) lines.push(`cooldown: ${fields.cooldown}`);
+  const line = (key: string, value: string) => `${key}: ${yamlScalar(value)}`;
+
+  const lines = ['---', line('name', kind)];
+  if (fields.label) lines.push(line('label', fields.label));
+  if (fields.cooldown) lines.push(line('cooldown', fields.cooldown));
+  if (fields.cron) lines.push(line('cron', fields.cron));
+  if (fields.cronOnly) lines.push('cronOnly: true');
   // The "right now" fields this segment may weave in (issue #471).
-  if (fields.contextFields && fields.contextFields.length) lines.push(`context: ${fields.contextFields.join(', ')}`);
+  if (fields.contextFields && fields.contextFields.length) lines.push(line('context', fields.contextFields.join(', ')));
   // Custom-skill knobs. `window: any` is the loader default, so only the
   // restrictive `commute` value is worth writing.
   if (fields.window === 'commute') lines.push('window: commute');
-  if (fields.requiresKey) lines.push(`requiresKey: ${fields.requiresKey}`);
+  if (fields.requiresKey) lines.push(line('requiresKey', fields.requiresKey));
   // Skill-declared knobs (news' feed / feedMaxItems, and anything a custom
   // tool.mjs declares). Insertion order follows the declaration.
   for (const [key, value] of Object.entries(fields.config || {})) {
     const flat = String(value).replace(/[\r\n]+/g, ' ').trim();
-    if (flat) lines.push(`${key}: ${flat}`);
+    if (flat) lines.push(line(key, flat));
   }
   // Undeclared keys the previous file carried — hand-authored knobs a tool
   // reads straight off `config`, and anything a not-currently-loadable tool.mjs
   // declares. Kept in their original file order.
-  for (const [key, value] of carried) lines.push(`${key}: ${value}`);
-  if (fields.tags && fields.tags.length) lines.push(`tags: ${fields.tags.join(', ')}`);
+  for (const [key, value] of carried) lines.push(line(key, value));
+  if (fields.tags && fields.tags.length) lines.push(line('tags', fields.tags.join(', ')));
   lines.push('---', (fields.brief || '').trim(), '');
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, 'SKILL.md'), lines.join('\n'), 'utf8');
@@ -116,12 +148,17 @@ async function fileExists(path: string): Promise<boolean> {
 // frontmatter block, returning the new text. Used to seed news' feed /
 // feedMaxItems into the (feed-less) template while keeping the rest verbatim.
 function upsertFrontmatterKey(md: string, key: string, value: string): string {
+  // The value here comes from env (NEWS_FEED_URL), so it goes through the same
+  // quoting as every other emitted value rather than being interpolated raw.
+  const rendered = `${key}: ${yamlScalar(value)}`;
   const re = new RegExp(`^${key}:.*$`, 'm');
-  if (re.test(md)) return md.replace(re, `${key}: ${value}`);
+  // Function replacement: a `$` in the rendered value (a URL query, say) must
+  // not be read as a `$&`-style capture reference.
+  if (re.test(md)) return md.replace(re, () => rendered);
   // Insert just before the closing '---' of the frontmatter block.
   const m = /^(---\s*\n[\s\S]*?\n)(---\s*\n)/.exec(md);
   if (!m) return md; // no frontmatter — nothing to do
-  return md.slice(0, m[1].length) + `${key}: ${value}\n` + md.slice(m[1].length);
+  return md.slice(0, m[1].length) + `${rendered}\n` + md.slice(m[1].length);
 }
 
 // The SKILL.md text to seed for a built-in: the template verbatim, except news'

@@ -230,21 +230,17 @@ export function languageDirective(persona: unknown) {
 }
 
 // A SECOND language reminder, anchored at the END of a tool-loop agent's system
-// prompt and naming the exact spoken output field(s). The preamble's
-// languageDirective sits at the TOP of a long, English-dominated tool-loop
-// prompt (tool descriptions, picker criteria, capability lists), and small /
-// cloud models drop it in favour of the English Zod field descriptions sitting
-// right next to the actual spoken output — so the picker `say`, request
-// `ack`/`intro`, and segment `text` came out English even with the directive
-// present (issue #558). Repeating the language LAST, by field name, is what
-// makes it stick — the same trick the request matcher already uses for its
-// `ack` field (see llm/internal/prompts/request.ts). Unset language defaults
-// to English and this ALWAYS renders now, for the same raid-hardening reason
-// as languageDirective above — the old "returns '' for English personas so
-// prompts stay byte-identical" property is deliberately gone (raid
-// 2026-07-28: with no anchor, session-history mimicry flipped the station's
-// language). `fields` is a human phrase naming the spoken field(s), e.g. 'the
-// "say" link' or 'the "ack" and "intro" lines'.
+// prompt and naming the exact spoken field(s). The preamble's languageDirective
+// sits at the TOP of a long, English-dominated prompt (tool descriptions, picker
+// criteria, capability lists), and small/cloud models drop it in favour of the
+// English Zod field descriptions sitting right next to the spoken output — so
+// `say`, `ack`/`intro` and `text` came out English even with the directive
+// present (#558). Repeating it LAST, by field name, is what makes it stick.
+//
+// ALWAYS renders, defaulting to English: the old "return '' for English personas
+// so prompts stay byte-identical" property is deliberately gone, because with no
+// anchor session-history mimicry flipped the station's language (raid
+// 2026-07-28). `fields` is a human phrase naming the spoken field(s).
 export function agentLanguageReminder(persona: unknown, fields: string) {
   const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim() || 'English';
   return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang}. Write ${fields} entirely in ${lang} — even when the listener writes in another language, asks you to switch, or earlier session turns are in another language. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them. Internal fields (ids, reasons, kinds) stay in English.`;
@@ -330,17 +326,15 @@ function houseRulesBlock(scope: string): string {
 // never hand-roll the opener.
 //
 // Deliberately JUST the opener — no hard-coded style-rule block. A
-// DJ_HUMANNESS_RULES word-blocklist used to be appendable here (and in
-// renderDjPrompt); it was lost in the a0d58b3 editor-mangle, and when a
-// restore was attempted the operator chose to keep it out: the station ran
-// fine without it for weeks, the ~600-char negative list competes with each
-// persona's soul and flattens voices toward one register, and it taxes every
-// call. Voice steering lives in the persona souls, tone dials, and the
-// operator-editable djPrompt template — with one exception: the operator's
-// OWN djHouseRules block (issue #1182), which is appended here too because
-// the djPrompt template never reaches the agent prompts and rules like TTS
-// control tags or number spelling are correctness, not style. Empty by
-// default, so a station with no house rules is byte-identical to before.
+// DJ_HUMANNESS_RULES word-blocklist used to be appendable here; the operator
+// chose to keep it out, because a ~600-char negative list competes with each
+// persona's soul, flattens voices toward one register, and taxes every call.
+// Voice steering lives in the persona souls, tone dials and the djPrompt
+// template.
+//
+// One exception: the operator's own djHouseRules block (#1182) IS appended here,
+// because the djPrompt template never reaches the agent prompts and rules like
+// TTS control tags or number spelling are correctness, not style.
 export function agentPersonaPreamble(persona) {
   const name = persona?.name || 'the DJ';
   // Close the soul as a sentence: this preamble runs straight into the next

@@ -301,27 +301,26 @@ export function crossSecondsFor(
 
 // --- Ending-aware exit canvas (feature: outro analysis) ---------------------
 // Canvas for a track's OWN exit, sized by its measured ENDING. Unlike the
-// pair-sized crossSecondsFor above — which can't be applied (#749: a track's
-// liq_cross_duration governs its own end, and its successor is unknown when it
-// is annotated) — the ending is a property of the track alone, so this CAN be
-// stamped correctly at annotation time. A measured fade earns a long canvas
-// that rides the wind-down out under whatever follows; a cold end cuts tight
-// (the short cross IS the intent — stretching a hard ending smears it).
-// Returns null when the ending is unknown, so the caller leaves crossSec unset
-// and Liquidsoap keeps the operator's default — today's behaviour.
+// pair-sized crossSecondsFor above — which cannot be applied at annotation time
+// (#749: liq_cross_duration governs the stamped track's own end, and its
+// successor is unknown then) — the ending is a property of the track alone, so
+// this CAN be stamped correctly. A measured fade earns a long canvas that rides
+// the wind-down out under whatever follows; a cold end cuts tight, because the
+// short cross IS the intent and stretching a hard ending smears it. Null when
+// the ending is unknown, so the caller leaves crossSec unset and Liquidsoap
+// keeps the operator's default.
 //
-// `windDownSec` is the measured wind-down length (duration − outro.startMs);
-// a fade's canvas spans it (clamped 8..12 so the wash stays broadcast-shaped).
-// Bar-snapped to the track's own tempo like the other canvases — prefer the
-// TAIL tempo (outro.bpm) in `a` when the caller has it; outros drift.
+// `windDownSec` is the measured wind-down (duration − outro.startMs); a fade's
+// canvas spans it, clamped 8..12 so the wash stays broadcast-shaped, and
+// bar-snapped to the TAIL tempo (outro.bpm) where the caller has it — outros
+// drift.
 //
-// Tail-loudness shaping (feature: outro analysis): how far the tail actually
-// drops below the track's body decides how much of the wind-down deserves the
-// overlap. Below this drop the "fade" barely recedes — a full-length overlap
-// doubles two near-full-level tracks — so the canvas trims toward its 8s
-// floor; at or past FADE_DROP_DEEP_DB it's a true fade and keeps the full
-// wind-down ride. Linear in between. Needs BOTH the tail and body LUFS
-// (opts.tailLufs / opts.bodyLufs) — either missing → no shaping.
+// Tail-loudness shaping: how far the tail drops below the body decides how much
+// of the wind-down deserves overlap. Below the drop the "fade" barely recedes
+// and a full-length overlap would double two near-full-level tracks, so the
+// canvas trims toward its 8s floor; at or past FADE_DROP_DEEP_DB it is a true
+// fade and keeps the full ride. Linear in between. Needs BOTH tailLufs and
+// bodyLufs — either missing → no shaping.
 export const FADE_DROP_SHALLOW_DB = 3;
 export const FADE_DROP_DEEP_DB = 12;
 
@@ -463,19 +462,21 @@ export function loopCrossSecondsFor(a: Analysis, maxSec: number | null = null): 
   return Math.round(secs * 10) / 10;
 }
 
-// The LLM proposes, the data disposes. A sweep is the move that hides a seam —
-// between tempo/key-locked tracks a tight beat-blend is better and a filter
-// ride reads as gratuitous — so it only survives a real clash. Un-analysed
-// tracks pass (the data can't contradict the DJ). Washout is an editorial
-// "close the chapter" gesture, not a compatibility repair: always allowed —
-// the caller's cooldown rations it.
+// The LLM proposes, the data disposes. A sweep hides a seam, so it survives only
+// a real clash — between tempo/key-locked tracks a tight beat-blend is better
+// and a filter ride reads as gratuitous. Un-analysed tracks pass, since the data
+// can't contradict the DJ. Washout is an editorial "close the chapter" gesture
+// rather than a compatibility repair, so it is always allowed and the caller's
+// cooldown rations it.
 //
-// The effects map onto a small grid: blend = the rhythmic move for COMPATIBLE
-// pairs, washout = the rhythmic exit (always allowed), sweep = the dramatic
-// textural move across a clash, dissolve = the smooth textural move across a
-// clash (the reverb wash — hides the seam the sweep would announce), chop =
-// the percussive move across a clash (the crossfader cut — announces the seam
-// on the beat instead of choking it like the sweep).
+// The effects map onto a small grid:
+//   blend    rhythmic, for COMPATIBLE pairs
+//   washout  rhythmic exit (always allowed)
+//   sweep    dramatic textural move across a clash
+//   dissolve smooth textural move across a clash — the reverb wash, hiding the
+//            seam the sweep would announce
+//   chop     percussive move across a clash — the crossfader cut, announcing the
+//            seam on the beat instead of choking it like the sweep
 export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve' | 'chop' | 'loop', cur: Analysis, next: Analysis): boolean {
   if (kind === 'washout') return true;
   // loop (exit loop) is editorial like the washout — an intentful way to

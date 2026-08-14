@@ -1,12 +1,9 @@
 // Pure show helpers: hydration and the payload / table-row projections.
 //
-// Validation itself now lives entirely in ShowsPanel/ShowEditor, which run the
-// shared show schema (controller/src/schemas/show.ts, mirrored into
-// lib/schemas.generated.ts) directly through react-hook-form's zodResolver, so
-// the rules this panel applies are byte-for-byte the ones the controller
-// enforces. What stays local here is only what the schema deliberately does
-// not express: the editor's tolerance for a half-finished show (hydrateShow),
-// and showPayload's "only means something with" conditionals.
+// Validation lives in ShowsPanel/ShowEditor, which run the shared show schema
+// through zodResolver. What stays local is only what that schema deliberately
+// does not express: the editor's tolerance for a half-finished show
+// (hydrateShow), and showPayload's "only means something with" conditionals.
 
 import type { ShowFacet, ShowRow } from './ShowsTable';
 import { SHOW_COLORS } from '../schedule/lib';

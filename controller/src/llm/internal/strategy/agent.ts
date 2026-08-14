@@ -7,19 +7,16 @@
 //
 // STRATEGY (resolved per leg by agentPlan() below):
 //   1. Native-first (non-Ollama tool-using agents): native Output.object with
-//      AUTO tool_choice. Needs no forced tool_choice, so it sidesteps the whole
-//      "thinking mode does not support this tool_choice" class (Anthropic +
-//      DeepSeek reject forced tools while thinking). Verified 5/5 across openai
-//      (gpt-4.1-mini), anthropic (claude-haiku-4.5), google (gemini-3.5-flash),
-//      openrouter (kimi-k2.6); deepseek needs thinking off (5/5 off vs 1/5 on —
-//      forceNoThink handles it). On any miss it falls through to (2), so worst
-//      case is the prior behaviour, never a regression. Older models still fail
-//      native (gemini-2.5-flash, llama-3.3-70b → 0/n) — the fall-through covers them.
+//      AUTO tool_choice. Forcing nothing sidesteps the whole "thinking mode does
+//      not support this tool_choice" class (Anthropic + DeepSeek reject forced
+//      tools while thinking; deepseek needs thinking off, which forceNoThink
+//      handles). Older models fail native outright (gemini-2.5-flash,
+//      llama-3.3-70b), and any miss falls through to (2), so the worst case is
+//      the prior behaviour rather than a regression.
 //   2. Done-tool (Ollama always; everyone else on a native miss): the forced
 //      tool-calling pattern below. Ollama is excluded from native because its
-//      tool-loop Output.object returns schema-valid-but-EMPTY JSON WITHOUT ever
-//      calling discovery (verified 0/3 on glm-5.1/qwen3.5/nemotron:cloud), so the
-//      done-tool path is the only one that works there.
+//      tool-loop Output.object returns schema-valid but EMPTY JSON without ever
+//      calling discovery, so the done-tool path is the only one that works.
 //
 // The done-tool pattern (the AI SDK's documented "Forced Tool Calling"): a
 // synthetic `done` tool whose inputSchema IS the schema is added alongside the

@@ -1,5 +1,90 @@
 # Changelog
 
+## [1.8.0](https://github.com/perminder-klair/subwave/compare/v1.7.0...v1.8.0) (2026-08-12)
+
+
+### Features
+
+* **broadcast:** stamp DJ speech at air time, not handoff ([#1382](https://github.com/perminder-klair/subwave/issues/1382)) ([#1390](https://github.com/perminder-klair/subwave/issues/1390)) ([735b3fd](https://github.com/perminder-klair/subwave/commit/735b3fd59fc8292b4d8319f78d809f1eabb4b9ac))
+* **debug:** merge State dir + DJ voices into one read-only state tree ([#1392](https://github.com/perminder-klair/subwave/issues/1392)) ([9ce8a61](https://github.com/perminder-klair/subwave/commit/9ce8a613ca7bbd25ce639580532a792e395afdcc))
+* **dj:** add a station switch to keep the clock off air ([#1324](https://github.com/perminder-klair/subwave/issues/1324)) ([a3bb65e](https://github.com/perminder-klair/subwave/commit/a3bb65ec6c0e9fa4d337670678c2e05d6f195e48))
+* show the next queue transition in the admin header once it's armed ([#1372](https://github.com/perminder-klair/subwave/issues/1372)) ([f9897b0](https://github.com/perminder-klair/subwave/commit/f9897b01adf0fc4b557503c5fdef8220f3a72e37))
+* **skills:** optional per-skill cron timer ([#1379](https://github.com/perminder-klair/subwave/issues/1379)) ([178ad05](https://github.com/perminder-klair/subwave/commit/178ad053aa4e23cb4bdb24b956d1429b75d5af3f))
+* Test corrections button in Moods → Speech tab ([#1350](https://github.com/perminder-klair/subwave/issues/1350)) ([ffd5d94](https://github.com/perminder-klair/subwave/commit/ffd5d945fac1a2c95041a663d696522413024bb7))
+* **webhooks:** tell consumers speech is coming, not just that it started ([#1382](https://github.com/perminder-klair/subwave/issues/1382)) ([#1393](https://github.com/perminder-klair/subwave/issues/1393)) ([5746158](https://github.com/perminder-klair/subwave/commit/57461583f5b6a61fd8c72130f71e9f8a02c95a7d))
+* **web:** move playlist reorder onto dnd-kit (touch + keyboard) ([#1387](https://github.com/perminder-klair/subwave/issues/1387)) ([5025f20](https://github.com/perminder-klair/subwave/commit/5025f20374aa5439a927e37a08f4a5a52546f69d))
+* **web:** sort persona roster by on-air status and name ([#1371](https://github.com/perminder-klair/subwave/issues/1371)) ([f39e6a7](https://github.com/perminder-klair/subwave/commit/f39e6a7d4652da850f27f0c7507e67c21de0b3e3))
+
+
+### Bug Fixes
+
+* **dj:** say the requester's name on air ([#1384](https://github.com/perminder-klair/subwave/issues/1384)) ([3933236](https://github.com/perminder-klair/subwave/commit/3933236b6de60aad134329c3ab0978011b162ab9))
+* **tagging:** calibrate audio moods per label and derive energy for propagated tracks ([#1386](https://github.com/perminder-klair/subwave/issues/1386)) ([319bfc8](https://github.com/perminder-klair/subwave/commit/319bfc8808c6ed2d8304bb04a437dbb2611b9f8d))
+* **tts:** cloud fallback targets are engine + provider, on both trigger paths ([#1378](https://github.com/perminder-klair/subwave/issues/1378)) ([544a3fc](https://github.com/perminder-klair/subwave/commit/544a3fca5ab8c8d9b802781c02fafd51cba9f4f6)), closes [#1345](https://github.com/perminder-klair/subwave/issues/1345)
+* **web:** confirm a schedule booking, the one board write that said nothing ([#1389](https://github.com/perminder-klair/subwave/issues/1389)) ([46eb5ce](https://github.com/perminder-klair/subwave/commit/46eb5cea46e7b1e199a0458c7d46e873db5b47fc))
+
+
+### Documentation
+
+* split CLAUDE.md into invariants plus scoped references ([#1395](https://github.com/perminder-klair/subwave/issues/1395)) ([04b537e](https://github.com/perminder-klair/subwave/commit/04b537e63eb045215dbfb91c0953f2310c949663))
+
+
+### Refactors
+
+* **web:** adopt usehooks-ts for debounce, clipboard, clock and media-query ([#1388](https://github.com/perminder-klair/subwave/issues/1388)) ([bf357ff](https://github.com/perminder-klair/subwave/commit/bf357ffa82b8ab1ba3491bf23e04f73b86cd4855))
+
+## [1.7.0](https://github.com/perminder-klair/subwave/compare/v1.6.0...v1.7.0) (2026-08-11)
+
+
+### Features
+
+* /settings on the shared zod schema — per-key registry, fieldErrors, 26/42 keys ([#1348](https://github.com/perminder-klair/subwave/issues/1348)) ([#1349](https://github.com/perminder-klair/subwave/issues/1349)) ([d7b50b6](https://github.com/perminder-klair/subwave/commit/d7b50b652654d85b3dced5d6b9ddd5aaf8e0c31e))
+* finish the zod form conversion — personas, blocklist, library, and the fieldErrors channel ([#1337](https://github.com/perminder-klair/subwave/issues/1337)) ([#1358](https://github.com/perminder-klair/subwave/issues/1358)) ([c05be93](https://github.com/perminder-klair/subwave/commit/c05be933d3400803dcc58b13080d63a96487f36f))
+* imaging on the shared zod form schema ([#1337](https://github.com/perminder-klair/subwave/issues/1337)) ([fda0b6b](https://github.com/perminder-klair/subwave/commit/fda0b6b30e8b890fa2894227cf479a39c6f7ff2c))
+* onboarding probes on the shared zod form schema ([#1337](https://github.com/perminder-klair/subwave/issues/1337)) ([0c80bb9](https://github.com/perminder-klair/subwave/commit/0c80bb9c713aa6bf89ee24d636eb684b52edbbe2))
+* playlists on the shared zod form schema ([#1337](https://github.com/perminder-klair/subwave/issues/1337)) ([c1b7f66](https://github.com/perminder-klair/subwave/commit/c1b7f66373cae49c2c47d688681f65bcd14e6600))
+* public request boxes on the shared zod form schema ([#1337](https://github.com/perminder-klair/subwave/issues/1337)) ([48749ca](https://github.com/perminder-klair/subwave/commit/48749cab8430aa246bf613de761ca220ba426e6c))
+* schedule on the shared zod form schema + review fixes ([#1337](https://github.com/perminder-klair/subwave/issues/1337)) ([418323f](https://github.com/perminder-klair/subwave/commit/418323f3851d80dbebc5d44ffdc5674ad0d57b91))
+* shows on the shared zod form schema ([#1337](https://github.com/perminder-klair/subwave/issues/1337)) ([926ac58](https://github.com/perminder-klair/subwave/commit/926ac58dda100aadf0401ed337fd63d9db7d68a4))
+* skills on the shared zod form schema ([#1337](https://github.com/perminder-klair/subwave/issues/1337)) ([5e10746](https://github.com/perminder-klair/subwave/commit/5e10746d1c4cc0b473bdf19429b3bca600ec0122))
+* stations on the shared zod form schema ([#1337](https://github.com/perminder-klair/subwave/issues/1337)) ([5e0484d](https://github.com/perminder-klair/subwave/commit/5e0484d74fd5859c219f2f7da93280e2cdd98038))
+* stations, shows, skills, playlists, imaging, onboarding, request boxes + schedule on the shared zod form schema ([#1337](https://github.com/perminder-klair/subwave/issues/1337)) ([fe9e2ba](https://github.com/perminder-klair/subwave/commit/fe9e2ba5428b8c102f9da6d5b1f910827a134296))
+* **web:** finish the form migration — react-hook-form across the admin editors ([#1359](https://github.com/perminder-klair/subwave/issues/1359)) ([dd200c7](https://github.com/perminder-klair/subwave/commit/dd200c736b864c393a11bc8199835b58713692e2))
+
+
+### Bug Fixes
+
+* backup restore no longer deletes the primary/fallback LLM API keys ([#1352](https://github.com/perminder-klair/subwave/issues/1352)) ([b98e300](https://github.com/perminder-klair/subwave/commit/b98e3005ccc8fb345de78b6473f2cd59d96b0f8f)), closes [#1351](https://github.com/perminder-klair/subwave/issues/1351)
+* **controller:** stream.bufferSeconds was lost on every restart ([#1364](https://github.com/perminder-klair/subwave/issues/1364)) ([8cfae2a](https://github.com/perminder-klair/subwave/commit/8cfae2aa6b99b69d132ea3ec62083ead034cea86))
+* review fixes — lenient path can't drop shows, nulls read as absent, legacy fields migrate everywhere ([2b852ee](https://github.com/perminder-klair/subwave/commit/2b852eed716901c6fddf3c11cf30d8020b4b58f8))
+* **web:** appended-row errors, imaging poll coverage, and a contract for the verify harness ([#1360](https://github.com/perminder-klair/subwave/issues/1360)) ([50fdb23](https://github.com/perminder-klair/subwave/commit/50fdb23cbd79371d9c0bdada423e92409d0dad31))
+
+
+### Documentation
+
+* **docker:** make comments leaner ([#1355](https://github.com/perminder-klair/subwave/issues/1355)) ([c2cb24e](https://github.com/perminder-klair/subwave/commit/c2cb24ef167b80d0dca3f5b5b3c2283ea76e9c7f))
+* **liquidsoap:** trim radio.liq comments and fix stale figures ([#1356](https://github.com/perminder-klair/subwave/issues/1356)) ([994befb](https://github.com/perminder-klair/subwave/commit/994befbbcd574db22cecb0f68184fe1f55dff232))
+
+
+### Refactors
+
+* **cli:** trim comments to load-bearing rationale + add README ([#1357](https://github.com/perminder-klair/subwave/issues/1357)) ([a864730](https://github.com/perminder-klair/subwave/commit/a864730636cb305485247e76dfd2b8bd4b0fb9ed))
+* **web:** move the library page onto TanStack Query ([#1363](https://github.com/perminder-klair/subwave/issues/1363)) ([31b6f59](https://github.com/perminder-klair/subwave/commit/31b6f595f23789f9c6d98f741449416af758b307))
+* **web:** split LibraryPanel into per-tab components ([#1361](https://github.com/perminder-klair/subwave/issues/1361)) ([bf3a465](https://github.com/perminder-klair/subwave/commit/bf3a465c770004aa51e4bb099a67224233bd241c))
+
+## [1.6.0](https://github.com/perminder-klair/subwave/compare/v1.5.0...v1.6.0) (2026-08-06)
+
+
+### Features
+
+* library exploration — airing memory, unfenced wide sources, scaled recency (fixes the repeated-songs bubble) ([#1339](https://github.com/perminder-klair/subwave/issues/1339)) ([2d73550](https://github.com/perminder-klair/subwave/commit/2d73550568c30dd39baea79b77b87a571fda376a))
+* zod validation + shadcn form foundation (webhooks slice) ([#1323](https://github.com/perminder-klair/subwave/issues/1323)) ([80cada8](https://github.com/perminder-klair/subwave/commit/80cada85e4818436d37d9c06b4cfcb488c27021c))
+
+
+### Bug Fixes
+
+* **web:** stop admin scroll areas chaining to the page and popping their scrollbar ([#1341](https://github.com/perminder-klair/subwave/issues/1341)) ([eaaadd2](https://github.com/perminder-klair/subwave/commit/eaaadd2f96398fed2be25a6a702276b217e9c9a2))
+
 ## [1.5.0](https://github.com/perminder-klair/subwave/compare/v1.4.0...v1.5.0) (2026-08-05)
 
 

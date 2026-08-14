@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useCopyToClipboard } from 'usehooks-ts';
 import { Pill } from '../ui';
 import { notify } from '../../../lib/notify';
 import type { EndpointDoc } from './types';
@@ -42,14 +43,11 @@ function toCurl(ep: EndpointDoc, apiBase: string): string {
 
 export default function EndpointCard({ endpoint, apiBase, adminFetch }: Props) {
   const [open, setOpen] = useState(false);
+  const [, copyToClipboard] = useCopyToClipboard();
 
   const copyCurl = async () => {
-    try {
-      await navigator.clipboard.writeText(toCurl(endpoint, apiBase));
-      notify.info('curl copied');
-    } catch {
-      notify.err('Could not copy');
-    }
+    if (await copyToClipboard(toCurl(endpoint, apiBase))) notify.info('curl copied');
+    else notify.err('Could not copy');
   };
 
   const allParams = [...(endpoint.pathParams || []), ...(endpoint.queryParams || [])];

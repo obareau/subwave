@@ -103,10 +103,8 @@ interface ShowEditorProps {
   busy: boolean;
   isNew: boolean;       // show the AI-draft field only while creating
   valid: boolean;
-  // The one remaining multi-field bulk patch — the AI-draft "apply" hands back
-  // several fields at once. Every keystroke field elsewhere binds straight to
-  // `control` instead, so this is its only caller (same split Task 9 drew for
-  // PersonaIdentityCard's onUpdate).
+  // Only used by the AI-draft "apply", which hands back several fields at once;
+  // every keystroke field binds straight to `control` instead.
   onApplyDraft: (patch: Partial<Show>) => void;
   onSave: () => void;   // Save show — persists just this show (POST /shows)
   onClose: () => void;
@@ -126,11 +124,9 @@ export function ShowEditor({
   // typechecks against the real field name it names.
   const path = <K extends string>(field: K) => `shows.${index}.${field}` as `shows.${number}.${K}`;
 
-  // What the schema actually objected to. The footer used to hard-code "needs
-  // a name and a persona", which was a wrong diagnosis for every OTHER reason
-  // the gate can now fail (a mood retired on /admin/moods, a track cap under a
-  // raised crossfade floor, a backwards era window) — a dead end for the
-  // operator, since both named fields were already set.
+  // What the schema actually objected to. A hard-coded "needs a name and a
+  // persona" is a dead end for every other reason the gate can fail — a retired
+  // mood, a track cap under a raised crossfade floor, a backwards era window.
   const gateIssue = (() => {
     if (valid) return null;
     const first = firstFieldError(errors);
@@ -140,29 +136,18 @@ export function ShowEditor({
     return label ? `${label}: ${first.message}` : first.message;
   })();
 
-  // Bound to the exact object/array the control writes: `update` (the pre-RHF
-  // patch helper) is gone, and TextField/SwitchField cover the plain-value
-  // fields directly (name, topic, programme, banter). Everything with real
-  // cross-field/array work — a Radix Select empty-value sentinel, a clamping
-  // onChange, a chip input, and (below) a manual re-trigger — stays on a raw
-  // useController per lib/form-fields.tsx's own header rule.
+  // TextField/SwitchField cover the plain-value fields; anything with real
+  // cross-field or array work (a Radix empty-value sentinel, a clamping
+  // onChange, a chip input, a manual re-trigger) stays on a raw useController,
+  // per lib/form-fields.tsx's own header rule.
   //
-  // personaId (host) is a raw Controller too, NOT SelectField, even though
-  // it's otherwise plain-value-shaped: react-hook-form's lazy error
-  // population (formState.errors populates a field only once THAT field has
-  // been "seen" by a validation run that resolves an issue for it) turned out
-  // to apply per-PATH, not per-touch the way Task 9 characterised it for a
-  // freshly-appended row — confirmed empirically here by a live console trace
-  // (see the task report): switching the host to a persona already picked as
-  // a guest correctly flips `formState.isValid` to false immediately, but
-  // `formState.errors.shows[i].guestPersonaIds` stayed `{}` — the empty-array
-  // guest-check `.check()` issue is rooted at `guestPersonaIds`, a SIBLING of
-  // the field that actually changed (`personaId`), and nothing re-validated
-  // that sibling's own error entry until it was touched directly. A plain
-  // field.onChange (what SelectField gives you) can't fire that re-trigger,
-  // so Save would read as enabled off a stale `errors` tree even though
-  // `isValid` already knows better. The fix is the same one degree removed:
-  // trigger() the sibling explicitly on every change that can invalidate it.
+  // personaId (host) is a raw Controller for a subtler reason. RHF populates
+  // formState.errors per PATH: picking a host who is already a guest flips
+  // `isValid` false immediately, but `errors.shows[i].guestPersonaIds` stays
+  // `{}` — the cross-field issue is rooted at the SIBLING field, which nothing
+  // re-validates until it is touched directly. So Save would read as enabled
+  // off a stale errors tree. A plain field.onChange can't fire that re-trigger;
+  // this Controller trigger()s the sibling explicitly.
   const personaIdCtl = useController({ control, name: path('personaId') });
   const personaIdAria = fieldAria(`${uid}-${path('personaId')}`, personaIdCtl.fieldState.error, { hasDescription: true });
   const guestsCtl = useController({ control, name: path('guestPersonaIds') });

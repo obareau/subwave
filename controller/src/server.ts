@@ -3,7 +3,9 @@
 // background services. The Next.js web UI hits this for: now-playing, queue
 // state, request submission, and the admin surface.
 import express from 'express';
+import helmet from 'helmet';
 import { config } from './config.js';
+import { envIssues } from './util/env.js';
 import * as settings from './settings.js';
 import * as blocklist from './music/blocklist.js';
 import * as jingles from './broadcast/jingles.js';
@@ -100,6 +102,37 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 const app = express();
+
+// Security response headers. This is an API — it serves JSON, images, audio and
+// zips, never HTML — so most of helmet's document-level policies are inert here
+// and the three that matter are the ones configured below.
+//
+//   • crossOriginResourcePolicy MUST be 'cross-origin'. helmet's default is
+//     'same-origin', which tells the browser to refuse the response to any other
+//     origin — that would break /cover/:id artwork, persona avatars and the
+//     sfx/jingle/bed previews in every deployment where the player is not
+//     same-origin with the controller, which is exactly what middleware/cors.ts
+//     opens the door for. A default that silently blanks album art is not a
+//     default worth inheriting.
+//   • contentSecurityPolicy is off. A CSP on a JSON or image response is inert
+//     (it constrains a DOCUMENT, and no document is served from here); the web
+//     app ships its own. Leaving it on would only add ~100 bytes to every reply.
+//   • strictTransportSecurity is off because TLS is not this process's to
+//     assert. Cloudflare/Caddy terminate it (`auto_https off` in the bundled
+//     edge), and helmet's default carries includeSubDomains — an HSTS pin the
+//     controller cannot honour and the operator did not ask for.
+//
+// What is left is what an API wants: nosniff, no X-Powered-By, X-Frame-Options
+// SAMEORIGIN, a no-referrer policy, and the assorted legacy no-ops.
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginOpenerPolicy: false,
+    contentSecurityPolicy: false,
+    strictTransportSecurity: false,
+  }),
+);
+
 // Global cap covers small JSON payloads everywhere; the persona-avatar route
 // re-applies its own (slightly larger) cap on top via per-route json middleware.
 // The default 100 KB was below the 50–300 KB data URLs the avatar picker posts.
@@ -145,16 +178,31 @@ app.use(mcpRoutes);
 app.listen(config.server.port, async () => {
   console.log(`SUB/WAVE controller on :${config.server.port}`);
 
+  // Malformed env vars fell back to their defaults at import time and warned on
+  // stdout. Repeat them into the booth log too — that's the surface an operator
+  // actually reads, and a typo'd var otherwise presents only as the feature
+  // behind it quietly behaving as if it were never set.
+  for (const issue of envIssues()) {
+    queue.log('warn', `[env] ${issue.name}="${issue.value}" ${issue.problem} — using ${issue.usedInstead} instead`);
+  }
+
   // Source the wizard-managed secrets file (state/secrets.env) into process.env
   // before anything else touches the AI SDK. Real env vars (from compose
   // env_file) always win — secrets.env is the persistence layer for keys the
   // operator typed into the first-run wizard.
   try {
-    const { loaded, skipped } = await loadSecretsIntoEnv();
+    const { loaded, skipped, warnings } = await loadSecretsIntoEnv();
     if (loaded.length || skipped.length) {
       console.log(
         `[secrets] state/secrets.env: loaded=${loaded.length} skipped(env-already-set)=${skipped.length}`,
       );
+    }
+    // A hand edit this file couldn't read the way the operator meant it. Both
+    // surfaces, for the same reason the env warnings take both: the mistake
+    // otherwise presents only as a provider 401, which points nowhere near here.
+    for (const w of warnings) {
+      console.warn(`[secrets] ${w}`);
+      queue.log('warn', `[secrets] ${w}`);
     }
   } catch (err: any) {
     console.error('[secrets] load failed:', err.message);

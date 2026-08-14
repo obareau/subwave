@@ -122,6 +122,37 @@ const NAME_DISALLOWED = /[^\p{sc=Latin}\p{sc=Cyrillic}\p{sc=Greek}\p{sc=Arabic}\
 // route boundary still get a bounded name.
 const NAME_MAX = REQUEST_NAME_MAX;
 
+// The stand-in cleanRequesterName returns when there is no usable name. It is a
+// LEDGER value, not a name: the request log, the webhook payload and the admin
+// row all want a non-empty string, so this stays what it has always been. What
+// it must never be is a name a prompt hands to a model — `'anon'` is truthy, so
+// every anonymous request used to push a literal `Requested by: anon` line plus
+// the screening clause below it, inviting the DJ to read a fake name on air.
+// Prompt sites gate on isNamedRequester(), never on the bare string (#1347).
+export const ANON_REQUESTER = 'anon';
+
+/**
+ * Did this request arrive with a real screen name? The one answer to "may a
+ * prompt name this listener" — never compare against ANON_REQUESTER inline, or
+ * the next prompt site added will forget to.
+ */
+export function isNamedRequester(name: string | null | undefined): boolean {
+  const v = String(name ?? '').trim();
+  return v !== '' && v !== ANON_REQUESTER;
+}
+
+/**
+ * The "nothing matched" decline, addressed to the listener when they signed and
+ * left impersonal when they didn't. Here rather than at the two route call
+ * sites because it is the same isNamedRequester question, and the version it
+ * replaces read "Sorry anon, nothing in the crates matched that." on air.
+ */
+export function sorryNoMatch(requester: string | null | undefined): string {
+  return isNamedRequester(requester)
+    ? `Sorry ${String(requester).trim()}, nothing in the crates matched that.`
+    : 'Sorry, nothing in the crates matched that.';
+}
+
 export function cleanRequesterName(raw: string | null | undefined, reserved: string[] = []): string {
   const cleaned = String(raw ?? '')
     .replace(NAME_DISALLOWED, ' ')
@@ -129,9 +160,9 @@ export function cleanRequesterName(raw: string | null | undefined, reserved: str
     .trim()
     .slice(0, NAME_MAX)
     .trim();
-  if (!cleaned) return 'anon';
+  if (!cleaned) return ANON_REQUESTER;
   const lc = cleaned.toLowerCase();
-  if (reserved.some((r) => r && String(r).trim().toLowerCase() === lc)) return 'anon';
+  if (reserved.some((r) => r && String(r).trim().toLowerCase() === lc)) return ANON_REQUESTER;
   return cleaned;
 }
 

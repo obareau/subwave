@@ -94,65 +94,52 @@ export function noThinkFetch(url: any, init: any, baseFetch: any = fetch) {
 // that schema is dropped. We inject them straight into the JSON request body
 // instead (servers ignore keys they don't recognise, same bet the existing
 // chat_template_kwargs injection already makes):
-//   • repeat_penalty — llama.cpp's own default is 1.0 (OFF), so the operator's
-//     configured repetition floor is otherwise never applied and the tool-loop
-//     agent can run away repeating a token block (gist quirk #2). This is the
-//     ONLY path that carries it to the agent/object calls, which never pass
-//     repeat_penalty through providerOptions. `repeat_penalty` is llama.cpp's
-//     param name (vLLM's is `repetition_penalty`); to opt out, set
-//     llm.repeatPenalty to 1.0. We never clobber a value already on the body —
-//     an inert guard in practice, and NOT the reason a configured penalty can
-//     go missing: @ai-sdk/openai has no repeat_penalty field at all, and its
-//     providerOptions schema drops one you try to pass, so the key is only ever
-//     on the body if we put it there. #1327 was reported as this guard firing
-//     against an SDK-supplied 1.0 and was actually settings.load() dropping the
-//     field; check `settings.get().llm.repeatPenalty` before touching the guard.
+//   • repeat_penalty — llama.cpp defaults to 1.0 (OFF), so without this the
+//     operator's configured floor is never applied and the tool-loop agent can
+//     run away repeating a token block. This is the ONLY path that carries it to
+//     the agent/object calls. llama.cpp's param name; vLLM's is
+//     `repetition_penalty`. Set llm.repeatPenalty to 1.0 to opt out. The
+//     never-clobber guard is inert in practice and is NOT how a configured
+//     penalty goes missing — @ai-sdk/openai has no such field and drops it from
+//     providerOptions, so the key is only ever on the body if we put it there.
+//     #1327 looked like this guard and was settings.load() dropping the field;
+//     check `settings.get().llm.repeatPenalty` before touching it.
 //   • reasoning off → enable_thinking:false PLUS reasoning_format PLUS an
-//     OpenRouter-style `reasoning:{enabled:false}` block (see
-//     reasoningMandatoryModel below for the effort:'minimal' exception).
-//     The chat_template_kwargs family is a llama.cpp dialect — an operator
-//     pointing this provider at a CLOUD aggregator (openrouter.ai/api/v1,
-//     or any hosted /v1 that speaks OpenRouter's reasoning extension) gets
-//     no thinking suppression from it at all: measured 57/96 with 16 leaked
-//     cells for qwen3.5-9b via openrouter.ai, vs 86/96 through the native
-//     openrouter provider whose extraBody sends exactly this block. Servers
-//     that don't know the key ignore it — the same bet as every other knob
-//     here. Gemma-4's
-//     chat template pre-seeds an empty <|channel|>thought block even with
-//     enable_thinking:false, and with reasoning_format unset (defaults to none)
-//     llama.cpp routes that thought to `content`, so it leaks into the visible
-//     script and reaches TTS. reasoning_format:"deepseek" routes it to
-//     reasoning_content, which the SDK surfaces as a reasoning part, not text
-//     (gist quirk #4). GLM-family models (Zhipu/Z.ai — including the GLM
-//     Coding Plan's api.z.ai/api/coding/paas/v4 endpoint) ignore
-//     enable_thinking entirely and read a DIFFERENT, top-level `thinking.type`
-//     field instead, so their thinking never actually turned off via the
-//     knobs above alone — the hidden chain-of-thought burned through
-//     maxOutputTokens/step budgets before a forced tool call could land,
-//     surfacing as multi-minute calls or "agent did not call the done tool
-//     before stopping". Send it alongside the others — an unrecognised field
-//     is silently ignored by servers that don't define it, same bet as the
-//     other body-injection knobs here.
+//     OpenRouter-style `reasoning:{enabled:false}` block (reasoningMandatoryModel
+//     below carries the effort:'minimal' exception). All three are needed
+//     because each covers a different server:
+//       - chat_template_kwargs is a llama.cpp dialect and does nothing on a
+//         CLOUD aggregator behind this provider — measured 57/96 with 16 leaked
+//         cells for qwen3.5-9b via openrouter.ai, vs 86/96 through the native
+//         openrouter provider, which sends the `reasoning` block.
+//       - Gemma-4's chat template pre-seeds an empty <|channel|>thought block
+//         even with enable_thinking:false, and with reasoning_format unset
+//         llama.cpp routes that thought to `content`, where it leaks into the
+//         script and reaches TTS. reasoning_format:"deepseek" routes it to
+//         reasoning_content, which the SDK surfaces as a reasoning part.
+//       - GLM-family models (Zhipu/Z.ai) ignore enable_thinking entirely and
+//         read a top-level `thinking.type` instead, so their hidden
+//         chain-of-thought burned through the output/step budget before a forced
+//         tool call could land — multi-minute calls, or "agent did not call the
+//         done tool before stopping".
 //   • parallel_tool_calls:false on tool-bearing requests — absent, llama.cpp
-//     resolves it from the chat template's capability default, which is true
-//     for Gemma-4-family templates; the model then emits several tool calls in
-//     one turn and the peg-gemma4 parser 500s on call #2, failing the whole
-//     pick/segment attempt (issue #940). The agent design is one call per step
-//     (gated discovery, COMMIT_AFTER_STEPS=1), so forcing max one call matches
-//     intent everywhere. Only sent when tools are present — strict servers
-//     reject the field on tool-less requests.
+//     takes the chat template's capability default, true for Gemma-4 templates;
+//     the model then emits several tool calls in one turn and the peg-gemma4
+//     parser 500s on call #2, failing the whole attempt (#940). The agent design
+//     is one call per step anyway. Only sent when tools are present — strict
+//     servers reject the field on tool-less requests.
 //
-// `forceNoThink` suppresses thinking on THIS instance even when the operator
-// left reasoning on: the forced-tool structured-output legs (picker done-tool,
-// objectViaToolCall) run no-think so a reasoning model doesn't burn its whole
-// output budget thinking and then truncate mid-<think> (→ NoObjectGeneratedError
-// on every pick) or fail to emit the forced tool. Unlike Anthropic/DeepSeek
-// (per-call providerOptions) and OpenRouter (construction-time reasoning), the
-// only no-think lever these self-hosted servers have is this body injection, so
-// forceNoThink has to be honoured HERE — a distinct no-think model instance is
-// built for the picker legs (see languageModel's bodyNoThink). Without it a
-// reasoning-on locca/openai-compatible model failed schema validation on picks
-// and looped </think> at handoffs (the free-text signoff path, issue #914).
+// `forceNoThink` suppresses thinking on THIS instance even with reasoning left
+// on: the forced-tool structured-output legs run no-think so a reasoning model
+// doesn't burn its output budget thinking and then truncate mid-<think>
+// (NoObjectGeneratedError on every pick) or fail to emit the forced tool.
+//
+// Body injection is the ONLY no-think lever these self-hosted servers have —
+// unlike Anthropic/DeepSeek (per-call providerOptions) and OpenRouter
+// (construction-time) — so forceNoThink must be honoured here, via a distinct
+// no-think model instance for the picker legs (languageModel's bodyNoThink).
+// Without it a reasoning-on locca/openai-compatible model failed schema
+// validation on picks and looped </think> at handoffs (#914).
 export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoThink = false) {
   const penalty = appliedRepeatPenalty(cfg);
   const noThink = forceNoThink || cfg?.reasoning !== true;

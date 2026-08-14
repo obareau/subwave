@@ -50,6 +50,12 @@ export interface CommunitySkill {
   label: string;
   brief: string;
   cooldown?: string;
+  // A catalog entry may pin itself to a real-world moment, same as a locally
+  // authored skill. Kept as raw text: node-cron's range check runs at install
+  // (routes/dj.ts), so a bad expression is refused there with a message rather
+  // than dropped from the listing.
+  cron?: string;
+  cronOnly?: boolean;
   window?: 'any' | 'commute';
   context?: string;
   submittedBy?: string;
@@ -100,7 +106,7 @@ export interface CommunityShow {
 
 // Stations are the public directory (a map of listeners' stations) — pass-through
 // JSON, shape-owned by web/lib/stations.ts. We keep them loose here.
-export type CommunityStation = Record<string, unknown> & { slug?: string };
+type CommunityStation = Record<string, unknown> & { slug?: string };
 
 interface Catalog {
   skills: CommunitySkill[];
@@ -173,6 +179,8 @@ function normalizeSkill(raw: any): CommunitySkill | null {
     label: str(raw?.label) || slug,
     brief,
     cooldown: optStr(raw?.cooldown, 16),
+    cron: optStr(raw?.cron, 64),
+    cronOnly: raw?.cronOnly === true ? true : undefined,
     window: raw?.window === 'commute' ? 'commute' : undefined,
     context: optStr(raw?.context, 200),
     submittedBy: optStr(raw?.submittedBy, 80),

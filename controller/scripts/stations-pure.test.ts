@@ -1,7 +1,5 @@
-// Unit pins for the pure multi-station helpers (spec:
-// docs/superpowers/specs/2026-07-24-multi-station-profiles-design.md §2/§5/§6).
-// Run: npx tsx scripts/stations-pure.test.ts — node:assert-via-tsx style of
-// scripts/llm-pure.test.ts; auto-discovered by npm test.
+// Unit pins for the pure multi-station helpers.
+// Run: npx tsx scripts/stations-pure.test.ts — auto-discovered by npm test.
 
 import assert from 'node:assert/strict';
 import {

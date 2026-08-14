@@ -44,8 +44,35 @@ export function isValidTimezone(tz: string) {
   }
 }
 
+// Anything holding a DERIVED copy of the zone subscribes here. Today that is
+// the per-skill cron tasks, which bake the zone into node-cron's { timezone }
+// option at registration and would otherwise keep firing on the old zone until
+// an unrelated skill edit re-registered them.
+//
+// A subscriber rather than a call in POST /settings because settings.update()
+// is not the only writer — routes/onboarding.ts patches `timezone` too, and a
+// backup restore reaches update() directly. Putting the rule at the ONE place
+// the zone actually changes is what keeps it from having to be remembered at
+// each new writer. This module still imports nothing from the rest of the app,
+// so no cycle: subscribers register themselves.
+type TimezoneListener = (tz: string) => void;
+const zoneListeners = new Set<TimezoneListener>();
+
+export function onStationTimezoneChange(fn: TimezoneListener): void {
+  zoneListeners.add(fn);
+}
+
 export function setStationTimezone(tz: string) {
-  stationZone = typeof tz === 'string' && isValidTimezone(tz.trim()) ? tz.trim() : '';
+  const next = typeof tz === 'string' && isValidTimezone(tz.trim()) ? tz.trim() : '';
+  // Fires on a real change only. settings.load() and every successful update()
+  // push the zone in whether or not it moved, and re-registering a station's
+  // crons on every unrelated settings save is churn, not correctness.
+  if (next === stationZone) return;
+  stationZone = next;
+  for (const fn of zoneListeners) {
+    // One bad subscriber must not leave the zone half-applied for the others.
+    try { fn(getStationTimezone()); } catch { /* subscriber's problem */ }
+  }
 }
 
 // The *effective* zone — configured, or whatever the process resolved to.

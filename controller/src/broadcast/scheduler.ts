@@ -4,7 +4,7 @@
 //   - station IDs (every ~45 min, varied by frequency setting)
 //   - agentic segment tick (weather, news, now-playing digs, facts, web search) every 5 min
 
-import cron from 'node-cron';
+import cron, { type ScheduledTask } from 'node-cron';
 import { config } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import { shuffle } from '../util/shuffle.js';
@@ -29,7 +29,10 @@ import { shouldFire } from './dj-gate.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
-import { agenticTick, skillCatalog } from '../skills/_agent.js';
+import { agenticTick, skillCatalog, runCapability } from '../skills/_agent.js';
+import { loadedCapabilities } from '../skills/loader.js';
+import { skillEligible } from '../skills/eligibility.js';
+import { getStationTimezone, onStationTimezoneChange } from '../time.js';
 import { withTrace, pruneOldEvents } from '../observability/events.js';
 import * as archives from './archives.js';
 import * as stemCacheStore from '../music/stem-cache.js';
@@ -529,14 +532,13 @@ export async function runHourlyCheck() {
 // Every step traps its own errors — node-cron doesn't catch async throws, and
 // the route callers are fire-and-forget.
 //
-// `airHandoff` decides whether this call site may air the mic-pass itself.
-// The hourly cron passes false: it must still roll the session and plan the
-// episode (that state has to be right whether or not a track boundary is
-// near), but airing at wall-clock :00 ducks the middle of a song. Leaving the
-// handoff pending hands it to the next track boundary, which is where it
-// belongs. The takeover routes keep the default true — an operator action is
-// explicit and should air promptly, the same reasoning that exempts the manual
-// /dj/segment runners from the budget gate.
+// `airHandoff` decides whether this call site may air the mic-pass itself. The
+// hourly cron passes false: it must still roll the session and plan the episode
+// (that state has to be right regardless), but airing at wall-clock :00 ducks
+// the middle of a song, so leaving the handoff pending hands it to the next
+// track boundary. The takeover routes keep the default true — an operator action
+// is explicit and should air promptly, the same reasoning that exempts the
+// manual /dj/segment runners from the budget gate.
 export async function rollSessionNow({ airHandoff = true }: { airHandoff?: boolean } = {}) {
   let ctx: Awaited<ReturnType<typeof getFullContext>> | null = null;
   try {
@@ -720,14 +722,13 @@ async function skillsTick() {
 
 // ---------------------------------------------------------------------------
 // PROGRAMME BEATS
-// The feature beat mid-hour (station-minute :35–:39) and the outro in the
-// closing minutes of the final hour (station-minute :55+). Placement is a
-// STATION-clock fact, but station zones sit at :30/:45 offsets (IST, Nepal),
-// so fixed process-minute crons can land mid-show — the tick runs every 5
-// minutes and dispatches on programme.dueBeat() instead; the beat flags make
-// the repeat ticks inside a window no-ops. The intro has no cron of its own:
-// it rides the session-settled hook (hourlyCheck above + queue's track-start
-// path). Gating (listeners, budget, beat-already-aired) lives in programme.ts.
+// The feature beat mid-hour (station-minute :35–:39) and the outro in the final
+// hour's closing minutes (station-minute :55+). Placement is a STATION-clock
+// fact, but station zones sit at :30/:45 offsets (IST, Nepal), so a fixed
+// process-minute cron would land mid-show — instead the tick runs every 5
+// minutes and dispatches on programme.dueBeat(), with the beat flags making
+// repeat ticks inside a window no-ops. The intro has no cron of its own; it
+// rides the session-settled hook. Gating lives in programme.ts.
 // ---------------------------------------------------------------------------
 
 async function programmeTick() {
@@ -902,6 +903,110 @@ async function nightlyDoctor() {
 }
 
 // ---------------------------------------------------------------------------
+// SKILL CRONS
+// Per-skill cron tasks, registered from the `cron:` frontmatter field in
+// SKILL.md. When a timer fires it calls runCapability() directly — same path
+// as the operator-override /dj/skill endpoint, bypassing the frequency floor
+// and the cooldown. Unlike that route, a cron firing is NOT an explicit
+// operator action, so it owes two sets of rules that route is exempt from:
+//   - the station-wide talk gates every other autonomous tick applies
+//     (skillCronAllowed, mirroring skillsTick): voice off, mid-programme,
+//     no listeners, over the daily token budget;
+//   - the per-skill eligibility rules (skills/eligibility.ts): the operator's
+//     enabled toggle and the on-air persona's skill allowlist. Both are
+//     re-read at FIRE time, not at registration — a skill disabled at 07:00
+//     must not still speak at 08:00, and the persona on air is a fact about
+//     the moment the timer fires.
+// Rebuilt on every syncSkillCrons() call so a rescan picks up
+// added/removed/changed expressions without a restart.
+// ---------------------------------------------------------------------------
+
+const skillCronTasks = new Map<string, ScheduledTask>();
+
+// Pure composition of the same four gates skillsTick applies above, injected
+// rather than read live so the rule itself can be pinned (scripts/skill-cron-gates.test.ts)
+// without exercising real settings/listener/budget/programme state.
+export interface SkillCronGates {
+  voiceAllowed: boolean;
+  programmeOnAir: boolean;
+  djCallsAllowed: boolean;
+  optionalSegmentsAllowed: boolean;
+}
+
+// Which gate closed, or null when the cron may fire. Separate from the boolean
+// below because the reason has to reach the booth log: a registered cron that
+// silently never speaks is undiagnosable, and the eligibility half already
+// names its reason — an operator should not have to learn that one kind of
+// stand-down is explained and the other is not. (Found while verifying this
+// PR: a cron sat registered and mute for four ticks and the only way to learn
+// why was to read listeners.ts.)
+export function skillCronStandDownReason(gates: SkillCronGates): string | null {
+  if (!gates.voiceAllowed) return 'the station voice is off (music only)';
+  if (gates.programmeOnAir) return 'a programme episode is on air';
+  if (!gates.djCallsAllowed) return 'nobody is listening';
+  if (!gates.optionalSegmentsAllowed) return 'the daily token budget is spent';
+  return null;
+}
+
+export function skillCronAllowed(gates: SkillCronGates): boolean {
+  return skillCronStandDownReason(gates) === null;
+}
+
+export function syncSkillCrons() {
+  // destroy(), not stop(): node-cron 4 keeps every task in a process-global
+  // registry, and stop() only halts firing — the entry stays. This runs on
+  // every skill mutation, so stop() would leak one dead task per skill per
+  // save, forever. destroy() deregisters (verified against cron.getTasks()).
+  for (const task of skillCronTasks.values()) task.destroy();
+  skillCronTasks.clear();
+  for (const cap of loadedCapabilities()) {
+    const expr: string | undefined = cap.cronExpression;
+    if (!expr) continue;
+    if (!cron.validate(expr)) {
+      queue.log('error', `[skills] "${cap.kind}" has invalid cron expression "${expr}" — skipped`);
+      continue;
+    }
+    const tz = getStationTimezone();
+    const task = cron.schedule(expr, async () => {
+      const gated = skillCronStandDownReason({
+        voiceAllowed: autoVoiceAllowed(),      // station voice is off — music only
+        programmeOnAir: programme.onAir(),      // a programme episode owns its talk moments
+        djCallsAllowed: djCallsAllowed(),        // nobody listening
+        optionalSegmentsAllowed: optionalSegmentsAllowed(), // over the daily token budget
+      });
+      if (gated) {
+        queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${gated}`);
+        return;
+      }
+      // Same enabled + persona-allowlist rules the autonomous director applies.
+      // Logged rather than silent: a cron that stands itself down leaves no
+      // other trace, and "my 8am skill never spoke" is otherwise undiagnosable.
+      const now = new Date();
+      const eligible = skillEligible({
+        seeded: cap.seeded,
+        skill: cap.skill,
+        enabled: settings.get().skills?.enabled || {},
+        personaSkills: settings.getEffectivePersona(now)?.skills,
+      });
+      if (!eligible.allowed) {
+        queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${eligible.reason}`);
+        return;
+      }
+      try {
+        await withTrace({ kind: 'segment' }, async () => {
+          const ctx = await getFullContext();
+          await runCapability(cap.kind, ctx);
+        });
+      } catch (err: any) {
+        queue.log('error', `[skills] cron "${expr}" skill "${cap.kind}" failed: ${err.message}`);
+      }
+    }, { timezone: tz });
+    skillCronTasks.set(cap.kind, task);
+    queue.log('scheduler', `[skills] "${cap.kind}" cron registered: ${expr} (tz: ${tz})`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Takeover janitor — resolveActiveShow already ignores an expired schedule
 // override (lazy, date-aware), so correctness never depends on this tick. Its
 // job is promptness + hygiene: clear the persisted override and roll the
@@ -928,7 +1033,7 @@ export function startScheduler() {
   // Initial run
   refreshAutoPlaylist().catch(err => queue.log('error', `Initial playlist failed: ${err.message}`));
 
-  // Auto-playlist refresh every 10 minutes
+  // Auto-playlist refresh, every AUTO_QUEUE_REFRESH_MINUTES (default 60)
   cron.schedule(`*/${config.show.autoQueueRefreshMinutes} * * * *`, refreshAutoPlaylist);
 
   // Top of every hour
@@ -962,6 +1067,15 @@ export function startScheduler() {
   // Nightly health check at 04:17 — populates the DJ Doc last-run cache + header
   // badge without the operator having to open the panel. Deterministic (no LLM).
   cron.schedule('17 4 * * *', nightlyDoctor);
+
+  syncSkillCrons();
+  // Each task bakes the zone in at registration, so a live timezone change has
+  // to re-register them. Subscribing at the source covers every writer of the
+  // setting (admin panel, onboarding, backup restore) rather than one route.
+  onStationTimezoneChange(() => {
+    queue.log('scheduler', '[skills] station timezone changed — re-registering skill crons');
+    syncSkillCrons();
+  });
 
   queue.log('scheduler', `Scheduler started · skills: ${skillCatalog().map((s: any) => s.name).join(', ')}`);
 }

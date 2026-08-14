@@ -39,7 +39,7 @@ export const OPERATOR_KEY = 'operator';
 const operatorAiringKey = (songId: string) => `${songId}|operator`;
 const isOperator = (r: LikeRecord) => r.via === 'operator';
 
-export interface LikedTrack {
+interface LikedTrack {
   id: string;
   title: string;
   artist?: string;
@@ -49,7 +49,7 @@ export interface LikedTrack {
   duration?: number;
 }
 
-export interface LikeRecord {
+interface LikeRecord {
   songId: string;
   track: LikedTrack;
   // `${songId}|${startedAt}` — one airing of one song. The same song aired

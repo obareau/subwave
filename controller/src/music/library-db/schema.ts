@@ -362,12 +362,10 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     //
     // A track whose analysis throws — a corrupt file, a stale library row, a
     // container the decoder can't open — leaves every analysis column NULL,
-    // which is byte-identical to "never attempted". needsAnalysisIds therefore
-    // re-targets it on every pass, forever, and nothing anywhere records that
-    // it has already failed forty times or why. That is the second half of the
-    // "same count every run" report: the first half is a capability the backend
-    // lied about, and this is a file that will never analyse no matter who is
-    // asking.
+    // indistinguishable from "never attempted". needsAnalysisIds then re-targets
+    // it on every pass forever, and nothing records that it has already failed
+    // forty times or why. That is half the "same count every run" report; the
+    // other half is a capability the backend lied about.
     //
     // Three columns because the three questions are different: how many
     // consecutive failures (the scope gate), when the last one was (is this

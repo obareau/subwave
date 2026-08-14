@@ -4,6 +4,7 @@
 // flip the auto-link toggle. Manual triggers are an operator override — they
 // bypass the `shouldFire` frequency gate and skill cooldowns.
 import express from 'express';
+import cron from 'node-cron';
 import AdmZip from 'adm-zip';
 import { requireAdmin } from '../middleware/auth.js';
 import * as blocklist from '../music/blocklist.js';
@@ -13,7 +14,7 @@ import * as dj from '../llm/dj.js';
 import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, runProgrammeFeature, runProgrammeOutro, refreshAutoPlaylist } from '../broadcast/scheduler.js';
+import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, runProgrammeFeature, runProgrammeOutro, refreshAutoPlaylist, syncSkillCrons } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
 import * as sfxLib from '../broadcast/sfx.js';
 import { loadSkills, loadedCapabilities, parseFrontmatter, parseTags, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
@@ -43,6 +44,8 @@ interface SkillFields {
   kind: string;
   label?: string;
   cooldown?: string;
+  cron?: string;
+  cronOnly?: boolean;
   contextFields?: string[];
   window?: 'any' | 'commute';
   requiresKey?: string;
@@ -124,6 +127,7 @@ router.get('/dj/skills', requireAdmin, (req, res) => {
 router.post('/dj/skills/rescan', requireAdmin, async (req, res) => {
   try {
     const caps = await loadSkills();
+    syncSkillCrons();
     queue.log('scheduler', `[skills] rescanned — ${caps.length} skill(s) loaded`);
     res.json({ skills: skillCatalog(), custom: caps.filter((c) => !c.seeded).length });
   } catch (err) {
@@ -190,14 +194,22 @@ router.post('/dj/skills/community/:slug/install', requireAdmin, async (req, res)
       cooldown: cs.cooldown,
       context: cs.context,
       window: cs.window,
+      // `cron`/`cronOnly` ride along like every other frontmatter field a
+      // catalog entry may declare. They were omitted from this allowlist while
+      // the zip-import path (which writes SKILL.md verbatim) kept them, so the
+      // two install routes disagreed about a documented key.
+      cron: cs.cron,
+      cronOnly: cs.cronOnly,
     });
   } catch (err) {
     return res.status(400).json({ error: `community skill "${slug}" is malformed: ${err.message}` });
   }
+  if (rejectInvalidCron(res, fields)) return;
 
   try {
     await writeSkillFile(fields);
     await loadSkills();
+    syncSkillCrons();
     queue.log('scheduler', `[skills] community "${slug}" installed via admin UI (disabled)`);
     res.json({ skills: skillCatalog() });
   } catch (err) {
@@ -289,6 +301,7 @@ router.post('/dj/skills/import', requireAdmin, zipUpload('file'), async (req, re
     const hasTool = !!toolEntry;
     if (toolEntry) await writeFile(join(dir, 'tool.mjs'), toolEntry.getData());
     await loadSkills();
+    syncSkillCrons();
     queue.log('scheduler', `[skills] imported "${slug}" from zip${hasTool ? ' (with tool.mjs)' : ''} via admin UI (disabled)`);
     res.json({ skills: skillCatalog(), slug, hasTool });
   } catch (err) {
@@ -329,6 +342,25 @@ function buildCustomSkillFields(slug: string, b: unknown): SkillFields {
   const parsed = customSkillFileSchema.safeParse(b);
   if (!parsed.success) throw new Error(firstMessage(parsed.error));
   return skillFieldsFrom(slug, parsed.data);
+}
+
+// The other half of the cron check. SKILL_CRON_RE (schemas/skill.ts) can only
+// count fields — the shared schema may import nothing but zod — so the range
+// rules ("99 * * * *", "* * * * FUNKDAY") are node-cron's to answer, and this
+// is the only layer that can ask it.
+//
+// REFUSED here rather than saved-and-skipped at registration. syncSkillCrons()
+// logs and skips an expression it can't register, which is right for a
+// hand-edited SKILL.md (a typo must not stop the skill loading) and wrong for
+// a form submit: the operator gets a saved value, a green toast, and a station
+// that never speaks at the time they asked for. Returns the 400 and true when
+// it fires, so a call site reads as one guard line.
+function rejectInvalidCron(res: express.Response, fields: SkillFields): boolean {
+  const expr = fields.cron;
+  if (!expr || cron.validate(expr)) return false;
+  const error = `"${expr}" is not a cron expression node-cron can run — check each field's range`;
+  res.status(400).json({ error, fieldErrors: { cron: error } });
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +407,13 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         // Prefer the file's own value; fall back to the live effective set.
         context: (data.context ?? data.contextFields)?.trim() || (cat?.contextFields || []).join(', '),
         knownContextFields: [...dj.CONTEXT_FIELDS],
+        cron: data.cron?.trim() || null,
+        // True when the file carries an expression node-cron won't register —
+        // only reachable from a hand-edited SKILL.md, since the save routes
+        // refuse one. The scheduler logs it and skips; the editor is where the
+        // value is actually fixable, so it needs to say so there too.
+        cronInvalid: !!data.cron?.trim() && !cron.validate(data.cron.trim()),
+        cronOnly: String(data.cronOnly).trim().toLowerCase() === 'true',
         configFields,
         config: readConfigValues(configFields, data),
         tags: parseTags(data.tags),
@@ -427,6 +466,9 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       knownContextFields: [...dj.CONTEXT_FIELDS],
       window: data.window === 'commute' ? 'commute' : 'any',
       requiresKey: data.requiresKey || '',
+      cron: data.cron?.trim() || null,
+      cronInvalid: !!data.cron?.trim() && !cron.validate(data.cron.trim()),
+      cronOnly: String(data.cronOnly).trim().toLowerCase() === 'true',
       tags: parseTags(data.tags),
       hasTool: await skillHasTool(kind),
       brief: body || '',
@@ -463,10 +505,12 @@ router.post('/dj/skills', requireAdmin, validateBody(skillCreateSchema), async (
   }
 
   const fields: SkillFields = skillFieldsFrom(name, rest);
+  if (rejectInvalidCron(res, fields)) return;
 
   try {
     await writeSkillFile(fields);
     await loadSkills();
+    syncSkillCrons();
     queue.log('scheduler', `[skills] custom "${name}" created via admin UI`);
     res.json({ skills: skillCatalog() });
   } catch (err) {
@@ -502,9 +546,11 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
     } catch (err) {
       return res.status(400).json({ error: err.message });
     }
+    if (rejectInvalidCron(res, fields)) return;
     try {
       await writeSkillFile(fields); // rewrites SKILL.md only; a sibling tool.mjs is left intact
       await loadSkills();
+      syncSkillCrons();
       queue.log('scheduler', `[skills] custom "${kind}" edited via admin UI`);
       return res.json({ skills: skillCatalog() });
     } catch (err) {
@@ -520,6 +566,7 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   const parsed = builtinSkillFileSchema.safeParse(b);
   if (!parsed.success) return res.status(400).json({ error: firstMessage(parsed.error) });
   const fields: SkillFields = skillFieldsFrom(kind, parsed.data);
+  if (rejectInvalidCron(res, fields)) return;
 
   // Knobs the skill declares for itself (news' feed / feedMaxItems), validated
   // against that declaration rather than against the kind string. Read off the
@@ -535,6 +582,7 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   try {
     await writeSkillFile(fields);
     await loadSkills();
+    syncSkillCrons();
     queue.log('scheduler', `[skills] built-in "${kind}" edited via admin UI`);
     res.json({ skills: skillCatalog() });
   } catch (err) {
@@ -623,6 +671,7 @@ router.post('/dj/skills/:kind/reset', requireAdmin, async (req, res) => {
   try {
     await resetBuiltinSkill(kind);
     await loadSkills();
+    syncSkillCrons();
     queue.log('scheduler', `[skills] built-in "${kind}" reset to default via admin UI`);
     res.json({ skills: skillCatalog() });
   } catch (err) {
@@ -650,6 +699,7 @@ router.delete('/dj/skills/:slug', requireAdmin, async (req, res) => {
   try {
     await rm(join(SKILLS_DIR, slug), { recursive: true, force: true });
     await loadSkills();
+    syncSkillCrons();
     queue.log('scheduler', `[skills] custom "${slug}" deleted via admin UI`);
     res.json({ skills: skillCatalog() });
   } catch (err) {

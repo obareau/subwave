@@ -55,7 +55,7 @@ export interface ToolCallLike {
   input?: unknown;
   args?: unknown;
 }
-export interface ToolResultLike {
+interface ToolResultLike {
   output?: unknown;
   result?: unknown;
 }
@@ -299,22 +299,17 @@ export function budgetMode(
 //   isUpstreamOverloaded→ withFailover switches to the BACKUP leg (a reachable
 //                         gateway relayed a saturated upstream — see below).
 // isUnreachable is a strict subset of isTransient: it EXCLUDES 408/425/429/5xx,
-// because a host that answers with a status is reachable — those stay with
-// transient retry on the configured model rather than being masked by a silent
-// failover to a different model (discussion #320). The ONE exception is a
-// quota/auth rejection (isQuotaOrAuthError): the leg answered, but it can't
-// recover this call, so it is pulled OUT of the transient set and fails over
-// instead of pointlessly retrying a dead leg (issue #438 — Ollama Cloud's
-// "weekly usage limit" 429s looped on the exhausted leg and never failed over).
+// because a host that answers with a status is reachable, and those should stay
+// on transient retry rather than be masked by a silent failover to a different
+// model (discussion #320). The ONE exception is isQuotaOrAuthError — the leg
+// answered but cannot recover this call, so it is pulled OUT of the transient
+// set and fails over instead of retrying a dead leg (#438).
 //
-// isUpstreamOverloaded is the inverse-shaped sibling: it is ADDED to the
-// failover set but deliberately LEFT IN the transient set. An OpenRouter
-// "Upstream error from <provider>: ResourceExhausted" (issue #671) or an
-// Anthropic 529 "Overloaded" means the chosen model/route is saturated right
-// now — which, unlike a quota cap, CAN clear in a second. So withTransientRetry
-// gets first crack on the chosen model (honouring #320); only when the overload
-// persists past that budget does withFailover try the configured fallback model,
-// instead of the call dying on the saturated route having never tried the backup.
+// isUpstreamOverloaded is the inverse-shaped sibling: ADDED to the failover set
+// but deliberately LEFT IN the transient set. An OpenRouter "ResourceExhausted"
+// (#671) or an Anthropic 529 means the route is saturated right now which,
+// unlike a quota cap, can clear in a second — so transient retry gets first
+// crack on the chosen model, and only a persistent overload reaches failover.
 
 // The AI SDK's built-in retry (generateText's default maxRetries: 2) throws
 // AI_RetryError once its attempts are spent — a wrapper with NO statusCode,
@@ -384,17 +379,16 @@ export function isUnreachable(err: ErrorLike | null | undefined): boolean {
   return false;
 }
 
-// Provider refused this leg in a way that retrying the SAME model won't fix
-// this call: a quota / usage-limit / billing rejection, or an authentication
-// failure (bad / missing API key). The host is UP (it answered), so this is NOT
-// isUnreachable — but unlike a transient "slow down" 429, the same leg can't
-// recover, so withFailover treats it like host-down and switches to the backup
-// leg (issue #438). Detected by message because providers surface quota/auth
-// differently and the AI SDK often flattens the status into the message text;
-// a bare 429 with no quota signature stays a plain transient rate-limit.
-// "requires more credits" / "can only afford" are OpenRouter's per-request
-// affordability 402 — no "insufficient"/"quota" token, so it only classified
-// while the 402 status survived; match it by text too (Discord out-of-credit run).
+// The leg was refused in a way retrying the SAME model won't fix: a quota /
+// usage-limit / billing rejection, or an auth failure. The host is UP, so this
+// is NOT isUnreachable — but unlike a "slow down" 429 the leg can't recover, so
+// withFailover treats it like host-down and switches to the backup (#438).
+//
+// Detected by MESSAGE because providers surface quota/auth differently and the
+// AI SDK often flattens the status into the text; a bare 429 with no quota
+// signature stays a plain transient rate-limit. "requires more credits" /
+// "can only afford" are OpenRouter's per-request affordability 402, which
+// carries no "insufficient"/"quota" token, so it is matched by text too.
 const QUOTA_RE = /usage limit|quota|exceeded your current|insufficient[ _]?(quota|funds|credit|balance)|requires more credits|can only afford|upgrade for higher|out of credit|payment required/i;
 const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|authentication (failed|error)|forbidden|api key (not|is|was) /i;
 
@@ -414,21 +408,20 @@ export function isQuotaOrAuthError(err: ErrorLike | null | undefined): boolean {
   return false;
 }
 
-// A reachable gateway relayed a saturated upstream: the host answered, but the
-// model/route it fronts is at capacity right now. OpenRouter surfaces this as
-// "Upstream error from <provider>: ResourceExhausted: Worker local total
-// request limit reached (32/32)" (issue #671); Anthropic as a 529 "Overloaded";
-// Vertex/gRPC as RESOURCE_EXHAUSTED. Unlike a quota cap this is NOT the user's
-// account being out of credit (so it is NOT isQuotaOrAuthError) and the host is
-// UP (so it is NOT isUnreachable) — it is a transient capacity blip that CAN
-// clear on a retry. So it deliberately STAYS in the transient set
-// (withTransientRetry gets first crack on the chosen model); withFailover then
-// adds it as a failover trigger, so a persistent overload finally tries the
-// configured fallback model rather than dying on the saturated route. Matched
-// by message because the signal is in the relayed text, plus Anthropic's 529.
-// Kept tight to avoid stealing plain rate-limit 429s (which should stay same-leg
-// transient retries): only an explicit upstream/overload/exhausted phrase or a
-// 529 qualifies — a bare 503 or "rate limit exceeded, slow down" does not.
+// A reachable gateway relayed a SATURATED upstream: the host answered, but the
+// route it fronts is at capacity. OpenRouter reports "Upstream error from
+// <provider>: ResourceExhausted" (#671), Anthropic a 529 "Overloaded",
+// Vertex/gRPC RESOURCE_EXHAUSTED.
+//
+// Neither a quota cap (the account has credit, so not isQuotaOrAuthError) nor a
+// dead host (not isUnreachable) — a capacity blip that CAN clear on retry. So it
+// STAYS in the transient set, letting withTransientRetry try the chosen model
+// first, and withFailover adds it as a trigger so a persistent overload finally
+// reaches the fallback rather than dying on the saturated route.
+//
+// Matched by message plus Anthropic's 529, and kept tight so it can't steal
+// plain rate-limit 429s: only an explicit upstream/overload/exhausted phrase or
+// a 529 qualifies, never a bare 503 or "rate limit exceeded, slow down".
 const UPSTREAM_OVERLOAD_RE = /upstream error|resource[ _]?exhausted|overloaded|no instances?\b.*\bavailable|worker local total request limit/i;
 
 export function isUpstreamOverloaded(err: ErrorLike | null | undefined): boolean {
@@ -440,22 +433,18 @@ export function isUpstreamOverloaded(err: ErrorLike | null | undefined): boolean
   return UPSTREAM_OVERLOAD_RE.test(msg);
 }
 
-// A plain rate-limit 429 with no quota/usage-limit wording (issue #738): the
-// free-tier daily/per-minute request cap on a provider like Gemini/Groq/
-// OpenRouter. This is the case isQuotaOrAuthError deliberately does NOT catch
-// (see its comment above), so it stays isTransient and gets same-leg retries
-// first via withTransientRetry. If those retries exhaust and the 429 is still
-// live, withFailover treats it the same as a quota/auth rejection and switches
-// to the backup leg — a request-per-minute/day cap on the primary provider is
-// exactly the "keep the station on air on a free tier" case the issue asks
-// for, and retrying the same exhausted leg forever will never recover it.
+// A plain rate-limit 429 with no quota wording (#738) — a free-tier daily or
+// per-minute request cap. This is the case isQuotaOrAuthError deliberately does
+// NOT catch, so it stays isTransient and gets same-leg retries first; if those
+// exhaust with the 429 still live, withFailover switches to the backup, since a
+// request cap on the primary is exactly the "keep the station on air on a free
+// tier" case and retrying the exhausted leg never recovers it.
 //
-// Deliberately NOT any bare 429: a status alone must also carry rate-limit
-// wording or a Retry-After header to qualify. A self-hosted llama.cpp/vLLM box
-// answering 429 on a momentary concurrency spike sends neither — that stays a
-// plain same-leg transient retry and never silently switches the station onto
-// a (possibly paid) cloud fallback (PR #751 review). Every provider #738
-// names does send the wording and/or the header.
+// Deliberately NOT any bare 429: the status must also carry rate-limit wording
+// or a Retry-After header. A self-hosted llama.cpp/vLLM box answering 429 on a
+// momentary concurrency spike sends neither, and must stay a same-leg retry
+// rather than silently switching the station onto a possibly-paid cloud
+// fallback. Every provider #738 names does send the wording and/or header.
 const RATE_LIMIT_RE = /rate.?limit|too many requests|requests? per (?:minute|day|hour)|\b[rt]p[mdh]\b/i;
 
 export function isRateLimited(err: ErrorLike | null | undefined): boolean {
@@ -516,28 +505,21 @@ export function flattenToolCalls(result: { steps?: StepLike[] } | null | undefin
 // tool loop that stalled can be finished by the single-turn forced-tool path
 // (objectViaToolCall's `emit`) instead of yet another multi-turn continuation.
 //
-// Why the shape and not the forcing: llama.cpp / LM Studio running Hermes-class
-// models answer the terminal `done` step in prose no matter what `tool_choice`
-// says — the operator's server trace on #1157 shows `tools:[done]` +
-// `tool_choice:'required'` going out and `tool_calls: []`, `finish_reason:
-// 'stop'` coming back, on BOTH LM Studio and a bare `llama-server --jinja`. The
-// same backend and model call a forced tool reliably when the request is a
-// single user prompt carrying one tool — which is exactly why the stateless
-// pool picker keeps working for those operators while the agent path does not.
-// The variable that moves is the conversation SHAPE (a continuation after
-// tool-result turns vs. a fresh one-shot), so the last resort changes the shape.
-// This also subsumes what the clean-context retry was reaching for: GLM's
-// "keeps declining once it has declined in this conversation" is a fresh
-// single-turn call by another name.
+// The fix is the SHAPE, not more forcing. llama.cpp / LM Studio running
+// Hermes-class models answer the terminal `done` step in prose no matter what
+// `tool_choice` says (#1157: `tools:[done]` + `tool_choice:'required'` out,
+// `tool_calls: []` + `finish_reason:'stop'` back, on both LM Studio and a bare
+// `llama-server --jinja`) — yet the same backend and model call a forced tool
+// reliably from a single user prompt, which is why the stateless pool picker
+// keeps working for those operators while the agent path does not. GLM's "keeps
+// declining once it has declined in this conversation" is the same thing.
 //
-// The findings block is what keeps the answer honest. The discovery tools ran
-// during the earlier attempts and their results are the only place real
-// candidate ids exist; drop them and a cornered model can only fabricate one
-// (the 100%-unknown-id failure the trail-carrying recovery was added to fix).
-// Truncation is per-result and then whole-block, both announced in the text —
-// a clipped candidate list costs at worst a pick from a shorter menu, and the
-// caller's nearestId/repickFromSeen salvage still covers an id that came back
-// mangled, exactly as it does for every other branch of the cascade.
+// The findings block keeps the answer honest: the discovery tools' results are
+// the only place real candidate ids exist, and dropping them leaves a cornered
+// model able only to fabricate one. Truncation is per-result then whole-block,
+// both announced in the text — a clipped candidate list costs at worst a pick
+// from a shorter menu, and the caller's nearestId/repickFromSeen salvage still
+// covers a mangled id as it does for every other branch of the cascade.
 
 export interface TerminalMessageLike {
   role?: string;
@@ -917,16 +899,13 @@ export function modelTolerant<T extends z.ZodObject<z.ZodRawShape>>(
 }
 
 // Strip every `description` key from a JSON-Schema-shaped value, recursively.
-// z.toJSONSchema() carries every Zod .describe() call through verbatim —
-// several of this codebase's schemas (e.g. the picker's `transition` field)
-// have a multi-hundred-word description, since that prose is the primary
-// channel for coaching the model on the native/tool-forced paths. Embedded
-// verbatim into schemaHint's recovery prompt, that same prose would bloat the
-// retry's token count for every caller, not just the one schema that needs
-// it (Copilot review, PR #923) — and the recovery prompt only needs the
-// STRUCTURE (field names, types, required-ness, enum values) to stop the
-// model guessing at keys; the coaching prose already lives in the original
-// system/prompt text passed alongside it.
+// z.toJSONSchema() carries every .describe() through verbatim, and several
+// schemas here (the picker's `transition`) run to hundreds of words, since that
+// prose is the primary channel for coaching the model on the native/tool-forced
+// paths. In schemaHint's recovery prompt it would bloat the retry's token count
+// for every caller — and that prompt needs only the STRUCTURE (field names,
+// types, required-ness, enums) to stop the model guessing at keys, since the
+// coaching prose already rides in the system/prompt text alongside it.
 function stripDescriptions(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripDescriptions);
   if (value && typeof value === 'object') {
@@ -986,22 +965,21 @@ export function clipText(s: unknown, max: number): unknown {
   return (onWord.length >= max * 0.6 ? onWord : cut).trim();
 }
 
-// A persona `soul` is capped at settings.SOUL_MAX (2000) because it is injected
-// into every free-text generation call for THAT persona — the seat it was
-// written for, which earns the full length. Two consumers inline a soul where
-// that reasoning doesn't hold, and they clamp to this instead:
+// A persona `soul` gets SOUL_MAX (2000) because it is injected into every
+// free-text call for THAT persona — the seat it was written for. Two consumers
+// inline a soul where that reasoning doesn't hold and clamp to this instead:
 //
 //   - the multi-voice cast blocks (prompts/banter.ts, prompts/programme.ts) —
-//     one entry per cast member (host + up to 3 guests), and the block exists
-//     to say who is in the room, not to hand each of them a character document;
-//   - the cloud-TTS delivery hint (speech/cloud-speech.ts) — rebuilt and sent
-//     on EVERY spoken line, and it only steers tone and pacing, so backstory
-//     and recurring bits enlarge each request without changing the read.
+//     one entry per cast member, and the block exists to say who is in the room,
+//     not to hand each of them a character document;
+//   - the cloud-TTS delivery hint (speech/cloud-speech.ts) — rebuilt on EVERY
+//     spoken line, and it only steers tone and pacing, so backstory enlarges
+//     each request without changing the read.
 //
 // Both want the opening sketch, which is where operators put the voice.
-// Whitespace is collapsed because a soul is multi-line free text and the cast
-// blocks are one-bullet-per-speaker — a raw newline would break the list. The
-// ellipsis marks the sketch as abridged rather than reading as a full stop.
+// Whitespace is collapsed because a soul is multi-line and the cast blocks are
+// one bullet per speaker; the ellipsis marks the sketch as abridged rather than
+// reading as a full stop.
 export const SOUL_BRIEF_MAX = 320;
 export function soulBrief(soul: unknown, max: number = SOUL_BRIEF_MAX): string {
   const s = String(soul ?? '').trim().replace(/\s+/g, ' ');

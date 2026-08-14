@@ -26,6 +26,10 @@ export function EmptyState({
 }: EmptyStateProps) {
   return (
     <div
+      // The one selectable hook on this panel: everything else here is utility
+      // classes and caller-supplied copy, so a test has no other way to tell
+      // "loaded and empty" apart from "still loading".
+      data-testid="empty-state"
       className={cn(
         'flex flex-col items-center text-center',
         compact ? 'px-4 py-8' : 'px-[18px] py-11',

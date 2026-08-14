@@ -54,6 +54,8 @@ a folder into `state/skills/` and hit **Rescan** in the admin Skills page:
 name: moon-phase          # the slug / "kind" (defaults to the folder name)
 label: Moon phase         # human label in /admin/skills (defaults to title-cased name)
 cooldown: 6h              # hard min gap between autonomous firings — "90m" | "6h" | "2d" | "45" (bare = minutes)
+cron: 0 * * * *           # OPTIONAL: fire on a fixed schedule instead of/alongside the cooldown gate (see below)
+cronOnly: true            # OPTIONAL: with a cron: set, withhold this skill from random autonomous picks entirely
 window: any               # "any" (default) | "commute" — only offered during commute hours
 context: time, festival   # OPTIONAL: which "right now" fields this segment may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; if unset, the skill stays inert
@@ -68,6 +70,26 @@ Only a **non-empty body** is required; every frontmatter key has a default. The
 body becomes the per-segment briefing the DJ agent follows (the same role the
 inline `desc:` strings play for built-in skills) and the description shown in the
 admin UI.
+
+The block is parsed as **real YAML**, so the ordinary things work: inline `#`
+comments like the ones above, quoted values (`label: "Tonight: the moon"`), and
+lists written either way —
+
+```yaml
+tags: [late-night, factual]
+# ...is the same as...
+tags:
+  - late-night
+  - factual
+# ...is the same as...
+tags: late-night, factual
+```
+
+Values are read as text whatever their YAML type, so `feedMaxItems: 6` and
+`feedMaxItems: "6"` are identical. Nested maps have no meaning here and are
+ignored. A block that isn't valid YAML — most often an unquoted colon in a
+value — still loads, read with the old line-by-line parser, and logs a warning
+naming the file.
 
 ### `context:` — what the segment is allowed to mention
 
@@ -106,6 +128,86 @@ the hour. One sentence; skip it if nothing's notable.
 
 You can also set this from the admin UI: **/admin/skills → Edit** shows a
 tick-box per field. An empty selection resets the skill to the default profile.
+
+### `cron:` — fire on a fixed schedule
+
+`cron:` is an OPTIONAL standard 5-field cron expression (`"0 * * * *"` = top of
+every hour, `"*/30 * * * *"` = every 30 minutes); a leading seconds field is
+accepted too (`"0 0 8 * * *"`). When set, the scheduler registers a dedicated
+timer for that skill and fires it the moment the expression matches — bypassing
+the cooldown and the DJ's frequency floor. Leave it blank (the default) and the
+skill only airs through the normal cooldown / frequency-gated segment tick.
+
+The expression runs in the station's own timezone (Settings → Station), so a
+`cron: 0 8 * * *` fires at 8am local time wherever the station is configured to
+be, not the container's UTC clock. Changing the station timezone re-registers
+every skill cron immediately — no restart, no rescan. A skill can carry both a
+`cooldown:` and a `cron:` — the cooldown still applies to any *autonomous*
+firing from the segment tick, while the cron timer ignores it.
+
+An expression saved through the admin UI (or installed from the community
+catalog) is **refused** if it isn't one the scheduler can run, with the error on
+the field. One typed into `SKILL.md` by hand is logged and skipped instead, so a
+typo costs the skill its timer rather than stopping it loading — the admin
+editor flags it the next time you open that skill.
+
+Set it from the admin UI too: **/admin/skills → Edit → Cron timer**.
+
+**A cron always speaks.** This is the thing to get right before adding one. The
+autonomous segment tick asks the agent whether to air at all, and silence is a
+first-class answer it takes whenever the data is dull or unchanged. A cron takes
+the same path as **Run now**, which is *forced*: the model is handed a schema
+with no "stay silent" option, and the segment is required to produce a line. A
+skill's own `{ available: false }` signal is passed along as data but decides
+nothing here.
+
+So a cron suits a skill that is worth hearing at a fixed moment every time — a
+morning bulletin, a sign-off, a running joke tied to a particular hour. It suits
+a skill that speaks *only when something is notable* far less well, because it
+will be made to speak anyway. Both example skills in
+[`docs/examples/skills`](examples/skills) are in that second group and
+deliberately carry no `cron:` — `moon-phase` is meant to skip an unremarkable
+gibbous, and `sunset` tracks a time that moves through the year, so pinning it to
+a fixed clock reading would be wrong in a different way. Leave those on
+`cooldown:` and let the director decide.
+
+**Daylight saving.** A normal daily cron survives a clock change: `cron: 0 8 * * *`
+fires once at 08:00 local on the spring-forward day, the autumn day, and every
+ordinary day, which is the whole point of running in the station zone. Two edge
+cases fall out of the scheduler and are worth knowing about:
+
+- On the **autumn** change, the hour that repeats (in the UK, 01:00–01:59) is
+  skipped: a `*/10` cron fires 19 times that day instead of 25, and an hourly one
+  misses a single beat. Nothing fires twice, which is the safer direction — the
+  same guard that drops the hour is what stops the duplicate.
+- On the **spring** change, a cron pointed at a time that does not exist that day
+  (again in the UK, anything in 01:00–01:59) simply does not fire, silently.
+
+So avoid pinning a skill to the small hours if it genuinely has to run every day,
+and expect a once-a-year gap otherwise. This is `node-cron` 3.x behaviour rather
+than anything SUB/WAVE decides, and it applies to every cron in the scheduler,
+not only skill timers.
+
+**A cron timer is not the same override as "Run now".** Pressing **Run now** is
+an explicit operator action and fires whatever it names. A timer firing on its
+own is autonomous, so it stands down exactly where the normal segment tick
+does: the station voice switch is off (`tts.enabled: false`, "music only"), a
+programme episode is on air, nobody is listening, the daily LLM token budget is
+spent — and, because they're rules about the skill itself, if the skill is
+**disabled** or isn't assigned to the **on-air DJ**. That last pair matters for
+an imported skill: a zip import or a community install arrives disabled pending
+your review, and a `cron:` line in it does not air anything until you enable it.
+Each stand-down is written to the booth log with its reason, since a silent
+timer is otherwise undiagnosable.
+
+**A `cron:` timer is a second trigger, not a replacement one.** By default the
+skill stays eligible for the normal autonomous segment tick too, off-cooldown,
+same as any other skill — so a skill written around a specific moment (e.g. a
+running joke tied to 7:10) can still fire at a random moment in between. Set
+`cronOnly: true` to withhold it from that random selection entirely; it then
+airs ONLY when its cron timer ticks (or via **Run now**, which always bypasses
+every gate). `cronOnly` on its own, without a `cron:` expression, means the
+skill never fires autonomously at all.
 
 For a **new** skill the `name` must be a lowercase slug that isn't a built-in kind
 (`weather`, `news`, `now-playing-dig`, `curiosity`, `album-anniversary`, `library-deep-cut`,

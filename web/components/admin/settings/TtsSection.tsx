@@ -22,6 +22,8 @@ import { CloudProviderSelector } from '../tts/CloudProviderSelector';
 import { cloudProviderLabel, resolveKeyPresence } from '../tts/cloudProviderMeta';
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
+import { defaultEngineVoice } from '../tts/defaultVoice';
+import { ENGINE_META } from '../tts/engineMeta';
 import { VoicePicker } from '../tts/VoicePicker';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { cn } from '../../../lib/cn';
@@ -568,7 +570,8 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   const selectorAvailable = providerCloudReady === undefined
     ? available
     : { ...available, cloud: providerCloudReady };
-  const ENGINE_LABELS: Record<string, string> = { piper: 'Piper', kokoro: 'Kokoro', chatterbox: 'Chatterbox', 'pocket-tts': 'PocketTTS', cloud: 'Cloud', remote: 'Remote' };
+  // engineMeta.ts is the one label table (it already backs EngineSelector).
+  const engineLabelOf = (id: string) => ENGINE_META[id]?.label || id;
 
   // Send (and dirty-check) what the controller will actually store: trimmed,
   // with untouched blank rows dropped. Otherwise an operator who presses "Add
@@ -705,8 +708,8 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   const savedPocketTtsVoice: string = savedTts.pocketTts?.voice || '';
   const savedCloud: SavedCloud = savedTts.cloud || {};
   const savedRemoteUrl: string = savedTts.remote?.url || '';
-  const savedEngineLabel = ENGINE_LABELS[savedEngine] || savedEngine;
-  const formEngineLabel = ENGINE_LABELS[form.tts.defaultEngine] || form.tts.defaultEngine;
+  const savedEngineLabel = engineLabelOf(savedEngine);
+  const formEngineLabel = engineLabelOf(form.tts.defaultEngine);
 
   const compatParamsDirty = JSON.stringify(effectiveCompatParams)
     !== JSON.stringify((savedCloud.compatParams || []).map(p => ({ key: String(p?.key ?? ''), value: String(p?.value ?? '') })));
@@ -1380,13 +1383,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
 
           {(() => {
             const e = form.tts.defaultEngine;
-            const previewVoice =
-              e === 'kokoro' ? (form.tts.kokoro?.voice || '')
-              : e === 'chatterbox' ? (form.tts.chatterbox?.referenceVoice || '')
-              : e === 'pocket-tts' ? (form.tts.pocketTts?.voice || '')
-              : e === 'cloud' ? (form.tts.cloud.voice || '')
-              : e === 'remote' ? ''
-              : '';
+            const previewVoice = defaultEngineVoice(e, form.tts);
             return (
               <div className="field">
                 <VoicePreviewButton

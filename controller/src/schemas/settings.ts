@@ -7,40 +7,37 @@
 //
 // WHY A KEY AT A TIME, AND NOT ONE SCHEMA FOR THE SETTINGS OBJECT
 // ---------------------------------------------------------------
-// The `/settings` body is a partial PATCH, not an object: every admin panel
-// posts only the keys it owns. `z.object` strips unknown keys, so a schema over
-// the whole settings object would silently delete whatever a form learns to
-// send next. Instead each top-level key owns its own schema here, and
-// settings/patch-registry.ts runs only the keys a given patch actually carries.
-// That keeps the stripping scoped to a block whose shape is fully known.
+// The `/settings` body is a partial PATCH: every admin panel posts only the keys
+// it owns. `z.object` strips unknown keys, so a schema over the whole settings
+// object would silently delete whatever a form learns to send next. Instead each
+// top-level key owns its own schema here and patch-registry.ts runs only the
+// keys a patch actually carries, keeping the stripping scoped to blocks whose
+// shape is fully known.
 //
-// FIDELITY IS THE POINT OF THE FIRST SLICE
-// ----------------------------------------
-// #1337's rule is that no conversion may introduce a silent repair where the
-// operator previously got a refusal, or vice versa. The hand-rolled branches
-// these replace carry a lot of ACCIDENTAL leniency, and reproducing it is most
-// of the work here:
+// FIDELITY IS THE POINT
+// ---------------------
+// No conversion may introduce a silent repair where the operator previously got
+// a refusal, or vice versa (#1337's rule). The hand-rolled branches these
+// replace carry a lot of ACCIDENTAL leniency, and reproducing it is most of the
+// work:
 //
-//   * `parseInt(raw, 10)` / `parseFloat(raw)` stringify first, so '5' and even
-//     '5abc' parse, and a float handed to an int key TRUNCATES rather than
-//     failing (jingleRatio: 5.7 saves as 5 today). `z.number().int()` refuses
-//     all three. See settingsIntLike / settingsFloatLike.
-//   * `!!value` accepts anything, so `enabled: 1` is `true` today. `z.boolean()`
-//     refuses it. See settingsBoolLike.
-//   * `patch.beds || {}` means a non-object block is a silent no-op, not an
-//     error. See settingsBlockOf.
+//   * `parseInt`/`parseFloat` stringify first, so '5' and even '5abc' parse, and
+//     a float on an int key TRUNCATES rather than failing (jingleRatio: 5.7
+//     saves as 5). `z.number().int()` refuses all three — hence
+//     settingsIntLike / settingsFloatLike.
+//   * `!!value` accepts anything, so `enabled: 1` is `true`. See settingsBoolLike.
+//   * `patch.beds || {}` makes a non-object block a silent no-op, not an error.
+//     See settingsBlockOf.
 //
-// Each of those is defensible to TIGHTEN — webhooks did exactly that in #1337 —
-// but tightening is a behaviour change and belongs in a PR that says so. This
-// one establishes the frame at zero behaviour change, so the frame itself can't
+// Tightening any of these is defensible — webhooks did exactly that — but it is
+// a behaviour change and belongs in a PR that says so, so the frame itself can't
 // be what hides a regression.
 //
-// The bounds live HERE rather than in settings/defaults.ts's BOUNDS because a
-// mirrored module may not import a non-mirrored one, and the browser needs the
-// same numbers to pre-flight the form. BOUNDS re-exports these — the same
-// "first feature converted owns the constant" rule that put SHOW_ID_RE in
-// schemas/show.ts. The web side must read them from the mirror rather than
-// hand-copying, which is what BedsSection did with a bare `60` and `15`.
+// The bounds live HERE rather than in defaults.ts's BOUNDS because a mirrored
+// module may not import a non-mirrored one and the browser needs the same
+// numbers to pre-flight the form; BOUNDS re-exports them. The web side must read
+// from the mirror rather than hand-copying — which is what BedsSection did with
+// a bare `60` and `15`.
 import { z } from 'zod';
 
 // Every top-level name in schemas/*.ts shares ONE scope in the flat mirror
@@ -332,6 +329,12 @@ export const CROSSFADE_DURATION_BOUNDS: SettingsNumericBound = { min: 0, max: 30
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
 // 0 disables boosting entirely (cut-only levelling); 12 dB is plenty.
 export const LOUDNESS_MAX_BOOST_DB_BOUNDS: SettingsNumericBound = { min: 0, max: 12 };
+// 0 disables burst-on-connect; past 60 a listener is a full minute behind the
+// live edge and <queue-size> (which must exceed the burst) gets unreasonable.
+// Named rather than inline because settings.load() bounds the stored value
+// against the SAME figures — a hand-copied pair there is how the save path and
+// the load path drift.
+export const STREAM_BUFFER_SECONDS_BOUNDS: SettingsNumericBound = { min: 0, max: 60 };
 
 // Falling back to the product default is what an emptied station name does —
 // see stationSchema.
@@ -451,8 +454,8 @@ export const streamPatchSchema = settingsBlockOf({
   // Number(), not parseInt — so '' / null / [] are 0 (a legal "no burst") and
   // '5abc' is refused. Bounds tested before the round; see the helper.
   bufferSeconds: settingsNumberPreRoundLike(
-    { min: 0, max: 60 },
-    'stream.bufferSeconds must be a number between 0 and 60',
+    STREAM_BUFFER_SECONDS_BOUNDS,
+    `stream.bufferSeconds must be a number between ${STREAM_BUFFER_SECONDS_BOUNDS.min} and ${STREAM_BUFFER_SECONDS_BOUNDS.max}`,
   ),
   idleAfterMinutes: settingsIntLike(
     { min: 1, max: 1440 },
@@ -496,6 +499,17 @@ export const djHouseRulesSchema = settingsTrimmedString(
   SETTINGS_DJ_HOUSE_RULES_MAX,
   `djHouseRules must be at most ${SETTINGS_DJ_HOUSE_RULES_MAX} chars`,
 );
+
+/**
+ * Deliberately NOT settingsBoolLike(): this key's branch has always been the
+ * strict `typeof !== 'boolean'` refusal, the same posture `requests`' booleans
+ * take, and loosening it to `!!value` here would be a behaviour change smuggled
+ * in with a conversion. A hand-edited settings.json is unaffected either way —
+ * load() coerces a non-boolean to the default, so only a PATCH is refused.
+ */
+export const djSpeakClockSchema = z.boolean({
+  error: 'djSpeakClock must be a boolean',
+});
 
 /**
  * Trim FIRST, then a strict pair — ' en-GB ' saves, 'en-gb' does not.

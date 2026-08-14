@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { pollWhileVisible } from '@/lib/poll';
+import { splitAudibleTurns } from '@/lib/sessionFeed';
 import { useStationClient } from '@/lib/stationClient';
 import type {
   ActiveShow,
@@ -93,8 +94,25 @@ export function useStationFeed(): StationFeed {
   // Holds a track whose metadata has arrived but whose audio hasn't reached this
   // listener yet, until it's audible.
   const promoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Same idea for the DJ's spoken lines (#1382): the feed carries them stamped
+  // with the live-edge air time, so a line is withheld until its audio has
+  // reached THIS listener. Raw payload in a ref, filtered copy in state.
+  const rawSessionRef = useRef<SessionPayload>(EMPTY_SESSION);
+  const voiceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    // Re-derive the visible feed from the last payload and re-arm for the next
+    // line to become audible. Runs on every poll and on its own timer, so a held
+    // line lands on time rather than on the 5s poll grid.
+    const applySession = () => {
+      const raw = rawSessionRef.current;
+      const { visible, nextChangeMs } = splitAudibleTurns(raw.messages, leadMsRef.current, Date.now());
+      setIfChanged(setSession, { session: raw.session, messages: visible });
+      if (voiceTimerRef.current) clearTimeout(voiceTimerRef.current);
+      voiceTimerRef.current = nextChangeMs == null
+        ? null
+        : setTimeout(applySession, Math.max(0, nextChangeMs - Date.now()));
+    };
     const tick = async () => {
       try {
         const [npRes, stRes, seRes] = await Promise.all([
@@ -181,16 +199,23 @@ export function useStationFeed(): StationFeed {
         if (typeof npRes.timezone === 'string' && npRes.timezone) setTimezone(npRes.timezone);
         if (npRes.locale === 'en-US' || npRes.locale === 'en-GB') setLocale(npRes.locale);
         setIfChanged(setState, stRes);
-        if (seRes && Array.isArray(seRes.messages)) setIfChanged(setSession, seRes);
+        if (seRes && Array.isArray(seRes.messages)) {
+          rawSessionRef.current = seRes;
+          applySession();
+        }
       } catch {}
     };
     const stopPolling = pollWhileVisible(() => { void tick(); }, 5000);
     return () => {
       stopPolling();
-      // A held track switch must not land after teardown.
+      // A held track switch (or a held spoken line) must not land after teardown.
       if (promoteTimerRef.current) {
         clearTimeout(promoteTimerRef.current);
         promoteTimerRef.current = null;
+      }
+      if (voiceTimerRef.current) {
+        clearTimeout(voiceTimerRef.current);
+        voiceTimerRef.current = null;
       }
     };
   }, [client]);

@@ -140,15 +140,6 @@ export interface DebugSubsonic {
   error?: string;
 }
 
-interface FileEntry {
-  name: string;
-  size?: number;
-  mtime?: string;
-  isDir?: boolean;
-}
-
-export type FilesValue = FileEntry[] | { error?: string } | undefined;
-
 // Mirrors the controller's getFullContext() snapshot.
 export interface DebugContext {
   time?: { period?: string; mood?: string; vibe?: string; show?: string };
@@ -220,8 +211,6 @@ export interface DebugData {
   tts?: DebugTts;
   subsonic?: DebugSubsonic;
   session?: DebugSession;
-  stateFiles?: FilesValue;
-  voiceFiles?: FilesValue;
   config?: Record<string, unknown>;
   mounts?: DebugMounts;
   error?: string;

@@ -149,6 +149,8 @@ export interface QueueEntry {
   requestedBy?: string;
   /** ISO timestamp present on history entries. */
   t?: string;
+  /** True once the controller has handed this item to Liquidsoap. */
+  sent?: boolean;
   /** The track arrives via a pre-rendered stem blend rather than a plain
    *  crossfade. Stamped once the seam's clip is queued, so it's definitive,
    *  not a prediction (#1257). */

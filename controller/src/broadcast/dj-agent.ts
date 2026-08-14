@@ -30,7 +30,7 @@ import * as library from '../music/library.js';
 import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import { energyForDaypart, getClockContext, getDateContext, getTimeContext } from '../context.js';
-import { linkClockAt } from './queue/pure.js';
+import { linkClockAt, linkClockStampFor } from './queue/pure.js';
 import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
@@ -40,6 +40,7 @@ import { ARTIST_VARIETY_WINDOW, alternativeCandidates } from './dj-agent/artist-
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
+import { speakClockAllowed } from './clock-policy.js';
 import { pickerAgent, requestAgent } from './dj-agent/agents.js';
 import { pickerScope } from '../llm/tools.js';
 import {
@@ -51,7 +52,7 @@ import {
 import { dropEchoedLink, enqueuePick, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
 import { advanceRun, runActive } from './dj-agent/runs.js';
 import { pickSchemaBase, pickSystem, requestSystem } from './dj-agent/schemas.js';
-import { guardIntro, screenAck } from '../util/request-guard.js';
+import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
 import * as likes from './likes.js';
 import { classifyPickFailure, type PickFailure } from '../util/pick-seed.js';
 
@@ -115,24 +116,20 @@ async function repickFromSeen({ seen, badId, wantLink, showAt = null, playlistRe
   }
 }
 
-// Request-flavoured corrective re-pick (D1): mirrors repickFromSeen above —
-// the request agent returned an id outside its own discovery trail. Observed
-// live: the SAME hallucinated id recurring across independent requests hours
-// apart (e.g. `1q8OwSA2qIzk4n1ikV06wa`, `OAlSQiljTZx5b8OvwfEAIg`, both seen
-// twice) — which looks like the model copying an id out of a session event
-// turn (every pick event tags the current track `[id: …]`) rather than
-// fabricating one fresh; the idInSessionWindow diagnostic on the eventual
-// pick.rejected event (runRequestViaAgent below) is what turns that hunch
-// into a number instead of a guess. One djObject call constrained to the
-// run's own candidates (z.enum — a decode-time grammar on local models, a
-// Zod reject elsewhere, same story as repickFromSeen) salvages the run
-// instead of discarding it wholesale to the caller's stateless matcher
-// cascade — which still runs when this misses too (no candidates, or the
-// call itself fails). Reuses requestSystem() and requestSchema()'s own field
-// wording, gated on the same autoVoiceAllowed() check for `intro`, so a
-// re-picked request stays byte-consistent with a first-try one. Never
-// throws — a salvage failure falls through to the caller's rejection path
-// unchanged.
+// Request-flavoured corrective re-pick (D1): mirrors repickFromSeen above, for
+// when the request agent returns an id outside its own discovery trail. Seen
+// live as the SAME hallucinated id recurring across independent requests hours
+// apart, which looks like the model copying an id out of a session event turn
+// (every pick event tags the current track `[id: …]`) rather than fabricating
+// one — the idInSessionWindow diagnostic on the pick.rejected event is what
+// turns that hunch into a number.
+//
+// One djObject call constrained to the run's own candidates (z.enum — a
+// decode-time grammar on local models, a Zod reject elsewhere) salvages the run
+// instead of discarding it to the caller's stateless matcher cascade, which
+// still runs when this misses too. Reuses requestSystem()/requestSchema()'s own
+// wording and the same autoVoiceAllowed() gate for `intro`, so a re-picked
+// request is consistent with a first-try one. Never throws.
 async function repickRequestFromSeen({ seen, badId, requester, text }:
   { seen: Map<string, any>; badId: string | null; requester: string; text: string }) {
   const ids = [...seen.keys()];
@@ -149,7 +146,7 @@ async function repickRequestFromSeen({ seen, badId, requester, text }:
     return await djObject({
       system: requestSystem(),
       prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
-        + `\n\nListener "${requester}" asked: "${text}". The id you returned (${badId ?? 'none'}) matches none of the candidates above. Choose the best candidate id from the list for this request, and write "ack"${wantIntro ? ' and "intro"' : ''} to match.`,
+        + `\n\n${isNamedRequester(requester) ? `Listener "${requester}" asked` : 'An unnamed listener asked'}: "${text}". The id you returned (${badId ?? 'none'}) matches none of the candidates above. Choose the best candidate id from the list for this request, and write "ack"${wantIntro ? ' and "intro"' : ''} to match.`,
       schema,
       temperature: 0.3,
       kind: 'djAgentRequestRepick',
@@ -347,35 +344,30 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
     throw Object.assign(new Error(failure.message), { pickFailure: failure });
   }
 
-  // Back-to-back artist guard (#1124). The discovery tools — especially
-  // tracksLikeThis / tracksThatSoundLikeThis — return a tight cluster around
-  // the current track, which is frequently a run of the SAME artist, and the
-  // agent path (unlike the pool picker) carries no recentArtists / maxPerArtist
-  // filter (see the buildPickerTools note: an artist strip inside the tools
-  // gutted the similarity pool to ~1 survivor on niche catalogues, #618). So
-  // enforce variety at the point of choice instead: if the pick repeats the
-  // on-air artist and the run surfaced ANY other-artist candidate, re-pick from
-  // just those (a constrained djObject over the run's own `seen`, so it still
-  // reasons about flow and writes a coherent link).
+  // Back-to-back artist guard (#1124). The discovery tools return a tight
+  // cluster around the current track — frequently a run of the SAME artist — and
+  // the agent path carries no recentArtists/maxPerArtist filter, because an
+  // artist strip inside the tools gutted the similarity pool to ~1 survivor on
+  // niche catalogues (#618). So variety is enforced at the point of choice: if
+  // the pick repeats the on-air artist and the run surfaced any other-artist
+  // candidate, re-pick from just those (a constrained djObject over the run's
+  // own `seen`, so it still reasons about flow and writes a coherent link).
   //
-  // When that isn't possible — the run's whole candidate set is the one artist,
-  // or the constrained re-pick call failed — do NOT relax yet (#1187). `seen` is
-  // the RUN's view, not the library's: tracksLikeThis answering with eight
-  // tracks by the on-air artist while no other tool contributed leaves `seen`
-  // single-artist on a 50k-track catalogue, and reading that as "no alternative
-  // exists" is exactly the false negative that put the repeats back on air. Ask
-  // the normal fallback pool for a pick that excludes this artist first (a hard
-  // block, so the pool can't never-starve back to the artist we're avoiding) and
-  // only allow the repeat if even that comes back empty. That last case is
-  // logged with the candidate count so an operator can still tell "no
-  // alternative existed" from a real bug (#1124 ask #2).
+  // When that isn't possible, do NOT relax yet (#1187). `seen` is the RUN's view,
+  // not the library's — tracksLikeThis answering with eight tracks by the on-air
+  // artist while no other tool contributed leaves it single-artist on a 50k
+  // catalogue, and reading that as "no alternative exists" is the false negative
+  // that put the repeats back on air. Ask the fallback pool for a pick that hard-
+  // blocks this artist (so it can't never-starve back to the one we're avoiding)
+  // and allow the repeat only if even that comes back empty — logged with the
+  // candidate count so "no alternative existed" stays distinguishable from a bug.
   //
-  // Both sides of the comparison — and the alternative set — are keyed on the
-  // LEAD artist (#1251), so "Marvin Gaye & Tammi Terrell" no longer walks past a
-  // guard on "Marvin Gaye". The alternatives also step around the artists of the
-  // last few plays (alternativeCandidates), because a re-pick that knows only
-  // the on-air artist keeps returning to whoever ranks next-highest — the
-  // every-other-slot repeat this guard was supposed to prevent.
+  // Both sides of the comparison, and the alternative set, are keyed on the LEAD
+  // artist (#1251), so "Marvin Gaye & Tammi Terrell" can't walk past a guard on
+  // "Marvin Gaye". The alternatives also step around the artists of the last few
+  // plays, because a re-pick that knows only the on-air artist keeps returning to
+  // whoever ranks next-highest — the every-other-slot repeat this guard exists
+  // to prevent.
   const curArtist = artistRootKey(current || {});
   if (curArtist && artistRootKey(song) === curArtist) {
     const { alt, dropped, starved } = alternativeCandidates<any>(
@@ -478,21 +470,20 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   return true;
 }
 
-// The link's context, with the clock stepped forward to `airAt` — the moment
-// the link actually AIRS (showAt minus the show-attribution padding, resolved
-// by linkClockAt). ctx resolved at showAt is right for show identity but its
+// The link's context with the clock stepped forward to `airAt`, the moment the
+// link actually AIRS. ctx resolved at showAt is right for show IDENTITY but its
 // clock runs PICK_SHOW_LOOKAHEAD_SEC fast, and every pick-attached link spoke
-// that padded time on air — "Local time eight fifty" logged at 08:48 (#1282).
-// The same identity/clock split runPickCycle's handoff already makes with its
-// live-clock override: show/mood/festival stay on showAt, only the
-// clock-derived fields (at/date/clock/time) move to air time. `isDark` rides
-// over from ctx — it comes from the weather fetch, not the clock, and a
-// two-minute shift can't flip it.
-// `airAt` null means the air moment isn't forecastable well enough to speak
-// (no look-ahead, or too little runway left — #1314): ctx comes back untouched
-// and the caller passes clockIsAirTime false, which withholds the "Local time"
-// line from the prompt entirely rather than showing a time the model must be
-// trusted not to use.
+// that padded time — "Local time eight fifty" logged at 08:48 (#1282). So the
+// same identity/clock split runPickCycle's handoff makes: show/mood/festival
+// stay on showAt, only the clock-derived fields move to air time. `isDark` rides
+// over from ctx — it comes from the weather fetch, and a two-minute shift can't
+// flip it.
+//
+// `airAt` null means the air moment isn't forecastable well enough to speak (no
+// look-ahead, or too little runway — #1314): ctx comes back untouched and the
+// caller passes clockIsAirTime false, withholding the "Local time" line from the
+// prompt entirely rather than showing a time the model must be trusted not to
+// use.
 function linkAirContext(ctx: any, airAt: Date | null) {
   if (!airAt || !ctx) return ctx;
   const clock: any = getClockContext(airAt);
@@ -569,7 +560,18 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
   };
   // `current` is the link's back-announce target (passed to generateLink as
   // `previous`); stamp it so the queue drops the link if a request jumps ahead.
-  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, current, fx, { linkClockAt: airAt });
+  //
+  // The clock stamp is what linkClockDrifted (queue/pure.ts) drops a link on
+  // when the real seam lands far from the forecast — so it must only be set
+  // when a clock was actually OFFERED. With the station clock off
+  // (broadcast/clock-policy.ts) generateLink wrote this line under a flat ban
+  // and it cannot contain a time, so a drift drop would cost the operator the
+  // whole link to protect a clock that isn't in it. Gated on the STAMP rather
+  // than on `airAt` itself, so linkAirContext still steps the daypart tags to
+  // air time — "after dark" stays accurate even when the numerals are withheld.
+  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, current, fx, {
+    linkClockAt: linkClockStampFor(airAt, speakClockAllowed()),
+  });
   // Even the pool landed on an already-queued track (a tiny library whose pool
   // collapsed to recents). Skip the session turn and let auto.m3u backstop the
   // slot — the next track-start re-triggers runTrackEvent for a fresh pick.
@@ -641,20 +643,18 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
     const { rankTarget, audioWaypoint } = advanceRun(djMode, current);
     const inRun = runActive();
 
-    // The link clause differs in DJ mode: a working DJ doesn't just announce the
-    // next track, they TEASE it — name the artist or capture its feel so
-    // listeners know what's coming. The agent already knows its own pick when
-    // it writes `say`, so this costs nothing extra. The link is FORWARD-LOOKING
-    // only — it introduces the pick, never back-announces "${current?.title}".
-    // The link airs when the pick starts, but a listener request can slip ahead
-    // of the pick in the meantime, so naming what "just played" goes stale (it
-    // names a track one older than reality); introducing the pick is always
-    // correct whatever aired before it.
-    // The "nod to it in the link" half only makes sense when a link is actually
-    // being written — gate it on wantLink so a silent mid-run pick ("Stay silent
-    // — no link this time.") doesn't also get told it may phrase something in a
-    // link that won't exist. The energy-direction guidance is pick selection, so
-    // it stays unconditional.
+    // In DJ mode the link TEASES the next track — artist or feel — rather than
+    // just announcing it. The agent already knows its own pick when it writes
+    // `say`, so this costs nothing extra.
+    //
+    // FORWARD-LOOKING only, never a back-announce: the link airs when the pick
+    // starts, but a listener request can slip ahead in the meantime, so naming
+    // what "just played" goes stale. Introducing the pick is correct whatever
+    // aired before it.
+    //
+    // The "nod to it in the link" half is gated on wantLink, so a silent mid-run
+    // pick isn't told it may phrase something in a link that won't exist. The
+    // energy-direction guidance is pick selection, so it stays unconditional.
     const runClause = inRun
       ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}).`
         + (wantLink ? ' You may nod to it in the link, but never say tempo numbers.' : '')
@@ -673,25 +673,36 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
     // steer clear of. Only when a link is actually being written.
     const linkAngle = wantLink ? dj.pickAngle('link') : null;
     const recentOpeners = wantLink ? queue.getRecentOpeners() : [];
-    // Clock discipline for the link (issue #864). The agent path carries no
-    // clock at all — the model extrapolates one from stale stamped lines in
-    // its session window, then the link airs a further full track after it's
-    // written, so spoken times ran 10-20 minutes behind. When the queue
-    // watcher resolved the look-ahead (showAt), the link's air moment is
-    // knowable — but showAt's own clock carries the show-attribution padding
-    // and ran two minutes FAST on air (#1282), so step it back to air time
-    // (linkAirDate) before handing it over as the only time the link may
-    // speak; without the look-ahead (unknown duration), ban the clock
-    // outright. linkClockAt bans it in one more case (#1314): when so little
-    // of the on-air track is left that this round may not land before the
-    // seam, the forecast is a coin flip and a link that names a time would
-    // name the wrong one for a whole filler track.
-    const airAt = linkClockAt(showAt, Date.now());
+    // Clock discipline for the link (#864). The agent path carries no clock of
+    // its own, so the model extrapolates one from stale stamped lines in its
+    // session window — and the link then airs a full track later, putting spoken
+    // times 10-20 minutes behind.
+    //
+    // With the look-ahead resolved (showAt) the air moment is knowable, but
+    // showAt's clock carries the show-attribution padding and ran two minutes
+    // FAST (#1282), so step it back to air time via linkAirDate before handing
+    // it over as the only time the link may speak. Without the look-ahead, ban
+    // the clock outright. linkClockAt bans it once more (#1314): with too little
+    // of the on-air track left for this round to land before the seam, the
+    // forecast is a coin flip and would name the wrong time for a whole filler
+    // track.
+    //
+    // The station may also be set to keep the clock out entirely
+    // (broadcast/clock-policy.ts). That is a different question from the
+    // accuracy cases above: off wins over accurate, and it gets its own clause,
+    // because "you can't know when it airs" explains a reason that no longer
+    // applies. This clause and the `say` schema description are the ONLY clock
+    // the agent path ever sees — it never builds context lines — so the ban has
+    // to be stated here or it does not reach the model at all.
+    const clockOff = !speakClockAllowed();
+    const airAt = clockOff ? null : linkClockAt(showAt, Date.now());
     const airClock = airAt && ctx?.clock?.hhmm ? getClockContext(airAt) : null;
     const clockClause = wantLink
-      ? (airClock
-          ? ` The link airs at about ${airClock.display || airClock.hhmm} — if you mention the clock, that is the time to use, never an earlier one.`
-          : ` Never state the clock time in the link — you can't know exactly when it airs.`)
+      ? (clockOff
+          ? ` Never state the clock time, the hour, or the time of day in the link.`
+          : airClock
+            ? ` The link airs at about ${airClock.display || airClock.hhmm} — if you mention the clock, that is the time to use, never an earlier one.`
+            : ` Never state the clock time in the link — you can't know exactly when it airs.`)
       : '';
     const varietyClause = wantLink
       ? ` Approach for this link: ${linkAngle} Vary your first words — don't default to "here's", "this is", or "coming up".`
@@ -730,19 +741,17 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
     const effectClause = settings.effectsActive()
       ? ` Set "transition" by what THIS moment needs, per the TRANSITION EFFECTS guidance — "washout"/"loop" end your pick, "sweep"/"dissolve"/"chop" resolve a clash, "blend" only for an exceptionally locked pair, "normal" otherwise. Vary your craft: never the same transition three picks running, and if your last pick used an effect, lean "normal" now unless the moment clearly calls again.${historyNote}`
       : '';
-    // The turn is split in two: `text` is the factual event (what the booth
-    // log on /admin/dash shows the operator), `meta.promptSuffix` carries the
-    // model-facing coaching clauses (transition nudge, clock rule, run/journey
-    // steering). windowMessages() re-joins them for the agent, so the model
-    // sees the same message as before — the operator just stops reading
-    // prompt engineering in the booth log.
-    // Listener favourites (#991) ride the event turn, not the system prompt:
+    // The turn is split in two: `text` is the factual event the booth log shows
+    // the operator, `meta.promptSuffix` carries the model-facing coaching
+    // clauses. windowMessages() re-joins them, so the model sees one message and
+    // the operator stops reading prompt engineering in the booth log.
+    //
+    // Listener favourites (#991) ride the EVENT turn, not the system prompt:
     // they change as likes land, and a system prompt that re-renders per call
-    // breaks the byte-stable prefix that automatic prompt caching
-    // (DeepSeek/OpenAI/OpenRouter) keys on. windowMessages keeps only the
-    // latest pick event, so the list never multiplies across the window.
-    // Mirrored by the pool picker's listener-liked candidate source, so both
-    // paths lean the same way. A lean, never a lock: VARIETY still applies.
+    // breaks the byte-stable prefix automatic prompt caching keys on.
+    // windowMessages keeps only the latest pick event, so the list never
+    // multiplies across the window. Mirrored by the pool picker's listener-liked
+    // source so both paths lean the same way — a lean, never a lock.
     const favClause = likes.favouritesClause(settings.get()?.likes);
     // Exploration nudge (ε-greedy seed break, music/airing.ts): every pick
     // seeding discovery from the on-air track is a random walk that never
@@ -775,9 +784,11 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
         // `linkAirAt` mirrors the clause above: stamp the item with the air
         // moment the model was TOLD to speak, and only when it was actually
         // told one — a run given no clock makes no claim to go stale (#1314).
+        // `airClock` carries both reasons it might not have been: no forecastable
+        // air moment, and the station clock switch (which already nulled `airAt`).
         const queued = await pickViaAgent(queue, ctx, {
           wantLink, audioWaypoint, current, showAt, rankTarget,
-          linkAirAt: airClock ? airAt : null,
+          linkAirAt: linkClockStampFor(airAt, !!airClock),
         });
         breakerSuccess();
         if (queued) return;
@@ -854,7 +865,13 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // trailing user message because some providers require strict alternation;
     // windowMessages() returns fresh copies, so appending in place is safe.
     const cur = queue.current?.track || null;
-    const tail = `The request to resolve now — listener "${requester}" asks: "${text}"`
+    // Name the listener in the tail ONLY when there is a real name. The
+    // system prompt now tells the agent to greet whoever the tail names
+    // (REQUESTER_GREETING_CLAUSE), so handing it the ledger stand-in 'anon'
+    // would put that word on air as a name (#1347).
+    const tail = (isNamedRequester(requester)
+      ? `The request to resolve now — listener "${requester}" asks: "${text}"`
+      : `The request to resolve now — an unnamed listener asks: "${text}"`)
       + (cur ? ` (currently playing "${cur.title}" by ${cur.artist}${cur.id ? ` [id: ${cur.id}]` : ''})` : '');
     const messages = session.windowMessages();
     const last = messages[messages.length - 1];
@@ -874,20 +891,19 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // pickViaAgent uses for the identical reason.
     let object = run.object;
 
-    // Chat escape (C1): an explicit kind:"chat" WITH a null id means "this
-    // wasn't a music request" — answer in persona, queue nothing, skip the
-    // cascade entirely. The `kind` half is load-bearing: a null id on its own
-    // is also what an OMITTED id looks like by the time coerceModelPayload is
-    // done with it (schemas.ts requestSchema), and a weak model forgetting the
-    // field would otherwise silently turn a real music request into "nothing
-    // plays". Without kind:"chat" this falls through to the repick salvage and
-    // then the caller's stateless cascade, so the listener still gets music.
-    // Echo guard (A2): this ack is the model's own free-text answer, generated
-    // straight from a message that may carry an injected script — guard it the
-    // same way the cascade's chat branch does (request.ts). Not just a display
-    // concern: this text becomes a `dj`-role session turn that later
-    // `windowMessages()` calls condition on, so an unguarded echo here can
-    // poison future generations even though it never reaches tts.speak.
+    // Chat escape (C1): an explicit kind:"chat" WITH a null id means this
+    // wasn't a music request — answer in persona, queue nothing, skip the
+    // cascade. The `kind` half is load-bearing: a null id ALONE is also what an
+    // omitted id looks like once coerceModelPayload is done with it, so a weak
+    // model forgetting the field would otherwise turn a real music request into
+    // "nothing plays". Without kind:"chat" this falls through to the repick
+    // salvage and the stateless cascade, so the listener still gets music.
+    //
+    // Echo guard (A2): the ack is the model's own free text, generated from a
+    // message that may carry an injected script, so it is guarded like the
+    // cascade's chat branch. Not just display — this text becomes a `dj`-role
+    // session turn later `windowMessages()` calls condition on, so an unguarded
+    // echo poisons future generations even though it never reaches tts.speak.
     if (object?.kind === 'chat' && !object?.id && typeof object?.ack === 'string' && object.ack.trim()) {
       const screened = screenAck(object.ack, text, 'Heard you loud and clear.');
       if (screened.guard) queue.log('request-guard', `agent chat ack echoed request text — replaced`);
@@ -969,7 +985,9 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // is never falsy and a downstream `||` is unreachable. Threading it in here
     // means the listener gets the named line in both cases the fallback covers
     // — the model wrote nothing, and the model echoed their own text back.
-    const screened = screenAck(object.ack, text, `Coming up for you, ${requester}.`);
+    const screened = screenAck(object.ack, text, isNamedRequester(requester)
+      ? `Coming up for you, ${requester}.`
+      : 'Coming up for you.');
     if (screened.guard) queue.log('request-guard', `agent ack echoed request text — replaced`);
     const ack = screened.ack;
     // Both guards can fire on one request (the model echoed in the ack AND in

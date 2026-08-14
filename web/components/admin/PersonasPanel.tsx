@@ -4,7 +4,7 @@
 // override who is on air for its hour); the system prompt is a library of
 // global templates, '' = the built-in default. Everything POSTs to /settings
 // and applies live — no mixer restart.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { z } from 'zod';
 import {
   useFieldArray,
@@ -35,14 +35,13 @@ import {
 import { PersonaHero } from './personas/PersonaHero';
 import { SystemPromptModal } from './personas/SystemPromptModal';
 import { PersonaRoster } from './personas/PersonaRoster';
+import { orderPersonaRoster } from './personas/roster-order';
 import { PersonaEditor } from './personas/PersonaEditor';
 
-// The RHF resolver — literally the two shared schemas the controller itself
-// validates against (personaSchema / djPromptSchema), so this editor and the
-// controller cannot disagree about what's saveable. `activePersonaId` /
-// `activeDjPromptId` / `djHouseRules` stay OUTSIDE this schema: they aren't
-// array rows, and the controller's patch registry validates each as its own
-// top-level settings key, not as part of these two arrays.
+// The RHF resolver is the two shared schemas the controller validates against,
+// so this editor and the controller cannot disagree about what's saveable.
+// `activePersonaId` / `activeDjPromptId` / `djHouseRules` stay out: they aren't
+// array rows, and the patch registry validates each as its own settings key.
 const formSchema = z.object({
   personas: z.array(personaSchema),
   djPrompts: z.array(djPromptSchema),
@@ -80,23 +79,19 @@ export default function PersonasPanel() {
   const scrollToEditorRef = useRef(false);
 
   const form = useZodForm(formSchema, { personas: [], djPrompts: [] });
-  // Every field in personaSchema/djPromptSchema is a z.unknown().transform()
-  // (the schema doubles as the server's load-repair target — see the
-  // PersonasFormValues comment in personas/types.ts), so z.input<> types every
-  // leaf `unknown` and no nested path would type-check as a FieldPath. This
-  // cast is type-only — same runtime `form.control`, same technique Task 3
-  // established for festivalsSchema/moodsSchema.
+  // Every field in these schemas is a z.unknown().transform() (they double as
+  // the server's load-repair target), so z.input<> types every leaf `unknown`
+  // and no nested path would type-check as a FieldPath. Type-only cast.
   const control = form.control as unknown as Control<PersonasFormValues>;
   const setValue = form.setValue as unknown as UseFormSetValue<PersonasFormValues>;
   const getValues = form.getValues as unknown as UseFormGetValues<PersonasFormValues>;
   const watch = form.watch as unknown as UseFormWatch<PersonasFormValues>;
   const resetForm = form.reset as unknown as UseFormReset<PersonasFormValues>;
 
-  // `keyName: '_rhfKey'` is load-bearing — personas and prompt presets both
-  // carry their own `id`, and RHF's default keyName ('id') would clobber it.
-  // `fields` (the _rhfKey-carrying identity list) is unused here — every
-  // consumer (PersonaRoster/PersonaTable) already keys off the persona's OWN
-  // `id`, and this component reads live values via `watch('personas')`.
+  // `keyName: '_rhfKey'` is load-bearing — personas and prompt presets carry
+  // their own `id`, which RHF's default keyName ('id') would clobber. `fields`
+  // goes unused: consumers key off the persona's own id, and this component
+  // reads live values via `watch('personas')`.
   const { append: appendPersonaField, remove: removePersonaField } =
     useFieldArray({ control, name: 'personas', keyName: '_rhfKey' });
   const {
@@ -148,9 +143,8 @@ export default function PersonasPanel() {
     editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [focusIdx]);
 
-  // The one remaining multi-field bulk patch — the AI-draft "apply" hands back
-  // several fields at once. Every keystroke field is bound straight to
-  // `control` elsewhere, so this is its only caller.
+  // Only used by the AI-draft "apply", which hands back several fields at once;
+  // every keystroke field binds straight to `control` instead.
   const applyPersonaPatch = (i: number, patch: Partial<Persona>) => {
     const current = getValues(`personas.${i}`);
     if (!current) return;
@@ -172,13 +166,9 @@ export default function PersonasPanel() {
       tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0, speed: 1 },
       skills: (data?.skills?.catalog || []).map(s => s.name),
     });
-    // RHF only populates formState.errors for a field once IT has been
-    // touched — a freshly-appended row's empty `soul` correctly keeps
-    // formState.isValid (and Save) false, but without an explicit trigger()
-    // the roster's "incomplete" badge and the editor's own status line would
-    // both stay silent about why, until the operator happens to touch a
-    // field. Eagerly validating matches what personaSchema.safeParse always
-    // did against the whole object, touched or not.
+    // errors populate only once a field is touched, so without this the new
+    // row's "incomplete" badge and the editor's status line stay silent about
+    // why Save is disabled.
     void form.trigger();
     // Without the open + toast the add is silent, tucked at the end of the roster.
     scrollToEditorRef.current = true;
@@ -305,6 +295,21 @@ export default function PersonasPanel() {
   const personas = watch('personas');
   const djPrompts = watch('djPrompts');
 
+  // A scheduled show can override the default; fall back to the default
+  // selection on controllers predating the onAir field.
+  const onAirPersonaId = data?.onAir?.personaId || activePersonaId;
+  // Display order for the roster AND the editor's counter, so both name the
+  // same slot. The memo is load-bearing, not an optimisation: removing a
+  // persona hands `watch` one frame where the dropped index is still counted
+  // but holds only the editor's registered fields — no `skills`, no `id`.
+  // Recomputing on that frame renders a card for it and throws on
+  // `p.skills.length`; the memo re-uses the last good order until the array
+  // settles. Sits above the loading guards so the hook order never varies.
+  const roster = useMemo(
+    () => orderPersonaRoster(personas, onAirPersonaId),
+    [personas, onAirPersonaId],
+  );
+
   // The textarea's maxLength already enforces the house-rules cap; this guards
   // a pasted-over-limit edge.
   const promptsOk = !form.formState.errors.djPrompts
@@ -358,9 +363,8 @@ export default function PersonasPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as { error?: string; fieldErrors?: Record<string, string> };
       if (!r.ok) {
-        // A rule only the server can check still lands on the right row —
-        // the controller emits `personas.<i>.tts` / etc., which IS already
-        // the field-array path this form binds through.
+        // The controller emits `personas.<i>.tts` etc., which is already the
+        // field-array path this form binds through — no remapping needed.
         applyServerFieldErrors(form, j.fieldErrors);
         throw new Error(j.error || `failed (${r.status})`);
       }
@@ -373,11 +377,10 @@ export default function PersonasPanel() {
     } finally { setBusy(false); }
   };
 
-  // Discard must actually revert: `personas` is the only copy of the roster
-  // the UI reads and save() POSTs the WHOLE array, so abandoned edits used to
-  // block Save for every other persona and ride along on the next save
-  // (issue #1106). Scoped to the persona being edited so edits to others
-  // aren't dropped.
+  // Discard must actually revert: the form holds the only copy of the roster
+  // and save() POSTs the WHOLE array, so abandoned edits would block Save for
+  // every other persona and ride along on the next save (issue #1106). Scoped
+  // to the persona being edited so edits to others survive.
   const discardPersona = async (): Promise<void> => {
     // Close the editor BEFORE the settings round-trip — an editor left open
     // across the fetch re-raises the unsaved-changes confirm, because a click
@@ -474,11 +477,9 @@ export default function PersonasPanel() {
   }
 
   const activePersona = personas.find(p => p.id === activePersonaId);
-  // A scheduled show can override the default; fall back to the default
-  // selection on controllers predating the onAir field.
-  const onAirPersonaId = data?.onAir?.personaId || activePersonaId;
   const onAirPersona = personas.find(p => p.id === onAirPersonaId) || activePersona;
   const onAirShow = data?.onAir?.show || null;
+  const focusedPosition = roster.find(e => e.index === safeIdx)?.position ?? safeIdx + 1;
   const focusedOk = !isPersonaInvalid(safeIdx);
   // Drives the confirm on ×/Escape: closing the editor keeps edits pending in
   // `personas`, which is how unsaved state used to ride along on the next save.
@@ -522,7 +523,7 @@ export default function PersonasPanel() {
       />
 
       <PersonaRoster
-        personas={personas}
+        roster={roster}
         activePersonaId={activePersonaId}
         onAirPersonaId={onAirPersonaId}
         avatarTick={avatarTick}
@@ -620,8 +621,9 @@ export default function PersonasPanel() {
       <PersonaEditor
         persona={focused}
         index={safeIdx}
+        position={focusedPosition}
         control={control}
-        personaCount={personas.length}
+        personaCount={roster.length}
         activePersonaId={activePersonaId}
         onAirPersonaId={onAirPersonaId}
         data={data}

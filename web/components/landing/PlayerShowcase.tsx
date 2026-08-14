@@ -10,24 +10,17 @@ import {
 } from '@/lib/stationOrigin';
 import type { ShowcaseStation } from '@/lib/stations';
 
-// Browser-window mock chrome wrapping the actual V3 player. Same React tree
-// as the rest of the page — no iframe — so theme switches and dev reloads
-// flow through, and the embed weighs ~nothing extra. The player runs in
-// `contained` mode so it pins to the frame, not the viewport, and its
-// drawers/dialogs portal into the frame too.
+// Browser-window mock chrome wrapping the real player. Same React tree as the
+// rest of the page — no iframe — so theme switches and dev reloads flow
+// through. The player runs in `contained` mode, so it pins to the frame rather
+// than the viewport and its drawers/dialogs portal into the frame too.
 //
-// The frame carries a browser-tab strip fed from the stations directory
-// (the community catalog, via lib/stations) — the demo isn't a screenshot of one station, it's a
-// live tuner across the network. Picking a tab swaps the StationOrigin the
-// player tree reads its API + stream URLs from and remounts PlayerApp (key)
-// so feed state, the <audio> element, and the tune-in gate all reset cleanly
-// for the new station. Tab 0 is always the local station (env-default
-// origin), so a self-hosted landing page still demos that operator's own
-// broadcast.
-//
-// The LIVE chip pulses once on mount — a "broadcast is on right now"
-// callout as the showcase appears. The bs-live-dot CSS pulse continues
-// independently after the chip settles.
+// The tab strip is fed from the stations directory: the demo is a live tuner
+// across the network, not a screenshot of one station. Picking a tab swaps the
+// StationOrigin the player tree reads its API + stream URLs from and remounts
+// PlayerApp (via key) so feed state, the <audio> element and the tune-in gate
+// all reset. Tab 0 is always the local station, so a self-hosted landing page
+// still demos that operator's own broadcast.
 
 export interface PlayerShowcaseProps {
   stations?: ShowcaseStation[];
