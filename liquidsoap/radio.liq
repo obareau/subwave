@@ -856,6 +856,19 @@ music_meta = music
 # and the rotate defers to the next real boundary.
 bed_on_air = ref(false)
 
+# DIVERGENCE LOCALE 2026-08-14 — les jingles chevauchaient la voix.
+# `bed_on_air` empêche le rotate de couper un bed ; RIEN n'empêchait un jingle
+# de démarrer PENDANT que le DJ parle. Le garde-fou amont (jingle-playing.json
+# + waitForJingleClear côté controller, #997) ne couvre que le sens inverse :
+# une voix qui démarre pendant un jingle. Ici c'est le jingle qui arrive sur la
+# voix, et le rotate n'en sait rien.
+#
+# Bascule HORODATÉE, pas un booléen : `source.is_ready` sur une request.queue
+# reste `true` définitivement après le premier push (mesuré — true encore 24 s
+# après un clip de 6,4 s), ce qui aurait affamé les jingles pour de bon. Un
+# instant dans le futur ne peut pas se verrouiller : au pire il est déjà passé.
+voice_until = ref(0.)
+
 # JINGLES & STATION ID — rotate a jingle in every N tracks.
 #
 # CRITICAL: this rotate MUST sit here, on the raw pre-cross / pre-duck music
@@ -895,7 +908,7 @@ music =
     # can't split a bed from the song it ramps into; a starved music chain does
     # the same so the rotate can't serve stingers forever over dead air (see the
     # MUSIC STARVE GUARD below).
-    jingles = source.available(jingles, {not bed_on_air() and not music_starved()})
+    jingles = source.available(jingles, {not bed_on_air() and time() > voice_until() and not music_starved()})
     rotate(weights=[1, jingle_ratio()], [jingles, music])
   else
     music
@@ -951,6 +964,13 @@ def voice_marker(channel, tmp_dir) =
     begin
       voice_id = m["subwave_voice"]
       if voice_id != "" then
+        # Arme la bascule anti-chevauchement (voir voice_until plus haut).
+        # request.duration est coûteux mais ce hook est synchronous=false, donc
+        # hors du fil de streaming. Repli à 30 s si le WAV n'est pas mesurable —
+        # généreux, et borné par construction.
+        dur = request.duration(m["filename"])
+        voice_until := time() + (null.get(default=30., dur)) + 2.
+
         file.write(
           data=json.stringify(compact=true, {
             voiceId = voice_id,
