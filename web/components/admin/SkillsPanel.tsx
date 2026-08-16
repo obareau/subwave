@@ -69,7 +69,11 @@ interface SkillToggleResponse {
 }
 
 interface SkillRunResponse {
-  spoken?: string;
+  spoken?: string | null;
+  // false when the skill ran but had nothing usable to speak from — a normal
+  // outcome, not a failure, so it arrives as a 200 with a reason attached.
+  aired?: boolean;
+  reason?: string | null;
   error?: string;
 }
 
@@ -231,7 +235,14 @@ export default function SkillsPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as SkillRunResponse;
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      notify.ok(j.spoken ? `On air: “${j.spoken}”` : `${name} fired`);
+      // A stand-down is reported as-is rather than as a success: the operator
+      // pressed Run now and nothing went to air, and the reason is the whole
+      // point of the answer (issue #1412).
+      if (j.aired === false) {
+        notify.info(`${name} stayed silent — ${j.reason || 'nothing usable to speak from'}`);
+      } else {
+        notify.ok(j.spoken ? `On air: “${j.spoken}”` : `${name} fired`);
+      }
     } catch (e) {
       notify.err(`Run failed: ${errorMessage(e)}`);
     } finally { setBusy(null); }

@@ -5,8 +5,9 @@
 
 import assert from 'node:assert/strict';
 import {
-  remainingSec, drainAction, shouldDeadlinePick,
+  remainingSec, drainAction, shouldDeadlinePick, introRenderBudgetSec,
   DRAIN_DEADLINE_SEC, HARD_DEADLINE_SEC, DEADLINE_PICK_COOLDOWN_SEC,
+  DRAIN_COMMIT_RESERVE_SEC, MIN_PRERENDER_BUDGET_SEC,
 } from '../src/broadcast/drain-policy.js';
 
 // ── remainingSec ─────────────────────────────────────────────────────────────
@@ -100,5 +101,58 @@ assert.ok(
   (DRAIN_DEADLINE_SEC - HARD_DEADLINE_SEC) / DEADLINE_PICK_COOLDOWN_SEC >= 2,
   'pick window fits at least two attempts',
 );
+
+// ── introRenderBudgetSec ─────────────────────────────────────────────────────
+// The drain verdict only decides "send"; the intro pre-render sits between the
+// verdict and the next.txt write, and on a slow local TTS engine it can outlast
+// the runway (#1409). The budget is what keeps music commitment off the speech
+// critical path.
+
+// Unknowable clock → unbounded, exactly today's behaviour. No seam is known to
+// be at risk, so there is no basis for cutting a render short.
+assert.equal(introRenderBudgetSec(null), null, 'unknown clock → unbounded render');
+
+// Plenty of runway → render freely, minus the commit reserve.
+assert.equal(introRenderBudgetSec(300), 300 - DRAIN_COMMIT_RESERVE_SEC, 'long runway → runway minus reserve');
+
+// The boundary: a budget of exactly the minimum still renders.
+assert.equal(
+  introRenderBudgetSec(DRAIN_COMMIT_RESERVE_SEC + MIN_PRERENDER_BUDGET_SEC),
+  MIN_PRERENDER_BUDGET_SEC,
+  'exactly the minimum window still renders',
+);
+// One second under it → skip. A render that cannot finish only delays the music.
+assert.equal(
+  introRenderBudgetSec(DRAIN_COMMIT_RESERVE_SEC + MIN_PRERENDER_BUDGET_SEC - 1),
+  0,
+  'below the minimum window → skip the pre-render',
+);
+
+// The reserve itself is never spent on speech: at exactly the reserve, and
+// anywhere below it, the answer is skip — including an expired clock, where the
+// seam has already passed and the only useful act is committing the music.
+assert.equal(introRenderBudgetSec(DRAIN_COMMIT_RESERVE_SEC), 0, 'no runway past the reserve → skip');
+assert.equal(introRenderBudgetSec(5), 0, 'almost no runway → skip');
+assert.equal(introRenderBudgetSec(0), 0, 'seam is now → skip');
+assert.equal(introRenderBudgetSec(-30), 0, 'expired clock → skip, never a negative budget');
+
+// A budget is never negative — the call site feeds it to setTimeout.
+for (const r of [-100, -1, 0, 1, 11, 12, 17, 18, 60, 600]) {
+  const b = introRenderBudgetSec(r);
+  assert.ok(b != null && b >= 0, `budget for remaining=${r} is non-negative`);
+}
+
+// The hard-deadline drain is the emergency path — the pick did NOT land in time
+// and Liquidsoap must have the track resolved before the crossfade. Whatever
+// render window survives there must leave the commit reserve intact.
+const atHardDeadline = introRenderBudgetSec(HARD_DEADLINE_SEC);
+assert.ok(
+  atHardDeadline != null && atHardDeadline <= HARD_DEADLINE_SEC - DRAIN_COMMIT_RESERVE_SEC,
+  'a hard-deadline drain still reserves the commit tail',
+);
+
+// The reserve must cover the commit tail it is named for: two writeHandoff
+// waits (5s each) plus slack. Shrinking it below that reintroduces #1409.
+assert.ok(DRAIN_COMMIT_RESERVE_SEC >= 10, 'reserve covers both 5s handoff waits');
 
 console.log('drain-policy: all assertions passed');

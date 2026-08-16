@@ -38,6 +38,7 @@ import { buildSegmentTools, fetchSegmentData } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
 import { skillEligible } from './eligibility.js';
+import { requiresGrounding, standDownReason } from './abstain-policy.js';
 import * as sfx from '../broadcast/sfx.js';
 
 // The capability registry now lives entirely in skills/loader.js, which loads
@@ -141,12 +142,28 @@ function segmentSchema() {
   });
 }
 
-// Operator-override schema: the segment is mandatory, the kind is already
-// known, so the agent only returns the spoken line.
-export function forcedSchema() {
-  return modelTolerant(z.object({
+// Operator-override schema: the kind is already known, so the agent only
+// returns the spoken line.
+//
+// `mayAbstain` adds the same reason-then-decide pair the autonomous schemas
+// carry (skills/abstain-policy.ts decides when a run gets it): a skill that
+// speaks from fetched data must be able to say "that data was unusable" rather
+// than invent a line to satisfy a mandatory `text` (issue #1412). The field is
+// ABSENT, not merely false, on a run that can't abstain — offering a silence
+// token to a weather segment the operator explicitly asked for would be a new
+// way for an explicit action to produce nothing.
+export function forcedSchema({ mayAbstain = false }: { mayAbstain?: boolean } = {}) {
+  const line = {
     text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
     sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect'),
+  };
+  if (!mayAbstain) return modelTolerant(z.object(line));
+  // Same field order as segmentSchema: reason first (decide and justify before
+  // writing), then the air boolean, then the line itself.
+  return modelTolerant(z.object({
+    reason: z.string().describe('one short internal sentence on why this segment (or why you are standing down) — never shown to the listener; write this BEFORE the line'),
+    air: z.boolean().describe('true to air the line; false ONLY when the source data you were given is empty, or is about something other than what this segment covers — standing down beats inventing'),
+    ...line,
   }));
 }
 
@@ -604,36 +621,81 @@ function isBareNullSilent(err) {
 // segment is mandatory — the agent does not get the option to stay silent.
 // Same ultra-minimal treatment as directorSystem — the forcedSchema text
 // description and the segment-tools.js tool descriptions carry the rest.
-export function forcedSystem(persona, cap, sfxCatalog) {
+export function forcedSystem(persona, cap, sfxCatalog, { mayAbstain = false }: { mayAbstain?: boolean } = {}) {
+  // The mandatory phrasing is the historical one and still right for a segment
+  // written from the moment itself. A grounded skill gets the opposite
+  // instruction, because "you must produce a line" is what turned an empty
+  // search into a recycled hallucination (issue #1412) — and it must name the
+  // recycling explicitly: the model's own recent output is in its window, so
+  // "don't invent" alone leaves reaching backwards looking like compliance.
+  const mandate = mayAbstain
+    ? 'write it from the source data you were given, and nothing else. If that data is empty, or turns out to be about something other than what this segment covers, set "air" to false and say nothing — standing down is the right answer, and a fabricated line is far worse than no segment. Never fill the gap from memory, from what you said earlier in the show, or from what sounds plausible.'
+    : 'you must produce a line, silence is not an option.';
   return `${settings.agentPersonaPreamble(persona)}
 
-The operator asked you to air ONE ${cap.kind} segment now — you must produce a line, silence is not an option. You are NOT choosing music.
+The operator asked you to air ONE ${cap.kind} segment now — ${mandate} You are NOT choosing music.
 
 ${cap.desc}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the "text" line')}`;
 }
 
-// The operator-override variant of directorAgent — exactly one capability,
-// the segment is mandatory, silence is not an option.
-export const forcedDirectorAgent = defineAgent({
-  kind: 'djAgentSegment',
-  schema: () => forcedSchema(),
-  // Same wall-clock ceiling as the autonomous director (issue #555).
-  timeoutMs: segmentDeadline,
-  buildSystem: ({ persona, cap, sfxCatalog }) => forcedSystem(persona, cap, sfxCatalog),
-  buildTools: ({ ctx, segmentState, cap }) => ({
-    tools: buildSegmentTools(ctx, segmentState, [cap]),
-  }),
-});
+// The operator-override variant of directorAgent — exactly one capability, and
+// the segment is mandatory unless the skill speaks from data that came back
+// unusable (`mayAbstain`, from skills/abstain-policy.ts).
+//
+// Two module-level agents rather than one agent reading mayAbstain per run:
+// defineAgent resolves `schema` with no run arguments (it is read off the
+// instance too, by llm-bench), so the abstention field can only vary by
+// defining the pair. runCapability picks one; everything else about them is
+// identical.
+//
+// `onData` is how runCapability sees what the skill's tool actually returned:
+// the agent calls the tool itself, so without a recorder the "was there
+// anything to write from" check would exist only in the prompt. Optional —
+// the recorder must not be load-bearing for a run that doesn't pass one.
+function defineForcedAgent(mayAbstain: boolean) {
+  return defineAgent({
+    kind: 'djAgentSegment',
+    schema: () => forcedSchema({ mayAbstain }),
+    // Same wall-clock ceiling as the autonomous director (issue #555).
+    timeoutMs: segmentDeadline,
+    buildSystem: ({ persona, cap, sfxCatalog }) =>
+      forcedSystem(persona, cap, sfxCatalog, { mayAbstain }),
+    buildTools: ({ ctx, segmentState, cap, onData }) => ({
+      tools: buildSegmentTools(ctx, segmentState, [cap], { onResult: onData }),
+    }),
+  });
+}
+
+export const forcedDirectorAgent = defineForcedAgent(false);
+// The grounded variant: same run, plus the option to stand down when the
+// skill's own data tool came back with nothing usable (issue #1412).
+export const groundedDirectorAgent = defineForcedAgent(true);
+
+// The outcome of a forced run. `aired: false` is a normal, reportable result —
+// the skill had nothing usable to speak from — and is NOT an error: the caller
+// decides what that means (the operator hears why, the cron logs it, the
+// programme beat falls to straight talk). Real failures still throw.
+export interface CapabilityRun {
+  aired: boolean;
+  text: string | null;
+  reason: string | null;
+}
 
 // Operator override — fire one capability on demand, bypassing cooldowns, the
 // frequency floor, persona ownership and the enable toggle. Backs POST
-// /dj/skill, and the programme feature beat (broadcast/programme.ts), which
-// passes `brief` (the episode plan's feature topic, appended to the situation
-// so the segment is built AROUND it) and `persona` (the rotated on-air
-// speaker — voice, prompt seat, and session attribution move together, same
-// rule as every other rotated segment). Returns the spoken text; throws on an
-// unknown/unready capability or empty output.
-export async function runCapability(which, ctx, { brief = null, persona = null }: { brief?: string | null; persona?: { id?: string; name?: string; skills?: string[]; tts?: unknown } | null } = {}) {
+// /dj/skill, the per-skill cron (broadcast/scheduler.ts), and the programme
+// feature beat (broadcast/programme.ts), which passes `brief` (the episode
+// plan's feature topic, appended to the situation so the segment is built
+// AROUND it) and `persona` (the rotated on-air speaker — voice, prompt seat,
+// and session attribution move together, same rule as every other rotated
+// segment).
+//
+// Throws on an unknown/unready capability, or on empty output from a skill that
+// had no grounds to stand down. Returns `{ aired: false, reason }` when a
+// grounded skill's data came back unusable (issue #1412) — see
+// skills/abstain-policy.ts for which skills those are and why the decision
+// isn't inlined here.
+export async function runCapability(which, ctx, { brief = null, persona = null }: { brief?: string | null; persona?: { id?: string; name?: string; skills?: string[]; tts?: unknown } | null } = {}): Promise<CapabilityRun> {
   const cap = allCapabilities().find(c => c.kind === which || c.skill === which);
   if (!cap) throw new Error(`unknown skill: ${which}`);
   if (cap.ready && !cap.ready()) {
@@ -657,31 +719,77 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
   const situation = buildSituation(ctx, { forced: true, contextFields: effectiveContextFields(cap), recentCuriosity })
     + (brief ? `\n\n${brief}` : '');
 
-  let object: { text?: string; sfx?: string | null } | undefined;
+  // Whether this skill is allowed to stand down at all — a skill that speaks
+  // from fetched data, as opposed to one that writes from the moment and its
+  // brief. Decided once, then applied identically to both paths below.
+  const mayAbstain = requiresGrounding(cap);
+  // Stood down without airing: logged here rather than at each caller, so the
+  // booth log carries one wording no matter which of the three forced callers
+  // fired the skill.
+  const standDown = (reason: string): CapabilityRun => {
+    queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
+    return { aired: false, text: null, reason };
+  };
+
+  let object: { reason?: string; air?: boolean; text?: string; sfx?: string | null } | undefined;
   if (!settings.get().llm?.pickerAgent) {
     // Pool mode: fetch the capability's data directly and make one structured
-    // call (same swap as the autonomous tick). The operator demanded a
-    // segment, so a failed fetch doesn't bail — the model writes from the
-    // capability brief and the moment alone, the same "straight talk"
-    // degradation the programme feature uses for a stale kind.
+    // call (same swap as the autonomous tick). A skill that writes from the
+    // moment survives a failed fetch — the model writes from the capability
+    // brief and the moment alone, the same "straight talk" degradation the
+    // programme feature uses for a stale kind. A GROUNDED skill doesn't get
+    // that degradation: its whole segment was supposed to be about what the
+    // fetch didn't return, so there is no model call at all.
     const data = await fetchSegmentData(cap, ctx, segmentState);
+    const blocked = standDownReason(cap, data);
+    if (blocked) return standDown(blocked);
     object = await deadlinedSegmentObject({
-      system: forcedSystem(speaker, cap, sfxCatalog),
+      system: forcedSystem(speaker, cap, sfxCatalog, { mayAbstain }),
       prompt: situation + (data && !data.error ? dataBlock(data) : ''),
-      schema: forcedSchema(),
+      schema: forcedSchema({ mayAbstain }),
       temperature: 0.9,
       kind: 'generateSegment',
     });
   } else {
-    ({ object } = await forcedDirectorAgent.run({
+    // Agent mode: the agent calls the skill's tool itself, so the same check
+    // runs on what the tool reported back (onData). Enforced in code and not
+    // only in the prompt — a model that was handed nothing and spoke anyway is
+    // the whole bug, and the prompt is the half of it that already failed.
+    //
+    // Judged across ALL of the tool's calls, not just the last: the agent may
+    // search twice (a narrow query, then a broader one), and one empty result
+    // after a good one is not a reason to throw the good one away. So a single
+    // usable result clears the run, and the reason kept is the most recent
+    // failure for the log.
+    let usableSeen = false;
+    let blocked: string | null = null;
+    ({ object } = await (mayAbstain ? groundedDirectorAgent : forcedDirectorAgent).run({
       messages: [{ role: 'user', content: situation }],
       persona: speaker, cap, sfxCatalog,
       ctx, segmentState,
+      onData: (_kind: string, data: unknown) => {
+        const why = standDownReason(cap, data as never);
+        if (why) blocked = why; else usableSeen = true;
+      },
     }));
+    if (!usableSeen && blocked) return standDown(blocked);
+  }
+
+  // An explicit decline. Only reachable when the schema offered `air` at all,
+  // so a skill that can't abstain can't decline by accident.
+  if (mayAbstain && object?.air === false) {
+    return standDown(object?.reason?.trim() || 'nothing usable to write the segment from');
   }
 
   const text = object?.text?.trim();
-  if (!text) throw new Error(`skill "${cap.skill}" produced no text`);
+  if (!text) {
+    // A grounded skill that returns nothing has effectively declined — the
+    // listener-facing outcome is the same silence, and reporting it as a
+    // failure would put a red error in the booth log for a model doing the
+    // right thing badly. Anything else is still a real failure.
+    if (mayAbstain) return standDown('the DJ wrote no line for this segment');
+    throw new Error(`skill "${cap.skill}" produced no text`);
+  }
 
   // Update cooldown/dedup memory so a follow-up autonomous tick doesn't
   // immediately repeat what the operator just fired.
@@ -710,7 +818,7 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
       queue.log('error', `Segment agent picked unknown sfx "${pick}" — dropping`);
     }
   }
-  return text;
+  return { aired: true, text, reason: object?.reason?.trim() || null };
 }
 
 // Skill metadata for the admin command-center UI, derived from CAPABILITIES.

@@ -304,10 +304,17 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
     const speaker = settings.pickOnAirSpeaker(now);
     if (kind) {
       try {
-        return await runCapability(kind, ctx, {
+        const run = await runCapability(kind, ctx, {
           brief: `This segment is the planned feature of the programme "${show.name}". Today's feature: ${topic}${plan?.angle ? ` (episode angle: ${plan.angle})` : ''}. Build the segment around it.`,
           persona: speaker,
         });
+        if (run.aired && run.text) return run.text;
+        // The skill stood down — its data had nothing usable in it (issue
+        // #1412). The BEAT is still mandatory, so this falls through to the
+        // straight-talk floor below exactly as a director failure does: the
+        // feature airs, written from the topic and the moment, rather than
+        // from facts the skill never actually found.
+        queue.log('scheduler', `Programme feature capability "${kind}" stood down (${run.reason || 'no usable data'}) — airing straight talk instead`);
       } catch (err) {
         queue.log('error', `Programme feature capability "${kind}" failed (${(err as Error).message}) — airing straight talk instead`);
       }

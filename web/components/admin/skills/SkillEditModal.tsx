@@ -440,10 +440,20 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: skill.name }),
       });
-      const j = (await r.json().catch(() => ({}))) as { spoken?: string; error?: string };
+      const j = (await r.json().catch(() => ({}))) as {
+        spoken?: string | null; aired?: boolean; reason?: string | null; error?: string;
+      };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      flashFor('QUEUED TO BOOTH');
-      if (j.spoken) notify.ok(`On air: “${j.spoken}”`);
+      // The skill can run and decide it has nothing usable to speak from — a
+      // 200 with `aired: false` (issue #1412). Flashing "QUEUED TO BOOTH" at
+      // that would tell the operator something aired when nothing did.
+      if (j.aired === false) {
+        flashFor('STOOD DOWN');
+        notify.info(`${skill.name} stayed silent — ${j.reason || 'nothing usable to speak from'}`);
+      } else {
+        flashFor('QUEUED TO BOOTH');
+        if (j.spoken) notify.ok(`On air: “${j.spoken}”`);
+      }
     } catch (e) {
       notify.err(`Run failed: ${errorMessage(e)}`);
     } finally { setActing(false); }

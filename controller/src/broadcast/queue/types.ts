@@ -95,6 +95,10 @@ export interface QueueItem {
   queuedAt?: string;
   sent?: boolean;
   confirmedInLiquidsoap?: boolean;
+  // Unique per-handoff token carried in a subhttp URL fragment. Liquidsoap's
+  // protocol records ready/failed against it, so queue membership is never
+  // mistaken for resolution state.
+  resolveProbeId?: string;
   transitionSfx?: string;
   startedAt?: string;
   endedAt?: string;
@@ -148,4 +152,3 @@ export interface NowPlaying {
 //   chatty     → uniform 1-5 tracks
 //   aggressive → uniform 1-3 tracks
 // A DJ-mode persona reads one rung chattier (effectiveFrequency), so it links
-

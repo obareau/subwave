@@ -153,18 +153,30 @@ editor flags it the next time you open that skill.
 
 Set it from the admin UI too: **/admin/skills → Edit → Cron timer**.
 
-**A cron always speaks.** This is the thing to get right before adding one. The
-autonomous segment tick asks the agent whether to air at all, and silence is a
-first-class answer it takes whenever the data is dull or unchanged. A cron takes
-the same path as **Run now**, which is *forced*: the model is handed a schema
-with no "stay silent" option, and the segment is required to produce a line. A
-skill's own `{ available: false }` signal is passed along as data but decides
-nothing here.
+**A cron speaks whenever it has something to speak from.** This is the thing to
+get right before adding one. The autonomous segment tick asks the agent whether
+to air at all, and silence is a first-class answer it takes whenever the data is
+dull or unchanged. A cron takes the same path as **Run now**, which is *forced*:
+the segment is required to produce a line, and the model is not offered a "stay
+silent" option.
+
+The one exception is the case where there is nothing to write from. If your
+skill has a `tool.mjs` and it returns `{ available: false }` or fails, the
+forced run **stands down** rather than ordering a line anyway: nothing airs, and
+the reason is logged (and returned to **Run now** as `aired: false`). Without
+that, a skill handed no facts and told it must speak can only invent them — which
+is exactly what the web-search skill did when a search came back empty
+([#1412](https://github.com/perminder-klair/subwave/issues/1412)). Opt out with
+`export const requiresData = false` when your skill writes its own material and
+`{ available: false }` merely means "no external item this time" — that is what
+the built-in `curiosity` does.
 
 So a cron suits a skill that is worth hearing at a fixed moment every time — a
-morning bulletin, a sign-off, a running joke tied to a particular hour. It suits
-a skill that speaks *only when something is notable* far less well, because it
-will be made to speak anyway. Both example skills in
+morning bulletin, a sign-off, a running joke tied to a particular hour. It still
+suits a skill that speaks *only when something is notable* less well: it fires
+on the clock rather than on the news, so it will keep asking at 8am whether
+there is anything to say. It just no longer makes something up when the answer
+is no. Both example skills in
 [`docs/examples/skills`](examples/skills) are in that second group and
 deliberately carry no `cron:` — `moon-phase` is meant to skip an unremarkable
 gibbous, and `sunset` tracks a time that moves through the year, so pinning it to
@@ -241,6 +253,15 @@ export const description = 'Fetch X for the … segment.';
 // OPTIONAL: gate the whole skill on a runtime condition — when this returns
 // false the skill is never even offered (e.g. no search provider configured).
 export const ready = (services) => services.searchReady();
+
+// OPTIONAL: opt out of the grounding rule. By default a skill with a tool
+// STANDS DOWN on a forced run (Run now, cron, programme feature) when this tool
+// returns `{ available: false }` or throws — no data, no segment, rather than
+// an invented one. Set this to false when your skill writes its own material
+// and `{ available: false }` just means "nothing external this time".
+// An operator can settle it per install with a `requiresData:` frontmatter line,
+// which wins over this.
+export const requiresData = false;
 
 // OPTIONAL: agent-steerable parameters — a flat { name: description } object of
 // string params. The agent may pass a value or null for each; handle null by

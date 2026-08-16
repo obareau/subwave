@@ -183,7 +183,63 @@ log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossf
 # subhttp:<full-url> — whole-file download via curl. The built-in
 # http.get.stream returns spurious 522s on the Cloudflare-fronted Navidrome
 # origin.
+#
+# INVARIANT: a download that curl reports as successful is NOT proof of audio.
+# The Subsonic API carries its error code INSIDE the body — Navidrome answers a
+# missing file with HTTP 200 and a JSON (or XML) `subsonic-response` blob — so
+# the old "curl exited 0 and the file is non-empty" test handed an error page to
+# the decoders, which logged the useless `Available decoders cannot decode
+# "/tmp/liq-curl-….mp3"`. Request resolution then failed, Liquidsoap dropped the
+# request, and the station fell through to the unfiltered auto playlist while the
+# controller's queued pick sat `sent:true` for another three tracks (#1405).
+# `--fail` alone does NOT cover this (the status is 200); what identifies it is
+# the CONTENT TYPE, so ask curl what it actually fetched and refuse anything that
+# is not audio — with a log line naming the real cause.
 # ---------------------------------------------------------------------------
+
+# Below this a "track" cannot be audio worth airing — a Subsonic error body is a
+# few hundred bytes, while 4 KiB of MP3 is about a quarter of a second. Only a
+# backstop for an origin that returns an error with no usable content type.
+subhttp_min_bytes = 4096
+
+# Per-handoff completion outcomes consumed by the controller over telnet. The
+# probe token rides in a URL fragment (never sent to the origin), so a stale
+# result for the same song id cannot satisfy a later push. Entries are removed
+# when read; controller pushes are deduped and bounded, so this stays tiny.
+subhttp_probe_outcomes = ref([])
+
+def subhttp_probe_id(uri) =
+  matches = string.extract(pattern="#subwave_probe=([^&#]+)", uri)
+  list.assoc(default="", 1, matches)
+end
+
+def remember_subhttp_outcome(uri, outcome) =
+  probe_id = subhttp_probe_id(uri)
+  if probe_id != "" then
+    kept = list.filter(fun(p) -> fst(p) != probe_id, subhttp_probe_outcomes())
+    subhttp_probe_outcomes.set([(probe_id, outcome), ...kept])
+  end
+end
+
+def take_subhttp_outcome(probe_id) =
+  matches = list.filter(fun(p) -> fst(p) == probe_id, subhttp_probe_outcomes())
+  if list.length(matches) == 0 then
+    "pending"
+  else
+    subhttp_probe_outcomes.set(
+      list.filter(fun(p) -> fst(p) != probe_id, subhttp_probe_outcomes())
+    )
+    snd(list.hd(matches))
+  end
+end
+
+# Stream URLs carry Subsonic u/t/s query credentials. Keep operator-facing
+# context without persisting replayable auth material or the internal probe id.
+def redact_subhttp_uri(uri) =
+  no_query = string.replace(pattern="\\?[^#]*", fun(_) -> "?[redacted]", uri)
+  string.replace(pattern="#.*$", fun(_) -> "", no_query)
+end
+
 def proto_subhttp(~rlog, ~maxtime, arg) =
   ignore(rlog)
   uri = arg
@@ -195,14 +251,41 @@ def proto_subhttp(~rlog, ~maxtime, arg) =
     elsif string.contains(substring=".flac", arg) then ".flac"
     else ".mp3" end
   outfile = file.temp("liq-curl-", ext)
-  cmd = "curl -sS -L --max-time #{timeout} -o #{process.quote(outfile)} #{process.quote(uri)}"
+  # `-w` reports the FINAL response (after -L), status first so the content type
+  # — which may itself contain a space, e.g. `application/json; charset=utf-8` —
+  # can keep the rest of the line.
+  cmd = "curl -sS -L --fail --max-time #{timeout} -w '%{http_code} %{content_type}' -o #{process.quote(outfile)} #{process.quote(uri)}"
   ret = process.run(timeout=float_of_int(timeout), cmd)
-  if ret.status == "exit" and ret.status.code == 0 and file.size(outfile) > 0 then
-    outfile
-  else
-    log(label="protocol.subhttp", level=3, "curl failed for #{uri}: status=#{ret.status} code=#{ret.status.code} stderr=#{ret.stderr}")
+  info = string.trim(ret.stdout)
+  http_code = list.hd(default="", string.split(separator=" ", info))
+  ctype = string.case(lower=true, info)
+  size = file.size(outfile)
+  # An API error body, whatever the status: JSON and XML are the two Subsonic
+  # error dialects, and text/* covers a proxy's HTML error page.
+  error_body =
+    string.contains(substring="json", ctype)
+    or string.contains(substring="xml", ctype)
+    or string.contains(substring="text/", ctype)
+  safe_uri = redact_subhttp_uri(uri)
+  safe_stderr = redact_subhttp_uri(ret.stderr)
+  if not (ret.status == "exit" and ret.status.code == 0) then
+    remember_subhttp_outcome(uri, "failed")
+    log(label="protocol.subhttp", level=3, "curl failed for #{safe_uri}: status=#{ret.status} code=#{ret.status.code} http=#{http_code} stderr=#{safe_stderr}")
     file.remove(outfile)
     null
+  elsif error_body then
+    remember_subhttp_outcome(uri, "failed")
+    log(label="protocol.subhttp", level=2, "music source returned an ERROR BODY, not audio, for #{safe_uri} (http=#{http_code}, content-type=#{info}, #{size} bytes) — the track is missing or unreadable at the origin; check the music server's own log")
+    file.remove(outfile)
+    null
+  elsif size < subhttp_min_bytes then
+    remember_subhttp_outcome(uri, "failed")
+    log(label="protocol.subhttp", level=2, "music source returned only #{size} bytes for #{safe_uri} (http=#{http_code}, content-type=#{info}) — too small to be audio, treating as an error response")
+    file.remove(outfile)
+    null
+  else
+    remember_subhttp_outcome(uri, "ready")
+    outfile
   end
 end
 
@@ -220,7 +303,7 @@ def poll_queue() =
     contents = string.trim(file.contents("#{state_dir}/next.txt"))
     file.remove("#{state_dir}/next.txt")
     if contents != "" then
-      log("Queueing: #{contents}")
+      log("Queueing: #{redact_subhttp_uri(contents)}")
       ignore(dj_queue.push(request.create(contents)))
     end
   end
@@ -301,14 +384,18 @@ def dj_transition(a, b) =
   # The log fades do the opposite, holding the outgoing hot so that the EFFECT,
   # not the fader, is heard doing the removal: with the default fade the sweep's
   # cutoff arrived over an already-quiet track and felt powerless (on-air), a
-  # chopped track must stab at full level like a real crossfader cut, and the
-  # loop's one-bar capture pass has to be seeded hot or every repeat inherits
-  # the couple of dB it lost.
+  # chopped track must stab at full level like a real crossfader cut. Loop is
+  # the exception: it captures the raw outgoing bar, then applies its own
+  # complementary ride after the delay cascade. Putting it on this hot fade
+  # held the outgoing near unity while the incoming rose and made the start of
+  # every loop transition jump in level.
   a_source =
     if washing then
       fade.out(duration=d, type="exp", initial_metadata=a.metadata, a.source)
-    elsif sweeping or chopping or looping then
+    elsif sweeping or chopping then
       fade.out(duration=d, type="log", initial_metadata=a.metadata, a.source)
+    elsif looping then
+      a.source
     else
       fade.out(duration=d, initial_metadata=a.metadata, a.source)
     end
@@ -734,27 +821,28 @@ def dj_transition(a, b) =
         x = if e >= t_on then 1.0 elsif e <= bar then 0.0 else (e - bar) / (0.15 * d) end
         3.0 * x * x - 2.0 * x * x * x
       end
-      # Master release — the ONLY level release available, since a feed-forward
-      # cascade has no feedback to ramp down. The loop rides flat, then fades
-      # out under the incoming and is silent before the branch truncates at d.
-      def loop_master() =
+      # Complementary ride — the loop is built from the raw capture so every
+      # repeated bar has a stable internal level, then this outer envelope gives
+      # back headroom as the incoming track rises. Previously the log-faded
+      # outgoing stayed hot through the capture pass while the incoming rose
+      # underneath it, producing the audible level jump unique to Loop.
+      def loop_gain() =
         e = source.elapsed(loop_src)
         e = if e < 0. then 0. else e end
-        if e < 0.80 * d then 1.0
-        elsif e < 0.92 * d then
-          x = (e - 0.80 * d) / (0.12 * d)
-          1.0 - (3.0 * x * x - 2.0 * x * x * x)
-        else 0.0 end
+        if e >= d then 0.0 else 1.0 - e / d end
       end
       gated  = amplify(loop_dry, a_source)
       looped = comb(delay=bar, feedback=0.0, gated)
       looped = comb(delay=2.0 * bar, feedback=0.0, looped)
       looped = if 4.0 * bar < d then comb(delay=4.0 * bar, feedback=0.0, looped) else looped end
       looped = if 8.0 * bar < d then comb(delay=8.0 * bar, feedback=0.0, looped) else looped end
-      looped = amplify(2.0, looped)             # the cascade's fixed −6 dB
+      # feedback=0.0 emits each delayed copy at 0 dB. Because the dry gate keeps
+      # exactly one bar and the delays double, those copies occupy non-overlapping
+      # bar slots at unity. Global makeup would double the direct capture pass
+      # before any delayed copy exists, recreating the transition-entry jump.
       looped = filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet,
                  filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet, looped))
-      amplify(loop_master, looped)
+      amplify(loop_gain, looped)
     else
       a_source
     end
@@ -856,18 +944,42 @@ music_meta = music
 # and the rotate defers to the next real boundary.
 bed_on_air = ref(false)
 
-# DIVERGENCE LOCALE 2026-08-14 — les jingles chevauchaient la voix.
-# `bed_on_air` empêche le rotate de couper un bed ; RIEN n'empêchait un jingle
-# de démarrer PENDANT que le DJ parle. Le garde-fou amont (jingle-playing.json
-# + waitForJingleClear côté controller, #997) ne couvre que le sens inverse :
-# une voix qui démarre pendant un jingle. Ici c'est le jingle qui arrive sur la
-# voix, et le rotate n'en sait rien.
+# Voice-on-air deadline for the jingle gate below. #997 solved one direction —
+# a voice handoff waits out a jingle that is already feeding (jingle-playing.json
+# + waitForJingleClear in the controller). The other direction was unguarded: the
+# rotate could hand a stinger to the music chain WHILE a DJ clip is on air, and
+# the jingle simply plays over the voice.
 #
-# Bascule HORODATÉE, pas un booléen : `source.is_ready` sur une request.queue
-# reste `true` définitivement après le premier push (mesuré — true encore 24 s
-# après un clip de 6,4 s), ce qui aurait affamé les jingles pour de bon. Un
-# instant dans le futur ne peut pas se verrouiller : au pire il est déjà passé.
+# A deadline, not a boolean. `source.is_ready(voice_queue)` looks like the
+# obvious predicate and is a trap: on a request.queue it latches true forever
+# after the first push (measured: still true 24s after a 6.4s clip finished,
+# queue empty), which would starve the jingle rotate permanently. An instant in
+# the future cannot latch — at worst it is already in the past.
 voice_until = ref(0.)
+
+# Hard ceiling on how far ahead voice_marker may push that deadline. The gate
+# fails toward SERVING jingles, deliberately: a measured duration that comes back
+# wrong (corrupt header, a filename that resolved to some other media) would
+# otherwise silence the rotate for as long as that number says, and unlike the
+# collision the gate fixes, that failure is inaudible — nothing in the log says
+# why the stingers stopped.
+VOICE_GATE_MAX_SEC = 120.
+
+# Two things this gate deliberately does NOT do:
+#
+#   - It arms at the clip's on_metadata, i.e. after the 0.5s say.txt poll and the
+#     silent lead-in. waitForJingleClear (voice-io.ts) covers a jingle already
+#     handed out when the controller writes say.txt; a jingle handed to the rotate
+#     inside that ~1s seam is covered by neither side. Arming optimistically at
+#     handoff would close it, but the controller has no channel to Liquidsoap
+#     other than the handoff files themselves — it would need a new one, for a
+#     window narrower than the poll that creates it.
+#   - intro_queue arms it too, not just voice_queue. A talk-over link is written
+#     for the INCOMING song, so if the rotate served a stinger at that seam the
+#     link would talk over the stinger instead — same collision, quieter. The
+#     cost is that links land on the rotate's decision point by construction, so
+#     a chatty persona (speech every 1-5 tracks) will skip some jingles and run
+#     slightly under the configured ratio. Skipping a jingle is the cheaper miss.
 
 # JINGLES & STATION ID — rotate a jingle in every N tracks.
 #
@@ -905,9 +1017,10 @@ music =
       )
     )
     # A bed on air makes jingles unavailable (bed_on_air above) so the rotate
-    # can't split a bed from the song it ramps into; a starved music chain does
-    # the same so the rotate can't serve stingers forever over dead air (see the
-    # MUSIC STARVE GUARD below).
+    # can't split a bed from the song it ramps into; a voice clip on air does
+    # the same so a stinger can't be handed over the DJ (voice_until above); and
+    # a starved music chain does the same so the rotate can't serve stingers
+    # forever over dead air (see the MUSIC STARVE GUARD below).
     jingles = source.available(jingles, {not bed_on_air() and time() > voice_until() and not music_starved()})
     rotate(weights=[1, jingle_ratio()], [jingles, music])
   else
@@ -964,24 +1077,48 @@ def voice_marker(channel, tmp_dir) =
     begin
       voice_id = m["subwave_voice"]
       if voice_id != "" then
-        # Arme la bascule anti-chevauchement (voir voice_until plus haut).
-        # request.duration est coûteux mais ce hook est synchronous=false, donc
-        # hors du fil de streaming. Repli à 30 s si le WAV n'est pas mesurable —
-        # généreux, et borné par construction.
-        dur = request.duration(m["filename"])
-        voice_until := time() + (null.get(default=30., dur)) + 2.
+        # ONE clock read for both jobs, taken before either. `startedAt` is the
+        # live-edge stamp the controller treats as the moment the words begin
+        # (#1382) — re-reading time() after the work below would skew it by
+        # however long that work took.
+        now = time()
+        fname = m["filename"]
 
+        # The marker goes out FIRST. Arming the jingle gate needs request.duration,
+        # which decodes a header and can raise on an unreadable/empty filename; if
+        # that ran first, a raise would cost the marker entirely, and because the
+        # file is never deleted awaitVoiceAir would not degrade instantly — it
+        # would burn its full 20s timeout against the PREVIOUS clip's voiceId.
         file.write(
           data=json.stringify(compact=true, {
             voiceId = voice_id,
             channel = channel,
-            filename = m["filename"],
-            startedAt = time()
+            filename = fname,
+            startedAt = now
           }),
           atomic=true,
           temp_dir=tmp_dir,
           "#{state_dir}/voice-playing.json"
         )
+
+        # Arm the jingle gate (see voice_until above). request.duration is
+        # documented as expensive, but this hook is synchronous=false and so runs
+        # off the streaming thread. Two bounds, because an over-long deadline
+        # silently starves the rotate with nothing in the log to explain it: the
+        # 30s fallback covers a clip that cannot be measured at all, and the cap
+        # covers one that measures WRONG (corrupt header, or a filename that
+        # resolved to some other media). No script is a legitimate two minutes.
+        dur =
+          try
+            null.get(default=30., request.duration(fname))
+          catch err do
+            log(
+              label="subwave",
+              "voice duration unavailable for #{fname} (#{err}); jingle gate falls back to 30s"
+            )
+            30.
+          end
+        voice_until := now + min(dur, VOICE_GATE_MAX_SEC) + 2.
       end
     end
 end
@@ -1816,6 +1953,13 @@ server.register(
     radio.skip()
     "OK"
   end
+)
+
+server.register(
+  "subhttp_probe_status",
+  description="Consume a proto_subhttp completion outcome: ready / failed / pending",
+  usage="subhttp_probe_status <probe-id>",
+  fun(arg) -> take_subhttp_outcome(string.trim(arg))
 )
 
 # What a skip would air next from dj_queue: "ready" (a resolved request is

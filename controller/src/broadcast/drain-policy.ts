@@ -52,6 +52,41 @@ export function remainingSec(
   return (startedAtMs + effective * 1000 - nowMs) / 1000;
 }
 
+// Runway the drain keeps for the commit tail that follows the intro render
+// inside ONE drain pass: the bed's handoff write and the track URI's own
+// (writeHandoff waits up to 5s each for Liquidsoap's 1.0s poll to consume the
+// file), plus the loudness lookup and the annotate. The pre-render is an
+// optimisation and must never eat into it.
+export const DRAIN_COMMIT_RESERVE_SEC = 12;
+
+// Below this there is no honest render window left — starting a TTS call that
+// cannot finish only delays the music commit for a WAV nobody will use.
+export const MIN_PRERENDER_BUDGET_SEC = 5;
+
+// How long the drain may spend pre-rendering a queued item's intro/link WAV
+// before it MUST commit the music instead (#1409). The hard deadline governs
+// the drain VERDICT; everything between that verdict and the `next.txt` write
+// is optional work, and on a slow local TTS engine the render alone can
+// outlast the remaining runway — Liquidsoap then falls through to `auto.m3u`
+// and the pick airs one track late.
+//
+// Returns:
+//   null  — unbounded, today's behaviour. The clock is unknowable (boot,
+//           recover, untracked auto play), so there is no seam to miss and
+//           no basis for a budget.
+//   0     — skip the pre-render entirely; commit the music now. `airIntro`
+//           renders from `introScript` at air time, the path that already
+//           covers a reaped WAV or a voice switch flipped back on.
+//   >0    — seconds the render may take before the drain moves on without it.
+//
+// Skipping is cheap precisely because the render is recoverable at air time;
+// a missed seam is not.
+export function introRenderBudgetSec(remaining: number | null): number | null {
+  if (remaining == null) return null;
+  const budget = remaining - DRAIN_COMMIT_RESERVE_SEC;
+  return budget >= MIN_PRERENDER_BUDGET_SEC ? budget : 0;
+}
+
 type DrainAction = 'send-pair' | 'send-intrinsic' | 'hold';
 
 // Decide what the drain loop does with the FIRST unsent item:

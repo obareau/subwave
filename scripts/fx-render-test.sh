@@ -19,6 +19,10 @@
 #       Phase 1 — render the a→b transition with the production envelope
 #       logic (mirrored from radio.liq) and print an RMS-over-time table.
 #       Default renders every variant.
+#   scripts/fx-render-test.sh loopcheck
+#       Regression check — render deterministic pink noise through the plain
+#       crossfade and Loop paths, then fail if Loop's capture-pass level differs
+#       from the plain transition by more than 1 dB.
 #
 # Output lands in .fx-render/ next to this script (gitignored).
 
@@ -123,6 +127,12 @@ rms_table() { # rms_table <wav> — RMS per 0.5 s window so envelope shape is vi
     | awk '{printf "%5.1fs  %s dB\n", NR*0.5, $0}'
 }
 
+segment_rms() { # segment_rms <wav> <start-seconds> <duration-seconds>
+  ffmpeg -hide_banner -nostats -ss "$2" -t "$3" -i "$1" \
+    -af astats=metadata=0:reset=0 -f null - 2>&1 \
+    | awk '/Overall/{overall=1} overall && /RMS level dB/{print $NF; exit}'
+}
+
 render() {
   local a_in="$1" b_in="$2" mode="${3:-all}"
   # Normalise inputs to WAV so the container needs no codecs beyond PCM.
@@ -158,8 +168,10 @@ def t(a, b) =
   a_src =
     if washout_on then
       fade.out(duration=d, type="exp", a.source)
-    elsif sweep_on or chop_on or loop_on then
+    elsif sweep_on or chop_on then
       fade.out(duration=d, type="log", a.source)
+    elsif loop_on then
+      a.source
     else
       fade.out(duration=d, a.source)
     end
@@ -414,9 +426,11 @@ def t(a, b) =
     else a_src end
   # LOOP — keep in lockstep with radio.liq's loop block: comb here is a
   # ONE-SHOT feed-forward echo (measured), so the loop is a cascade of
-  # doubling delays (taps at every bar multiple, flat at −6 dB → ×2 makeup),
-  # hard dry gate after the capture pass, ride-out darkening lowpass, master
-  # release. Fixed bar=2.0 here (no BPM stamp).
+  # doubling delays (taps at every bar multiple), a hard dry gate after the
+  # capture pass, ride-out darkening lowpass, and a complementary output ride
+  # that leaves headroom for the incoming fade. feedback=0.0 makes each delayed
+  # copy unity; the non-overlapping bar slots need no global makeup.
+  # Fixed bar=2.0 here (no BPM stamp).
   a_src =
     if loop_on then
       bar = 2.0
@@ -447,24 +461,19 @@ def t(a, b) =
         x = if e >= t_on then 1.0 elsif e <= bar then 0.0 else (e - bar) / (0.15 * d) end
         3.0 * x * x - 2.0 * x * x * x
       end
-      def loop_master() =
+      def loop_gain() =
         e = source.elapsed(loop_src)
         e = if e < 0. then 0. else e end
-        if e < 0.80 * d then 1.0
-        elsif e < 0.92 * d then
-          x = (e - 0.80 * d) / (0.12 * d)
-          1.0 - (3.0 * x * x - 2.0 * x * x * x)
-        else 0.0 end
+        if e >= d then 0.0 else 1.0 - e / d end
       end
       gated  = amplify(loop_dry, a_src)
       looped = comb(delay=bar, feedback=0.0, gated)
       looped = comb(delay=2.0 * bar, feedback=0.0, looped)
       looped = if 4.0 * bar < d then comb(delay=4.0 * bar, feedback=0.0, looped) else looped end
       looped = if 8.0 * bar < d then comb(delay=8.0 * bar, feedback=0.0, looped) else looped end
-      looped = amplify(2.0, looped)
       looped = filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet,
                  filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet, looped))
-      amplify(loop_master, looped)
+      amplify(loop_gain, looped)
     else a_src end
   b_src = fade.in(duration=d, b.source)
   b_src =
@@ -534,6 +543,7 @@ LIQ
   local modes
   case "$mode" in
     all) modes="dry sweep washout both blend dissolve chop loop" ;;
+    loopcheck) modes="dry loop" ;;
     *)   modes="$mode" ;;
   esac
   for m in $modes; do
@@ -543,6 +553,28 @@ LIQ
     rms_table "$WORK/render-$m.wav" 2>/dev/null | sed -n '90,140p' || true
     echo "wav: $WORK/render-$m.wav"
   done
+
+  if [ "$mode" = loopcheck ]; then
+    # ra.wav is 50s and cross() buffers its final 12s, so the transition starts
+    # at 38s. The first 2s are Loop's capture pass (bar=2.0 in this harness).
+    local dry_rms loop_rms delta
+    dry_rms=$(segment_rms "$WORK/render-dry.wav" 38 2)
+    loop_rms=$(segment_rms "$WORK/render-loop.wav" 38 2)
+    [ -n "$dry_rms" ] && [ -n "$loop_rms" ] || { echo "LOOPCHECK FAIL — could not measure rendered RMS"; return 1; }
+    delta=$(awk -v loop="$loop_rms" -v dry="$dry_rms" 'BEGIN { printf "%.2f", loop - dry }')
+    printf 'Loop capture-pass RMS: dry=%s dB loop=%s dB delta=%s dB\n' "$dry_rms" "$loop_rms" "$delta"
+    awk -v delta="$delta" 'BEGIN { if (delta < 0) delta = -delta; exit !(delta <= 1.0) }' \
+      || { echo "LOOPCHECK FAIL — capture-pass level differs from plain crossfade by more than 1 dB"; return 1; }
+    echo "LOOPCHECK PASS — capture-pass level is within 1 dB of plain crossfade"
+  fi
+}
+
+loopcheck() {
+  ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:amplitude=0.1:duration=100:seed=1407" \
+    -ar 44100 -ac 2 "$WORK/loopcheck-a.wav"
+  ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:amplitude=0.1:duration=45:seed=1408" \
+    -ar 44100 -ac 2 "$WORK/loopcheck-b.wav"
+  render "$WORK/loopcheck-a.wav" "$WORK/loopcheck-b.wav" loopcheck
 }
 
 xdur() {
@@ -579,6 +611,7 @@ LIQ
 case "${1:-}" in
   probe)  probe ;;
   render) shift; render "$@" ;;
+  loopcheck) loopcheck ;;
   xdur)   xdur ;;
-  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | xdur"; exit 2 ;;
+  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | xdur"; exit 2 ;;
 esac

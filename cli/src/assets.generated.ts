@@ -1022,6 +1022,13 @@ SITE_URL=
 # NAVIDROME_URL=http://host.docker.internal:4533
 # NAVIDROME_USER=
 # NAVIDROME_PASS=
+# Optional: play tracks straight off disk instead of streaming them over HTTP.
+# Only worth setting when the controller container mounts the SAME library
+# Navidrome scans. Note Navidrome's Subsonic \`path\` is built from tags, not read
+# off disk, so it often disagrees with your real folder names (e.g. the API says
+# "Chunga's Revenge" where the folder is "Chunga's Revenge (1970)"). Every
+# mismatch falls back to streaming, so it is safe to leave on — it just does
+# nothing for the tracks whose paths don't line up.
 # MUSIC_LIBRARY_PATH=
 # TTS_SPEED=0.85
 # AUTO_QUEUE_REFRESH_MINUTES=60

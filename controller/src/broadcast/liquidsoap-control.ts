@@ -6,6 +6,10 @@
 import net from 'node:net';
 import { cachedAsync } from '../util/ttl-cache.js';
 import { parseDjQueueStatus, type DjQueueStatus } from './skip-policy.js';
+import {
+  parseResolveProbeOutcome,
+  type ResolveProbeOutcome,
+} from './resolve-probe.js';
 
 // Liquidsoap shares a container with icecast2 under the `broadcast` service
 // (see docker-compose.yml). The legacy `liquidsoap` hostname is still honoured
@@ -128,6 +132,19 @@ export async function skipTrack() {
 export async function djQueueStatus(): Promise<DjQueueStatus> {
   try {
     return parseDjQueueStatus(await sendCommand('dj_queue_status', 2000));
+  } catch {
+    return 'unknown';
+  }
+}
+
+// Explicit completion state recorded by proto_subhttp for one controller
+// handoff. This does not inspect dj_queue.queue(): that list includes idle /
+// resolving requests and temporarily omits healthy boundary-prefetch work.
+export async function subhttpProbeOutcome(probeId: string): Promise<ResolveProbeOutcome> {
+  try {
+    return parseResolveProbeOutcome(
+      await sendCommand(`subhttp_probe_status ${probeId}`, 2000),
+    );
   } catch {
     return 'unknown';
   }
@@ -370,4 +387,3 @@ export async function removeFromDjQueue(rid: string): Promise<boolean> {
   _djQueueCache = null; // the queue just changed under the cache
   return res.trim() === 'OK';
 }
-

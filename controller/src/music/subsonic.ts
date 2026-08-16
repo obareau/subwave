@@ -2,6 +2,7 @@
 // Uses the proper salt+token auth (not plaintext password).
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as subLog from './subsonic-log.js';
@@ -835,8 +836,12 @@ export function getCoverArtUrl(id, size = 512) {
 // Library is AAC 256 kbps m4a from gamdl; without `raw`, Navidrome would
 // transcode to ~192 kbps MP3 on the way out, adding a lossy generation before
 // Liquidsoap's own MP3 re-encode. Liquidsoap decodes m4a/AAC via ffmpeg.
-export function getStreamUrl(songId) {
-  return `subhttp:${buildUrl('stream', { id: songId, format: 'raw' })}`;
+export function getStreamUrl(songId, resolveProbeId: string | null = null) {
+  const url = buildUrl('stream', { id: songId, format: 'raw' });
+  // The fragment reaches proto_subhttp but curl never sends it to Navidrome.
+  // It identifies this exact handoff, avoiding stale song-id outcomes.
+  const probe = resolveProbeId ? `#subwave_probe=${encodeURIComponent(resolveProbeId)}` : '';
+  return `subhttp:${url}${probe}`;
 }
 
 // Plain HTTP stream URL (no `subhttp:` prefix) with auth baked into the query
@@ -849,15 +854,25 @@ export function getRawStreamUrl(songId: string): string {
 // Returns the local file path if Navidrome and the controller share the music
 // volume — much more efficient than streaming over HTTP for the radio.
 // Set MUSIC_LIBRARY_PATH to mount your library inside the controller container.
+//
+// The path is only ever a GUESS. Navidrome's Subsonic `path` is synthetic —
+// built from tags, not read off disk — so it routinely disagrees with the real
+// layout (the API says `Frank Zappa/Chunga's Revenge/…` while the folder is
+// `Frank Zappa/Chunga's Revenge (1970)/…`). A guess handed to Liquidsoap
+// resolves to nothing and takes the queued pick down with it (#1405), so the
+// guess is CHECKED here and a miss falls back to the stream URL: local-file
+// mode then speeds up the tracks whose paths do line up instead of breaking
+// every track whose paths don't.
 export function getLocalPath(song) {
   const libRoot = process.env.MUSIC_LIBRARY_PATH;
   if (!libRoot || !song.path) return null;
-  return `${libRoot}/${song.path}`;
+  const local = `${libRoot}/${song.path}`;
+  return fs.existsSync(local) ? local : null;
 }
 
 // Best URI for Liquidsoap — local file if available, otherwise stream URL
-export function getPlayableUri(song) {
-  return getLocalPath(song) || getStreamUrl(song.id);
+export function getPlayableUri(song, resolveProbeId: string | null = null) {
+  return getLocalPath(song) || getStreamUrl(song.id, resolveProbeId);
 }
 
 // Liquidsoap `annotate:` URI — embeds metadata up front so on_track_change
@@ -868,7 +883,7 @@ export function getPlayableUri(song) {
 export function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null } = {}) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
@@ -953,7 +968,7 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   if (opts.cueInSec != null && opts.cueInSec > 0) {
     fields.push(`liq_cue_in="${escAnnotate(opts.cueInSec)}"`);
   }
-  return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
+  return `annotate:${fields.join(',')}:${getPlayableUri(song, opts.resolveProbeId ?? null)}`;
 }
 
 // Annotate URI for a pre-rendered transition CLIP (stem-blend transitions).

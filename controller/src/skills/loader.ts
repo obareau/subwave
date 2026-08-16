@@ -20,6 +20,11 @@
 //   export const ready = (services) => boolean   // OPTIONAL: gate availability
 //   export const inputs = { query: '…' }   // OPTIONAL: agent-steerable string
 //     params ({ name: description }); validated values arrive as `input`
+//   export const requiresData = false   // OPTIONAL: opt out of the grounding
+//     rule — this skill writes a line even when its tool returns nothing
+//     usable (skills/abstain-policy.ts). Default: a skill with a data tool
+//     stands down rather than inventing. Operator's `requiresData:`
+//     frontmatter line, when present, outranks this.
 //   export const configFields = { feed: { type: 'url', label: '…' } } // OPTIONAL:
 //     operator-editable knobs (skills/config-fields.ts). Values live in this
 //     skill's OWN frontmatter and arrive as `config`, so a copied/renamed skill
@@ -44,6 +49,7 @@ import { STATE_DIR } from '../config.js';
 import { queue, registerSkillKinds } from '../broadcast/queue.js';
 import { buildStationServices } from '../llm/internal/tools/station-services.js';
 import { parseConfigFields, type SkillConfigField } from './config-fields.js';
+import { declaredBool } from './abstain-policy.js';
 import {
   SKILL_SLUG_RE,
   SKILL_TAG_RE,
@@ -259,7 +265,7 @@ function sanitizeToolInputs(raw: any): Record<string, string> | undefined {
 // Dynamically import a skill's optional tool.mjs. Returns the data function plus
 // its optional `description` / `ready` / `inputs` / `configFields` exports, or
 // null when there's no tool.
-async function loadToolModule(dir: string): Promise<{ fn: any; description?: string; ready?: any; inputs?: Record<string, string>; configFields?: SkillConfigField[] } | null> {
+async function loadToolModule(dir: string): Promise<{ fn: any; description?: string; ready?: any; inputs?: Record<string, string>; configFields?: SkillConfigField[]; requiresData?: boolean } | null> {
   const file = join(dir, 'tool.mjs');
   try {
     await stat(file);
@@ -279,6 +285,12 @@ async function loadToolModule(dir: string): Promise<{ fn: any; description?: str
     ready: typeof mod.ready === 'function' ? mod.ready : undefined,
     inputs: sanitizeToolInputs(mod.inputs),
     configFields: parseConfigFields(mod.configFields),
+    // OPTIONAL: `export const requiresData = false` opts a skill out of the
+    // grounding rule — "no external item" is my cue to write one myself, not to
+    // stay quiet. Left undefined when undeclared, so skills/abstain-policy.ts
+    // falls through to its default rather than reading an absent export as a
+    // deliberate `false`.
+    requiresData: declaredBool(mod.requiresData),
   };
 }
 
@@ -376,6 +388,11 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // Operator knobs travel with the tool, not the kind — a duplicated skill
     // copies tool.mjs and keeps its settings form (#1300).
     cap.configFields = toolMod.configFields || [];
+    // Whether a forced run may stand down when this tool returns nothing usable
+    // (issue #1412). Tri-state on purpose: undefined means the skill didn't say,
+    // and abstain-policy.ts decides. `cap.config` already carries the operator's
+    // own `requiresData:` frontmatter line, which outranks this.
+    cap.requiresData = toolMod.requiresData;
   }
 
   return cap;

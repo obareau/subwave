@@ -26,6 +26,7 @@ import {
 import { fieldAria } from '@/lib/form';
 import {
   Field,
+  FieldContent,
   FieldLabel,
   FieldTitle,
   FieldDescription,
@@ -229,12 +230,18 @@ export function SwitchField<T extends FieldValues>({
 }: BaseProps<T> & SwitchFieldRest) {
   const { field, fieldState, aria } = useBoundField(control, name, !!description);
   return (
+    // Switch FIRST, then a FieldContent column holding label + description.
+    // The horizontal variant gives a direct-child label `flex-auto`, so with
+    // label/switch/description all as siblings the switch landed wherever that
+    // label's text happened to end — a different x on every row, description
+    // trailing on the same line (issue #1403). Leading the row with the control
+    // pins every switch to one left-aligned column, which is also the layout
+    // these rows had before the react-hook-form migration.
     <Field
       orientation="horizontal"
       data-invalid={aria.invalid || undefined}
       className={className}
     >
-      <FieldLabel {...aria.labelProps}>{label}</FieldLabel>
       <Switch
         {...rest}
         {...aria.controlProps}
@@ -244,10 +251,13 @@ export function SwitchField<T extends FieldValues>({
         disabled={disabled}
         ref={field.ref}
       />
-      {description && (
-        <FieldDescription {...aria.descriptionProps}>{description}</FieldDescription>
-      )}
-      <FieldError {...aria.errorProps} errors={fieldState.error ? [fieldState.error] : undefined} />
+      <FieldContent>
+        <FieldLabel {...aria.labelProps}>{label}</FieldLabel>
+        {description && (
+          <FieldDescription {...aria.descriptionProps}>{description}</FieldDescription>
+        )}
+        <FieldError {...aria.errorProps} errors={fieldState.error ? [fieldState.error] : undefined} />
+      </FieldContent>
     </Field>
   );
 }
@@ -261,6 +271,21 @@ type ToggleGroupFieldRest = Omit<
   ComponentPropsWithoutRef<typeof ToggleGroup>,
   'type' | 'value' | 'defaultValue' | 'onValueChange' | 'disabled' | 'children' | 'className'
 >;
+
+// ToggleGroup's own root is `justify-center`, which centres the row inside a
+// full-width Field child, and its default item variant is transparent-no-border
+// — so a bound group read as centred plain text next to the bordered ChipRow
+// pills it sits beside (issue #1403). Left-align it, let it wrap, and default
+// the items to `outline` so they look like the buttons they are. `variant` is
+// still forwardable per call site; className is owned here.
+const TOGGLE_GROUP_ROW = 'w-fit flex-wrap justify-start';
+
+// …and the item's own on-state has to READ as on. `outline`'s
+// data-[state=on]:bg-accent is a faint tint in this palette, while the
+// ChipRow chips these groups sit beside invert to bg-ink/text-bg. Match them
+// (square, same border, same 12px) so one filter row can't look selected and
+// the next look empty at the same value.
+const TOGGLE_GROUP_ITEM = 'min-h-9 rounded-none border-ink px-2 text-[12px] hover:bg-[var(--ink-soft)] data-[state=on]:bg-ink data-[state=on]:text-bg';
 
 export function ToggleGroupField<T extends FieldValues>({
   control,
@@ -291,28 +316,32 @@ export function ToggleGroupField<T extends FieldValues>({
       <FieldTitle {...aria.labelledByProps}>{label}</FieldTitle>
       {multiple ? (
         <ToggleGroup
+          variant="outline"
           {...rest}
           {...aria.groupProps}
+          className={TOGGLE_GROUP_ROW}
           type="multiple"
           value={Array.isArray(field.value) ? field.value.map(String) : []}
           onValueChange={(v: string[]) => field.onChange(v)}
           disabled={disabled}
         >
           {options.map(o => (
-            <ToggleGroupItem key={o.value} value={o.value}>{o.label}</ToggleGroupItem>
+            <ToggleGroupItem key={o.value} value={o.value} className={TOGGLE_GROUP_ITEM}>{o.label}</ToggleGroupItem>
           ))}
         </ToggleGroup>
       ) : (
         <ToggleGroup
+          variant="outline"
           {...rest}
           {...aria.groupProps}
+          className={TOGGLE_GROUP_ROW}
           type="single"
           value={field.value == null ? '' : String(field.value)}
           onValueChange={(v: string) => { if (v) field.onChange(v); }}
           disabled={disabled}
         >
           {options.map(o => (
-            <ToggleGroupItem key={o.value} value={o.value}>{o.label}</ToggleGroupItem>
+            <ToggleGroupItem key={o.value} value={o.value} className={TOGGLE_GROUP_ITEM}>{o.label}</ToggleGroupItem>
           ))}
         </ToggleGroup>
       )}
