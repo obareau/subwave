@@ -14,6 +14,7 @@ import * as settings from '../settings.js';
 import { zonedParts } from '../time.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { autoTimeCheckAllowed } from './clock-policy.js';
+import { banterSlot } from './banter-policy.js';
 
 export function shouldFire(kind, now = new Date()) {
   // Station-wide voice switch (settings.tts.enabled). Sits above the frequency
@@ -60,15 +61,22 @@ export function shouldFire(kind, now = new Date()) {
   }
 
   if (kind === 'banter') {
-    // Guest-show banter breaks. The cron ticks at :20/:50 — minutes the ident
-    // (:15/:30/:45) and hourly (:00) crons never own, so an exchange can't
-    // land on the same minute as another wall-clock talker by construction.
+    // Guest-show banter breaks. Slots OPEN at :20/:50 — minutes the ident
+    // (:15/:30/:45) and hourly (:00) crons never own, so an exchange can't be
+    // scheduled against another wall-clock talker by construction — and each
+    // stays open for a ten-minute window so an off-clock talk break postpones
+    // the exchange instead of cancelling the hour (#1419). The window shape
+    // lives in banter-policy.ts; this stays the frequency ladder only, and asks
+    // it which slot the minute belongs to so a retry minute (:24) reads as the
+    // same slot as its opening one (:20) rather than as no slot at all.
+    const slot = banterSlot(m);
+    if (slot == null) return false;
     // Banter is chatty by nature: a quiet persona never auto-fires it (the
     // operator's manual /dj/segment trigger still works), moderate gets at
     // most one an hour; chatty and aggressive get both slots.
     if (f === 'quiet')    return false;
-    if (f === 'moderate') return m === 20;
-    return m === 5 || m === 20 || m === 35 || m === 50;
+    if (f === 'moderate') return slot === 20;
+    return true;
   }
 
   return true;
