@@ -90,6 +90,21 @@ export async function getPath(filename: string): Promise<string | null> {
   return (await statOrNull(filePath)) ? filePath : null;
 }
 
+// Wrap a jingle's audio path in an `annotate:` URI for a ONE-OFF airing pushed
+// into the priority jingle_now_queue (queue.playJingle) rather than drawn by the
+// automatic rotate.
+//
+// `subwave_kind="jingle"` names the contract in mixer logs and keeps this source
+// distinct from beds. The priority queue owns its marker hook directly and sits
+// outside music_meta, so retained ID3 tags never reach now-playing or ICY.
+//
+// Mirrors beds.bedUri, minus the cue_out/cross overrides: a bed is deliberately
+// cut to the length of the link it carries, whereas an announcement plays in
+// full, at full level, exactly as it was recorded.
+export function jingleUri(path: string): string {
+  return `annotate:subwave_kind="jingle":${path}`;
+}
+
 export async function create(text: string, { builtin = false }: { builtin?: boolean } = {}) {
   if (!text || !text.trim()) throw new Error('Empty jingle text');
   await mkdir(DIR, { recursive: true });

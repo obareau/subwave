@@ -14,7 +14,7 @@ whole HTTP API (and a live playground), see [`api.md`](./api.md) or the admin
 
 ## The short version
 
-There are two ways to connect — both expose the **same seventeen tools** from
+There are two ways to connect — both expose the **same nineteen tools** from
 the **same source** (`controller/src/mcp/`):
 
 ```
@@ -29,7 +29,7 @@ Local alternative — stdio (runs from a repo clone via tsx):
 The tools own no state and almost no logic of their own — each is a typed
 wrapper over one controller HTTP endpoint (the one exception:
 `subwave_request_song` polls the request receipt so the agent gets an outcome,
-not a ticket). The model gets seventeen tools; the controller does the real work
+not a ticket). The model gets nineteen tools; the controller does the real work
 (LLM matching, track selection, TTS, queueing).
 
 **HTTP endpoint (recommended).** The controller serves MCP directly at
@@ -82,6 +82,8 @@ intent-shaped tools.
 | `subwave_run_skill` | `POST /dj/skill` | admin | speaks now |
 | `subwave_list_sfx` | `GET /sfx` | admin | no |
 | `subwave_play_sfx` | `POST /sfx/:name/play` | admin | plays a stinger now |
+| `subwave_list_jingles` | `GET /jingles` | admin | no |
+| `subwave_play_jingle` | `POST /jingles/:filename/play` | admin | airs a jingle at the next safe boundary |
 | `subwave_refresh_playlist` | `POST /dj/refresh-playlist` | admin | no (fallback playlist only) |
 
 ### Read tools — `subwave_health`, `subwave_now_playing`, `subwave_station_state`, `subwave_schedule`, `subwave_session`
@@ -171,6 +173,30 @@ automation-facing trigger for external alerting agents. To pair a stinger with
 spoken words, prefer `subwave_dj_announce`'s `sfx` parameter, which aligns the
 effect with the voice's first words.
 
+### `subwave_list_jingles` and `subwave_play_jingle`
+
+`list` returns the jingle library — idents, sweepers and event announcements.
+`play` queues one to air at the next track boundary, at **full level, with the
+programme yielding to it**.
+
+This is the tool for anything longer than a stinger. `subwave_play_sfx` mixes
+its clip *under* the music with only a light duck, which is why effects are
+capped at 10 seconds: a longer one keeps droning over the programme after the
+moment has passed. A jingle is its own item in the music chain instead, and has
+no length cap — a sponsor spot or a two-minute event announcement is fine.
+
+It is queued, not instant. There is no skip in this system: Liquidsoap owns
+pacing and track-end is the only natural transition, so the clip airs when the
+current song finishes rather than cutting it off. Like `subwave_play_sfx`, it is
+a manual trigger and ignores the station's jingle-rotation dial — turning the
+rotate off silences the automatic draw, never an explicit call.
+
+**Do not retry a call that succeeded.** The queue behind this has no cancel, so
+a second push of the same clip airs the announcement twice back to back. Calling
+again while the first is still waiting for its boundary is refused (`409`,
+`"… is already queued and hasn't aired yet"`) — treat that as "your press
+landed", not as a failure to retry. Two *different* announcements queue normally.
+
 ---
 
 ## Authentication
@@ -180,7 +206,7 @@ The controller splits its surface in two (see
 
 - **Public** — `/health`, `/now-playing`, `/state`, `/schedule`, `/session`,
   `/request` (rate-limited), `/request/:id`. No auth.
-- **Admin, Basic-auth gated** — `/dj/*` and `/sfx`. Gated by the controller's
+- **Admin, Basic-auth gated** — `/dj/*`, `/sfx` and `/jingles`. Gated by the controller's
   `ADMIN_USER` / `ADMIN_PASS`.
 
 `subwave-mcp` reads admin credentials from its own environment

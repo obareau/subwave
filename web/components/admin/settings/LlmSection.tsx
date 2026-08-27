@@ -3,6 +3,7 @@
 import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { Input } from '../../ui/input';
@@ -14,6 +15,7 @@ import { Card, Btn, Pill, Seg } from '../ui';
 import { ProviderSelector } from '../llm/ProviderSelector';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
+import { Advanced } from './section-chrome';
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS,
   type SectionProps,
@@ -130,7 +132,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
-      const r = await adminFetch('/settings/secrets', {
+      const r = await adminResponse(adminFetch, '/settings/secrets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ [envVar]: value.trim() }),
@@ -159,7 +161,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     setTesting(true);
     setResult(null);
     try {
-      const r = await adminFetch('/settings/secrets/test', {
+      const r = await adminResponse(adminFetch, '/settings/secrets/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: envVar, value: value.trim() }),
@@ -191,7 +193,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     setTesting(true);
     setResult(null);
     try {
-      const r = await adminFetch('/settings/llm/probe-compat', {
+      const r = await adminResponse(adminFetch, '/settings/llm/probe-compat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey: apiKey.trim(), baseUrl: baseUrl.trim(), model: model.trim() }),
@@ -220,6 +222,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
         noRepeatWindow: Math.max(0, parseInt(form.llm.noRepeatWindow, 10) || 0),
+        artistVarietyWindow: Math.max(0, parseInt(form.llm.artistVarietyWindow, 10) || 0),
         requestWebResolve: form.llm.requestWebResolve,
         agentTimeoutMs: form.llm.agentTimeoutMs,
         pauseWhenEmpty: form.llm.pauseWhenEmpty,
@@ -598,6 +601,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         </div>
       </Card>
 
+      <Advanced note="tuning, the fallback chain, the picker and the daily budget">
       <Card title="Fallback" sub="backup when the primary is offline">
         <div className="grid gap-[18px]">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
@@ -1006,7 +1010,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             <Input
               type="number"
               min={5}
-              max={180}
+              max={300}
               step={5}
               value={Math.round(form.llm.agentTimeoutMs / 1000)}
               onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -1019,7 +1023,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
               How long an agent pick or listener request may run before falling
               back to the stateless picker. Slow reasoning models often need
               20&ndash;40s per pick; lower it for snappier fallbacks on a fast
-              model. 5&ndash;180s.
+              model. 5&ndash;300s.
             </div>
           </div>
         )}
@@ -1095,6 +1099,31 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             window. Auto-scales down on a small library so it never blocks everything;
             on a big library, raise it — it is the station&apos;s long memory.
             {' '}<strong>0 = off</strong>. Listener requests stay exempt. 0&ndash;1000.
+          </div>
+        </div>
+
+        <div className="field mt-4">
+          <Label>Artist spacing (slots)</Label>
+          <Input
+            type="number"
+            min={0}
+            max={25}
+            step={1}
+            value={form.llm.artistVarietyWindow}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, llm: { ...f.llm, artistVarietyWindow: e.target.value } }))
+            }
+            placeholder="5"
+            className="max-w-[200px]"
+          />
+          <div className="field-hint">
+            How many slots the DJ waits before returning to an artist. The pick is
+            re-taken from the run&apos;s other candidates when it lands inside the
+            window &mdash; and quietly stands if nothing fresher turned up, so this
+            never costs you a track. Raise it on a deep library where one artist
+            keeps circling back; lower it if the DJ is reaching too far from the
+            show&apos;s sound. {' '}<strong>0 = off</strong>, though an artist can
+            never follow itself whatever this says. 0&ndash;25.
           </div>
         </div>
       </Card>
@@ -1192,6 +1221,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           </div>
         )}
       </Card>
+      </Advanced>
 
       <SaveBar
         note={`Active model: ${data.llm?.active}. Applies to the next LLM call, no restart needed.`}
@@ -1200,6 +1230,14 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         saveLabel="Save LLM provider"
         errors={fieldErrors}
         ownedKeys={['llm']}
+        // All four key boxes are component-local — the panel diffs FormState
+        // and cannot see them, so a pasted key alone would leave the section
+        // "clean" and unmount the very button that saves it. The managed pair
+        // has a Test-and-save path too; the compat pair only has this button.
+        dirty={!!(
+          primaryKeyInput.trim() || fallbackKeyInput.trim()
+          || compatKeyInput.trim() || compatFallbackKeyInput.trim()
+        )}
       />
 
       {/* The SAFE outcome (keep the embedding pin) is the default; only the explicit

@@ -9,6 +9,8 @@
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError, adminJson, useAdminQuery } from '../../lib/admin-query';
+import { errorMessage } from '../../lib/notify';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
@@ -21,6 +23,7 @@ import {
   groupConnectionsByDevice,
   type HourBucket,
 } from '../../lib/audienceStats';
+import { statsKeys } from './stats-queries';
 
 interface LatencyStats {
   avg?: number;
@@ -510,146 +513,92 @@ const RANGE_OPTIONS = [
   { id: '10080', label: '7d' },
 ];
 
+class StatsShapeError extends Error {}
+
 export default function StatsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [data, setData] = useState<StatsResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
-  const [listeners, setListeners] = useState<ListenersResponse | null>(null);
-  const [audience, setAudience] = useState<AudienceResponse | null>(null);
-  const [connections, setConnections] = useState<ConnectionsResponse | null>(null);
-  const [systemRes, setSystemRes] = useState<SystemResponse | null>(null);
   const [range, setRange] = useState('1440'); // minutes — 24h default
+  const enabled = hydrated && !needsAuth && !paused;
 
   // /stats — usage rollups, 5s.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    const tick = async () => {
-      if (paused) return;
-      try {
-        const r = await adminFetch('/stats');
-        if (r.status === 401) {
-          if (!cancelled) setData(null);
-          return;
-        }
-        const j = (await r.json()) as StatsResponse;
-        if (cancelled) return;
-        if (!j || typeof j !== 'object' || !j.llm) {
-          setErr(j?.error || 'unexpected response shape from /stats');
-          setData(null);
-        } else {
-          setData(j);
-          setErr(null);
-        }
-      } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+  const statsQuery = useAdminQuery<StatsResponse>({
+    key: statsKeys.rollups(), adminFetch, enabled, staleTime: 0,
+    refetchInterval: () => 5_000,
+    request: async (fetcher, signal) => {
+      const body = await adminJson<StatsResponse>(fetcher, '/stats', undefined, signal);
+      if (!body || typeof body !== 'object' || !body.llm) {
+        throw new StatsShapeError(body?.error || 'unexpected response shape from /stats');
       }
-    };
-    tick();
-    const id = setInterval(tick, 5000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [paused, needsAuth, hydrated, adminFetch]);
+      return body;
+    },
+  });
 
   // /listeners — durable time-series for the Audience chart, 30s (it reads the
   // JSONL history file and moves slowly). Soft-fails: a miss leaves the last
   // reading in place rather than erroring the page.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    const tick = async () => {
-      if (paused) return;
-      try {
-        const r = await adminFetch(`/listeners?sinceMinutes=${range}`);
-        if (r.status === 401) {
-          if (!cancelled) setListeners(null);
-          return;
-        }
-        const j = (await r.json()) as ListenersResponse;
-        if (!cancelled && r.ok) setListeners(j);
-      } catch {
-        /* leave last reading in place */
-      }
-    };
-    tick();
-    const id = setInterval(tick, 30000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [paused, needsAuth, hydrated, adminFetch, range]);
+  const listenersQuery = useAdminQuery<ListenersResponse>({
+    key: statsKeys.listeners(range), adminFetch, enabled, staleTime: 0,
+    refetchInterval: () => 30_000,
+    placeholderData: previous => previous,
+    request: (fetcher, signal) => adminJson(fetcher, `/listeners?sinceMinutes=${range}`, undefined, signal),
+  });
 
   // /audience — durable referral/geo rollup, 30s, soft-fail (same cadence and
   // failure handling as /listeners).
+  const audienceQuery = useAdminQuery<AudienceResponse>({
+    key: statsKeys.audience(range), adminFetch, enabled, staleTime: 0,
+    refetchInterval: () => 30_000,
+    placeholderData: previous => previous,
+    request: (fetcher, signal) => adminJson(fetcher, `/audience?sinceMinutes=${range}`, undefined, signal),
+  });
+  // Range is part of both cache keys. Keep a range-independent last success so
+  // a first-request failure for a newly selected range cannot blank the charts
+  // after TanStack releases the previous range's placeholder.
+  const [lastListeners, setLastListeners] = useState<ListenersResponse | null>(null);
+  const [lastAudience, setLastAudience] = useState<AudienceResponse | null>(null);
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    const tick = async () => {
-      if (paused) return;
-      try {
-        const r = await adminFetch(`/audience?sinceMinutes=${range}`);
-        if (r.status === 401) {
-          if (!cancelled) setAudience(null);
-          return;
-        }
-        const j = (await r.json()) as AudienceResponse;
-        if (!cancelled && r.ok) setAudience(j);
-      } catch {
-        /* leave last reading in place */
-      }
-    };
-    tick();
-    const id = setInterval(tick, 30000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [paused, needsAuth, hydrated, adminFetch, range]);
+    if (listenersQuery.data) setLastListeners(listenersQuery.data);
+  }, [listenersQuery.data]);
+  useEffect(() => {
+    if (audienceQuery.data) setLastAudience(audienceQuery.data);
+  }, [audienceQuery.data]);
 
   // /listeners/connections — 30s, range-independent ("connected right now").
   // A 502 is stored as an error rather than dropped, so the card can say "live
   // detail unavailable" instead of silently blanking.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    const tick = async () => {
-      if (paused) return;
+  const connectionsQuery = useAdminQuery<ConnectionsResponse>({
+    key: statsKeys.connections(), adminFetch, enabled, staleTime: 0,
+    refetchInterval: () => 30_000,
+    request: async (fetcher, signal) => {
       try {
-        const r = await adminFetch('/listeners/connections');
-        if (r.status === 401) {
-          if (!cancelled) setConnections(null);
-          return;
+        return await adminJson<ConnectionsResponse>(
+          fetcher, '/listeners/connections', undefined, signal,
+        );
+      } catch (error) {
+        if (error instanceof AdminResponseError) {
+          const detail = typeof error.body.error === 'string' ? error.body.error : null;
+          return { error: detail || 'live connection detail unavailable' };
         }
-        const j = (await r.json()) as ConnectionsResponse;
-        if (!cancelled) {
-          setConnections(r.ok ? j : { error: j?.error || 'live connection detail unavailable' });
-        }
-      } catch {
-        /* leave last reading in place */
+        throw error;
       }
-    };
-    tick();
-    const id = setInterval(tick, 30000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [paused, needsAuth, hydrated, adminFetch]);
+    },
+  });
 
   // /system — per-container CPU/memory, 30s (it samples the Docker stats stream
   // for ~1s per container). Soft-fails; range-independent.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    const tick = async () => {
-      if (paused) return;
-      try {
-        const r = await adminFetch('/system');
-        if (r.status === 401) {
-          if (!cancelled) setSystemRes(null);
-          return;
-        }
-        const j = (await r.json()) as SystemResponse;
-        if (!cancelled && r.ok) setSystemRes(j);
-      } catch {
-        /* leave last reading in place */
-      }
-    };
-    tick();
-    const id = setInterval(tick, 30000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [paused, needsAuth, hydrated, adminFetch]);
+  const systemQuery = useAdminQuery<SystemResponse>({
+    key: statsKeys.system(), adminFetch, enabled, staleTime: 0,
+    refetchInterval: () => 30_000,
+    request: (fetcher, signal) => adminJson(fetcher, '/system', undefined, signal),
+  });
+
+  const data = statsQuery.error instanceof StatsShapeError ? null : (statsQuery.data ?? null);
+  const err = statsQuery.error ? errorMessage(statsQuery.error) : null;
+  const listeners = listenersQuery.data ?? lastListeners;
+  const audience = audienceQuery.data ?? lastAudience;
+  const connections = connectionsQuery.data ?? null;
+  const systemRes = systemQuery.data ?? null;
 
   const llm = data?.llm;
   const tts = data?.tts;

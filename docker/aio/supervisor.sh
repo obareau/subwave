@@ -352,23 +352,45 @@ read_state_num() {
 	esac
 }
 
-render_icecast() {
-	# Non-numeric would render invalid XML and fail icecast at boot — fall
-	# back to 100 with a warning instead.
-	ICECAST_MAX_CLIENTS="${ICECAST_MAX_CLIENTS:-100}"
-	case "$ICECAST_MAX_CLIENTS" in
-		*[!0-9]*|'')
-			log "ICECAST_MAX_CLIENTS='$ICECAST_MAX_CLIENTS' is not a number — using 100"
-			ICECAST_MAX_CLIENTS=100
-			;;
+# Keep the listener-time offset under controller ownership. Accepting an env
+# override here would make the Icecast burst disagree with /now-playing and
+# voice-event timing even though all four processes share this container.
+stream_buffer_seconds() {
+	read_state_num liquidsoap_stream_buffer_seconds.txt 22
+}
+
+# Concurrent-listener ceiling — the same function, for the same reasons, as
+# docker/broadcast-entrypoint.sh's. This image is the REASON the setting exists:
+# the Unraid template exposes no ICECAST_MAX_CLIENTS and there is no .env here,
+# so before stream.maxListeners the ceiling was unreachable on AIO. Env still
+# wins where it IS set. Both copies are driven from one table by
+# scripts/max-listeners.test.ts.
+resolve_max_clients() {
+	_src=ICECAST_MAX_CLIENTS
+	_v="${ICECAST_MAX_CLIENTS:-}"
+	if [ -z "$_v" ]; then
+		_src=settings
+		_v=$(read_state_num liquidsoap_icecast_max_clients.txt 100)
+	fi
+	case "$_v" in
+		*[!0-9]*|''|0) echo "100 fallback:$_v@$_src" ;;
+		*) echo "$_v $_src" ;;
 	esac
+}
+
+render_icecast() {
+	# Concurrent-listener ceiling — see resolve_max_clients above.
+	local MAX_CLIENTS_LINE
+	MAX_CLIENTS_LINE="$(resolve_max_clients)"
+	ICECAST_MAX_CLIENTS="${MAX_CLIENTS_LINE%% *}"
+	log "max listeners $ICECAST_MAX_CLIENTS (from ${MAX_CLIENTS_LINE#* })"
 
 	# Listener buffer depth — same contract as docker/broadcast-entrypoint.sh
 	# (#1114): burst-size is a byte count, derived from
 	# settings.stream.bufferSeconds x each mount's bitrate.
 	local STREAM_BITRATE BUFFER_SECONDS OPUS_BITRATE AAC_BITRATE FLAC_BITRATE_EST
 	STREAM_BITRATE="${ICECAST_STREAM_BITRATE:-$(read_state_num liquidsoap_stream_bitrate.txt 192)}"
-	BUFFER_SECONDS="${ICECAST_BUFFER_SECONDS:-$(read_state_num liquidsoap_stream_buffer_seconds.txt 22)}"
+	BUFFER_SECONDS="$(stream_buffer_seconds)"
 	case "$STREAM_BITRATE" in *[!0-9]*|'') STREAM_BITRATE=192 ;; esac
 	case "$BUFFER_SECONDS" in *[!0-9]*|'') BUFFER_SECONDS=22 ;; esac
 	[ "$BUFFER_SECONDS" -gt 60 ] && BUFFER_SECONDS=60

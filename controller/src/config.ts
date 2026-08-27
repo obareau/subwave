@@ -190,6 +190,10 @@ export const config = {
   },
   liquidsoap: {
     queueFile: `${STATE_DIR}/next.txt`,
+    // Dedicated priority handoff for an operator-triggered jingle. Keeping it
+    // separate from next.txt lets Liquidsoap choose it before an already-filled
+    // FIFO dj_queue at the next safe boundary.
+    jingleFile: `${STATE_DIR}/jingle-now.txt`,
     sayFile: `${STATE_DIR}/say.txt`,
     // Separate channel for talk-over voice (auto-links, anything that should
     // play OVER a track that's already started with light ducking instead of
@@ -201,10 +205,15 @@ export const config = {
     sfxFile: `${STATE_DIR}/sfx.txt`,
     autoPlaylist: `${STATE_DIR}/auto.m3u`,
     nowPlayingFile: `${STATE_DIR}/now-playing.json`,
-    // Written by radio.liq when a jingle starts feeding the jingle rotate
-    // (issue #997). Jingles play outside the controller's voice serialiser,
-    // so airVoice reads this to hold spoken segments until the stinger has
-    // cleared the air.
+    // Written by radio.liq when a jingle starts feeding (issue #997). Jingles
+    // play outside the controller's voice serialiser, so airVoice reads this to
+    // hold spoken segments until the clip has cleared the air. TWO writers, one
+    // file: the rotate playlist's own on_metadata, and jingle_now_queue's, for a
+    // clip the controller pushed on demand (queue.playJingle). Both are queue/
+    // playlist hooks — NOT a branch of on_meta, which never sees either source.
+    // They stage through separate temp dirs — see radio.liq's jingle_now_tmp_dir.
+    // Both stamp `durationSec` (radio.liq's jingle_duration) so the collision
+    // guard can measure a clip in any container, not just RIFF.
     jinglePlayingFile: `${STATE_DIR}/jingle-playing.json`,
     // Written by radio.liq when a track annotated `subwave_kind="bed"` starts
     // (broadcast/beds.ts). A bed carries no title/artist, so on_meta skips

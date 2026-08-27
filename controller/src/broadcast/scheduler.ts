@@ -10,6 +10,7 @@ import { writeFileAtomic } from '../util/atomic-file.js';
 import { shuffle } from '../util/shuffle.js';
 import { mapPool } from '../util/async-pool.js';
 import * as subsonic from '../music/subsonic.js';
+import * as silenceTrim from '../music/silence-trim.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
@@ -26,6 +27,7 @@ import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
+import { speakClockAllowed, stationIdDaypartStamp } from './clock-policy.js';
 import { banterTickPlan, banterCronExpression } from './banter-policy.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
@@ -454,7 +456,19 @@ async function refreshAutoPlaylistInner() {
   // Stamp the station cap on every fallback entry (#447). max-track-length is a
   // pure on-air cue_out cut, not a selection filter, so over-length tracks stay
   // in the pool and simply crossfade out at the cap when the queue runs dry.
-  const lines = ['#EXTM3U', ...pool.map((t: any) => subsonic.getAnnotatedUri(t, { maxDurationSec }))];
+  // Dead-air trim, for the same reason as the loudness stamp above: this
+  // fallback bypasses the drain, and an untrimmed coast track is exactly where
+  // a leading blank goes unnoticed — nobody is watching when auto.m3u plays.
+  // Same policy module as the drain (music/silence-trim.ts), so both paths cut
+  // identically. Off / unmeasured → nulls → today's untouched entry.
+  const lines = ['#EXTM3U', ...pool.map((t: any) => {
+    const trim = silenceTrim.resolveSilenceTrim(t);
+    return subsonic.getAnnotatedUri(t, {
+      maxDurationSec,
+      cueInSec: trim.cueInSec,
+      cueOutSec: trim.cueOutSec,
+    });
+  })];
   // Atomic replace: Liquidsoap watches this file (reload_mode="watch"), so an
   // in-place write can trigger a reload that loads a truncated playlist.
   await writeFileAtomic(config.liquidsoap.autoPlaylist, lines.join('\n'));
@@ -814,13 +828,20 @@ export async function runStationId({ atNextTrack = false } = {}) {
   return withTrace({ kind: 'station-id' }, async () => {
     const ctx = await getFullContext();
     const speaker = settings.pickOnAirSpeaker();
+    // Scheduled idents can wait across several track boundaries. Stamp the
+    // daypart being offered to the model so the queue can refuse a rendered
+    // clip if that fact changed before air. Immediate operator idents do not
+    // enter the deferred path, so the stamp is unnecessary there.
+    const daypart = atNextTrack
+      ? stationIdDaypartStamp(ctx.clock?.spokenDaypart, speakClockAllowed())
+      : null;
     const script = await dj.generateStationId({
       recap: queue.getDjRecap(),
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),
       persona: speaker,
     });
-    const opts = { persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name } };
+    const opts = { persona: speaker, daypart, meta: { personaId: speaker?.id, personaName: speaker?.name } };
     if (atNextTrack) await queue.announceAtNextTrack(script, 'station-id', opts);
     else await queue.announce(script, 'station-id', opts);
     return script;

@@ -3,6 +3,7 @@
 import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
@@ -10,6 +11,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../../ui/select';
 import { Card, Btn, Seg } from '../ui';
+import { Advanced } from './section-chrome';
 import { EmbeddingProviderSelector } from '../embedding/EmbeddingProviderSelector';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
@@ -61,7 +63,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
-      const r = await adminFetch('/settings/secrets', {
+      const r = await adminResponse(adminFetch, '/settings/secrets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ [envVar]: value.trim() }),
@@ -145,7 +147,6 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   >(null);
   const [probing, setProbing] = useState(false);
   const [detecting, setDetecting] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   // Local servers (llama.cpp/locca) need a dedicated embedding endpoint; cloud
   // and Ollama providers serve embeddings on the same endpoint as chat.
   const needsServerUrl = effectiveProvider === 'locca' || effectiveProvider === 'openai-compatible';
@@ -195,7 +196,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
     setProbing(true);
     setProbe(null);
     try {
-      const r = await adminFetch('/settings/embedding/probe', {
+      const r = await adminResponse(adminFetch, '/settings/embedding/probe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(probeBody()),
@@ -217,13 +218,14 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
       let model = 'nomic-embed-text';
       try {
         const d = await (
-          await adminFetch(`/settings/llm/discover?baseUrl=${encodeURIComponent(url)}`)
+          // admin-query-imperative: locca-discovery-probe
+          await adminResponse(adminFetch, `/settings/llm/discover?baseUrl=${encodeURIComponent(url)}`)
         ).json();
         if (d.reachable && Array.isArray(d.models) && d.models.length) model = d.models[0];
       } catch {
         /* discovery is best-effort — fall through and probe with the default model */
       }
-      const r = await adminFetch('/settings/embedding/probe', {
+      const r = await adminResponse(adminFetch, '/settings/embedding/probe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: 'locca', baseUrl: url, model }),
@@ -618,15 +620,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
       {/* No run button: the bulk tagger is launched from the Library page's
           "Start tagging" flow. */}
 
-      <button
-        type="button"
-        onClick={() => setAdvancedOpen(o => !o)}
-        className="mb-1 w-fit text-[11px] font-bold tracking-[0.14em] text-muted uppercase hover:text-ink"
-      >
-        {advancedOpen ? '▾' : '▸'} Advanced: seed count, propagation, enrichment
-      </button>
-      {advancedOpen && (
-        <>
+      <Advanced note="seed count, propagation thresholds and enrichment">
       <Card title="Seed phase" sub="how many tracks to LLM-tag">
         <div className="grid gap-[18px]">
           <div className="field">
@@ -845,8 +839,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           </div>
         </div>
       </Card>
-        </>
-      )}
+      </Advanced>
 
       <SaveBar
         note={`Saved values apply the next time the bulk tagger runs. Current run (if any) keeps its own snapshot.${
@@ -859,6 +852,10 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         saveLabel="Save library tagger"
         errors={fieldErrors}
         ownedKeys={['embedding', 'audio']}
+        // Both key boxes are component-local — the panel diffs FormState and
+        // cannot see them, so a pasted key alone would leave the section
+        // "clean" and unmount the very button that saves it.
+        dirty={!!(embeddingKeyInput.trim() || compatEmbedKeyInput.trim())}
       />
     </>
   );

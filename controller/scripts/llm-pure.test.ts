@@ -374,8 +374,15 @@ async function main() {
   await test('openai: effort level only on o-series/gpt-5 (sent verbatim as reasoning_effort — gpt-4-class 400s on it)', () => {
     assert.equal(reasoningFor({ provider: 'openai', model: 'o3', reasoning: false }), 'minimal');
     assert.equal(reasoningFor({ provider: 'openai', model: 'o3', reasoning: true }), 'medium');
+    assert.equal(reasoningFor({ provider: 'openai', model: 'gpt-5-mini', reasoning: false }), 'minimal');
     assert.equal(reasoningFor({ provider: 'openai', model: 'gpt-5-mini', reasoning: true }), 'medium');
     assert.equal(reasoningFor({ provider: 'openai', model: 'gpt-4.1-mini', reasoning: false }), undefined);
+  });
+  await test('openai: dotted GPT-5 generations use none when reasoning is off', () => {
+    for (const model of ['gpt-5.1', 'gpt-5.2', 'gpt-5.4-mini', 'gpt-5.6-luna']) {
+      assert.equal(reasoningFor({ provider: 'openai', model, reasoning: false }), 'none');
+    }
+    assert.equal(reasoningFor({ provider: 'openai', model: 'gpt-5.6-luna', reasoning: true }), 'medium');
   });
   await test('requesty: minimal when suppressing — same wire bytes as the old providerOptions.requesty block', () => {
     assert.equal(reasoningFor({ provider: 'requesty', model: 'openai/gpt-4o-mini', reasoning: true }), undefined);

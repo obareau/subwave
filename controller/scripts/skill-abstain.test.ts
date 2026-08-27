@@ -1,6 +1,6 @@
-// Pins skills/abstain-policy.ts and the two surfaces that consume it — the
-// forced segment schema/prompt (skills/_agent.ts) and the web-search built-in's
-// own relevance filter (issue #1412).
+// Pins skills/abstain-policy.ts and the surfaces that consume it — the forced
+// segment schema/prompt, the autonomous pool-mode director (skills/_agent.ts),
+// and the web-search built-in's own relevance filter (issues #1412/#1446).
 //
 // The bug: a forced skill run (Run-now button, per-skill cron, programme
 // feature beat) was told "you must produce a line, silence is not an option",
@@ -24,7 +24,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -32,6 +32,7 @@ import { join } from 'node:path';
 // module scope — same preamble as skill-cron-gates.test.ts.
 const STATE_DIR = mkdtempSync(join(tmpdir(), 'skill-abstain-'));
 process.env.STATE_DIR = STATE_DIR;
+const DRY_WELL_ATTEMPTS = join(STATE_DIR, 'dry-well-attempts.txt');
 
 // Two skills on disk for the end-to-end run below: one whose data tool reports
 // nothing usable, and one that reports nothing usable but declares it writes its
@@ -42,12 +43,18 @@ function writeSkill(slug: string, tool: string) {
   writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${slug}\n---\nSay something about ${slug}.\n`);
   writeFileSync(join(dir, 'tool.mjs'), tool);
 }
-writeSkill('dry-well', 'export default async () => ({ available: false });\n');
+writeSkill('dry-well', `import { appendFileSync } from 'node:fs';
+export default async () => {
+  appendFileSync(${JSON.stringify(DRY_WELL_ATTEMPTS)}, 'attempt\\n');
+  return { available: false };
+};
+`);
 writeSkill('own-material', 'export const requiresData = false;\nexport default async () => ({ available: false });\n');
 
 const { requiresGrounding, unusableDataReason, standDownReason, declaredBool } =
   await import('../src/skills/abstain-policy.js');
-const { forcedSchema, forcedSystem, runCapability } = await import('../src/skills/_agent.js');
+const { agenticTick, forcedSchema, forcedSystem, runCapability } = await import('../src/skills/_agent.js');
+const { queue } = await import('../src/broadcast/queue.js');
 const webSearch = (await import('../src/skills/builtins/web-search/tool.mjs')).default;
 
 const dataCap = (over = {}) => ({ kind: 'web-search', toolFn: () => ({}), ...over });
@@ -234,6 +241,38 @@ test('a forced run on empty data stands down without ever calling the model', as
   assert.equal(run.aired, false);
   assert.equal(run.text, null);
   assert.match(String(run.reason), /nothing fresh/);
+});
+
+test('pool mode skips generation and backs off when grounded data is unavailable', async () => {
+  const settings = await import('../src/settings.js');
+  await settings.update({
+    llm: { pickerAgent: false, provider: 'openai', apiKey: '', agentTimeoutMs: 5_000 },
+    skills: { enabled: { 'dry-well': true } },
+    personas: settings.get().personas.map((p: { id: string }, i: number) =>
+      (i === 0 ? { ...p, frequency: 'aggressive', djMode: false } : p)),
+  });
+
+  const attempts = () => existsSync(DRY_WELL_ATTEMPTS)
+    ? readFileSync(DRY_WELL_ATTEMPTS, 'utf8').trim().split('\n').filter(Boolean).length
+    : 0;
+  const before = attempts();
+  queue.djLog = [];
+
+  await agenticTick({ time: {}, clock: {} });
+
+  assert.equal(attempts(), before + 1, 'the first tick fetches the selected skill once');
+  assert.ok(
+    queue.djLog.some(e => e.kind === 'scheduler'
+      && e.message.includes('[segment] dry-well → unavailable → skipped before LLM')),
+    'the booth log exposes the pre-LLM skip and selected skill',
+  );
+  assert.ok(
+    !queue.djLog.some(e => e.kind === 'error' && e.message.startsWith('Segment agent failed:')),
+    'unavailable source data never reaches the LLM failure path',
+  );
+
+  await agenticTick({ time: {}, clock: {} });
+  assert.equal(attempts(), before + 1, 'the unavailable skill is backed off on the next scheduler tick');
 });
 
 test("a skill's own requiresData export survives the loader", async () => {

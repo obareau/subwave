@@ -370,9 +370,10 @@ export const voiceImportSchema = z.object({
 // ─── from controller/src/schemas/library.ts ──────────────────────────────
 
 // Shared library-maintenance schemas — the operator-facing bodies under
-// /library that carry typed input rather than a bare id. Today that is
-// `POST /library/manual-tag`, the "tag this track (or its whole album) by hand,
-// no LLM involved" path behind the library row editor.
+// /library that carry typed input rather than a bare id: `POST
+// /library/manual-tag` (tag this track, or its whole album, by hand — no LLM
+// involved) and `POST /library/original-year` (the operator's own answer to
+// "what year was this actually recorded", behind the same row editor).
 //
 // HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
 // the web bundle, so a project import or a node builtin here breaks the mirror.
@@ -447,6 +448,60 @@ export function manualTagSchema(ctx: ManualTagContext) {
         .nullable(),
     ),
     // `=== true`, so anything else reads as off — unchanged.
+    applyToAlbum: z.unknown().optional().transform((v) => v === true),
+  });
+}
+
+// ── POST /library/original-year ──────────────────────────────────────────────
+// The operator's manual era override (issue #1418). The automatic pipeline
+// resolves an original year from the album tag or MusicBrainz, and on a reissue
+// anthology both are wrong by construction — the tag carries the reissue's date
+// and MB is never asked, because the lookup is gated on a compilation flag
+// those albums do not set. This is the escape hatch: someone holding the sleeve
+// types the real year.
+
+/** Floor for a plausible recording year — mirrors musicbrainz.ts MIN_YEAR.
+ *  Duplicated rather than imported: this file may import only 'zod'. */
+export const ORIGINAL_YEAR_MIN = 1900;
+
+export function originalYearSchema() {
+  // Evaluated per request, not at module load: a schema frozen at boot would
+  // start refusing next January.
+  const max = new Date().getUTCFullYear() + 1;
+  return z.object({
+    // Same wording and same blank-string refusal as manualTagSchema — one
+    // editor posts to both routes and must not get two dialects of "no id".
+    id: z.unknown().optional().transform((raw, c) => {
+      if (typeof raw !== 'string' || !raw) {
+        c.addIssue({ code: 'custom', message: 'id is required' });
+        return z.NEVER;
+      }
+      return raw;
+    }),
+    // null CLEARS the override and hands the track back to the automatic
+    // pipeline, so it is a real value here rather than an omission: a missing
+    // key is a malformed request, not "clear it". Numeric strings are accepted
+    // because the field is typed into an <input>, but a non-integer or an
+    // out-of-window year is refused rather than rounded — a silently repaired
+    // year is indistinguishable on air from a correct one.
+    originalYear: z.unknown().transform((raw, c) => {
+      if (raw === null) return null;
+      const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
+      if (typeof n !== 'number' || !Number.isInteger(n)) {
+        c.addIssue({ code: 'custom', message: 'originalYear must be a whole year or null' });
+        return z.NEVER;
+      }
+      if (n < ORIGINAL_YEAR_MIN || n > max) {
+        c.addIssue({
+          code: 'custom',
+          message: `originalYear must be between ${ORIGINAL_YEAR_MIN} and ${max}, or null`,
+        });
+        return z.NEVER;
+      }
+      return n;
+    }),
+    // `=== true`, matching manualTagSchema. An anthology is wrong a whole album
+    // at a time, so this is the common case here rather than the exception.
     applyToAlbum: z.unknown().optional().transform((v) => v === true),
   });
 }
@@ -605,6 +660,14 @@ export const PERSONA_LANGUAGE_MAX = 60;
 // recurring per-call token cost rather than a structural limit.
 export const PERSONA_SOUL_MAX = 2000;
 export const PERSONA_SKILLS_LIMIT = 64;
+
+// Freeform organisation tags — operator vocabulary for filtering and grouping
+// the admin roster. Third copy of one pattern (skill.ts, show.ts) on purpose:
+// a mirrored schema module may import only zod, so the alternative to three
+// declarations is no mirror. See the header.
+export const PERSONA_TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+export const PERSONA_TAG_MAX = 24;
+export const TAGS_PER_PERSONA_LIMIT = 8;
 
 export const PERSONA_FREQUENCIES = [
   'silent',
@@ -937,6 +1000,7 @@ export interface PersonaParsed {
   avatar: string;
   tts: TtsVoiceSlot;
   skills: string[] | null;
+  tags: string[];
 }
 
 /**
@@ -953,6 +1017,47 @@ export interface PersonaParsed {
  * scriptLength → djMode → tts → skills → avatar. An operator with two bad
  * fields must still be told about the same one first.
  */
+// Array or comma string, trimmed + lowercased, empties dropped — the same two
+// wire shapes the skill and show tag fields accept.
+function personaTagList(raw: unknown): string[] {
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  return list.map((s) => String(s ?? '').trim().toLowerCase()).filter(Boolean);
+}
+
+/**
+ * Organisation only — tags steer nothing on air and are not published by the
+ * public roster route.
+ *
+ * A bad tag is REFUSED, unlike the sibling `skills` list, and the difference is
+ * deliberate: `skills` is a subscription resolved against a live catalogue
+ * where a dead entry is inert, while a tag is typed by hand in the editor and
+ * silently losing one is the operator watching their own input disappear on
+ * reload. repairPersonaTags below is the lenient load-path twin.
+ */
+const personaTags = z
+  .union([z.null(), z.array(z.unknown()), z.string()])
+  .optional()
+  .transform((v) => (v == null ? [] : personaTagList(v)))
+  .check((c) => {
+    for (const tag of c.value) {
+      if (!PERSONA_TAG_RE.test(tag)) {
+        c.issues.push({
+          code: 'custom',
+          input: c.value,
+          message: `invalid tag "${tag}" — lowercase slugs (a-z, 0-9, hyphens), max ${PERSONA_TAG_MAX} chars`,
+        });
+      }
+    }
+    if (new Set(c.value).size > TAGS_PER_PERSONA_LIMIT) {
+      c.issues.push({
+        code: 'custom',
+        input: c.value,
+        message: `tags must be at most ${TAGS_PER_PERSONA_LIMIT} entries`,
+      });
+    }
+  })
+  .transform((toks) => [...new Set(toks)]);
+
 export const personaSchema = z
   .object({
     name: personaCoercedText('name', 1, PERSONA_NAME_MAX),
@@ -1042,6 +1147,10 @@ export const personaSchema = z
         .nullable()
         .default(null),
     ),
+    // Declared AFTER skills and emitted last in the transform below, so both
+    // the issue order an operator is told about and the persisted key order of
+    // every pre-existing field are unchanged.
+    tags: personaTags,
     id: z.preprocess(
       // A malformed id reads as absent so resolvePersonaIds mints one.
       (v) => (typeof v === 'string' && PERSONA_ID_RE.test(v) ? v : undefined),
@@ -1065,6 +1174,7 @@ export const personaSchema = z
       avatar: p.avatar,
       tts: p.tts,
       skills: p.skills,
+      tags: p.tags,
     }),
   );
 
@@ -1131,7 +1241,27 @@ export function repairPersonaForLoad(
           .filter((s) => PERSONA_SKILL_SLUG_RE.test(s))
           .slice(0, PERSONA_SKILLS_LIMIT)
       : undefined,
+    tags: repairPersonaTags(raw.tags),
   };
+}
+
+/**
+ * Tags, repaired: lowercased, invalid entries dropped, de-duplicated, capped.
+ * The cap applies AFTER the validity filter so junk in a hand-edited file does
+ * not spend the budget the operator's real tags need. Non-array reads as absent
+ * so the schema's [] default applies.
+ */
+export function repairPersonaTags(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const tag = item.trim().toLowerCase();
+    if (!PERSONA_TAG_RE.test(tag) || out.includes(tag)) continue;
+    out.push(tag);
+    if (out.length >= TAGS_PER_PERSONA_LIMIT) break;
+  }
+  return out;
 }
 
 // ── DJ prompt library ────────────────────────────────────────────────────────
@@ -1907,6 +2037,14 @@ export const BEDS_THRESHOLD_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 60
 // own length too, so a long ramp on a short link can't invert the arithmetic.
 export const BEDS_CROSS_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
 
+// Dead-air trim: the smallest edge gap worth cutting. The FLOOR is what keeps
+// the feature from eating deliberate silence — a segued album leaves a beat
+// between tracks on purpose, and a mastering blank worth a cue point is
+// measured in seconds, not frames. The ceiling bounds the same mistake from
+// the other side: past 30s an operator is describing a different problem
+// (a corrupt rip) than the one a cue point solves.
+export const SILENCE_TRIM_MIN_GAP_MS_BOUNDS: SettingsNumericBound = { min: 250, max: 30000 };
+
 /**
  * `parseInt(raw, 10)` + a bounds check, exactly as the hand-rolled branch did.
  *
@@ -2183,6 +2321,13 @@ export const LOUDNESS_MAX_BOOST_DB_BOUNDS: SettingsNumericBound = { min: 0, max:
 // the load path drift.
 export const STREAM_BUFFER_SECONDS_BOUNDS: SettingsNumericBound = { min: 0, max: 60 };
 
+// Icecast's <limits><clients> ceiling. 1 is the floor because 0 would render a
+// station nobody can tune into; 10000 is far past what one homelab box serves
+// and exists only to keep a typo out of the config. Licensing bodies in some
+// countries calculate fees on simultaneous listener capacity, which is why this
+// is a first-class setting rather than a convenience (#1300 FR 15).
+export const STREAM_MAX_LISTENERS_BOUNDS: SettingsNumericBound = { min: 1, max: 10000 };
+
 // Falling back to the product default is what an emptied station name does —
 // see stationSchema.
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
@@ -2211,6 +2356,7 @@ export const sfxPatchSchema = settingsBlockOf({
 
 export const bedsPatchSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
+  requestIntros: settingsBoolLike(),
   thresholdSec: settingsFloatLike(
     BEDS_THRESHOLD_SEC_BOUNDS,
     `beds.thresholdSec must be number in [${BEDS_THRESHOLD_SEC_BOUNDS.min}, ${BEDS_THRESHOLD_SEC_BOUNDS.max}]`,
@@ -2218,6 +2364,14 @@ export const bedsPatchSchema = settingsBlockOf({
   crossSec: settingsFloatLike(
     BEDS_CROSS_SEC_BOUNDS,
     `beds.crossSec must be number in [${BEDS_CROSS_SEC_BOUNDS.min}, ${BEDS_CROSS_SEC_BOUNDS.max}]`,
+  ),
+});
+
+export const silenceTrimPatchSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+  minGapMs: settingsIntLike(
+    SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
+    `silenceTrim.minGapMs must be int in [${SILENCE_TRIM_MIN_GAP_MS_BOUNDS.min}, ${SILENCE_TRIM_MIN_GAP_MS_BOUNDS.max}]`,
   ),
 });
 
@@ -2307,6 +2461,10 @@ export const streamPatchSchema = settingsBlockOf({
   idleAfterMinutes: settingsIntLike(
     { min: 1, max: 1440 },
     'stream.idleAfterMinutes must be an integer between 1 and 1440',
+  ),
+  maxListeners: settingsIntLike(
+    STREAM_MAX_LISTENERS_BOUNDS,
+    `stream.maxListeners must be an integer between ${STREAM_MAX_LISTENERS_BOUNDS.min} and ${STREAM_MAX_LISTENERS_BOUNDS.max}`,
   ),
 });
 
@@ -2996,6 +3154,16 @@ export const SHOW_FILTER_VALUES_MAX = 15;
 export const SHOW_GENRE_MAX = 64;
 export const SHOW_SEGMENT_SKILL_MAX = 64;
 export const SHOW_THEME_ID_MAX = 64;
+
+// Freeform organisation tags (`tags: ["late-night", "weekend"]`) — operator
+// vocabulary for filtering and grouping the admin show list, the twin of
+// skill.ts's SKILL_TAG_RE. Declared here rather than imported because the
+// mirror is one flat concatenation and a schema module may import only zod
+// (see the header) — the same reason SHOW_ID_RE and PERSONA_ID_RE are three
+// copies of one pattern.
+export const SHOW_TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+export const SHOW_TAG_MAX = 24;
+export const TAGS_PER_SHOW_LIMIT = 8;
 export const SHOW_YEAR_MIN = 1900;
 export const SHOW_YEAR_MAX = 2100;
 // Also the STATION-wide cap's ceiling — settings/defaults.ts BOUNDS reads it
@@ -3161,6 +3329,38 @@ export function migrateLegacyShowFields(raw: unknown): Record<string, unknown> {
   for (const k of LEGACY_SHOW_FIELDS) delete rec[k];
   return rec;
 }
+
+// Accepts the array the editor sends AND a comma string, the two wire shapes
+// every other tag surface in the codebase has always taken. Tokens are
+// trimmed + lowercased, empties dropped, de-duplicated in first-seen order.
+function showTagList(raw: unknown): string[] {
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  return list.map((s) => String(s ?? '').trim().toLowerCase()).filter(Boolean);
+}
+
+const showTags = z
+  .union([z.null(), z.array(z.unknown()), z.string()])
+  .optional()
+  .transform((v) => (v == null ? [] : showTagList(v)))
+  .check((c) => {
+    for (const tag of c.value) {
+      if (!SHOW_TAG_RE.test(tag)) {
+        c.issues.push({
+          code: 'custom',
+          input: c.value,
+          message: `invalid tag "${tag}" — lowercase slugs (a-z, 0-9, hyphens), max ${SHOW_TAG_MAX} chars`,
+        });
+      }
+    }
+    if (new Set(c.value).size > TAGS_PER_SHOW_LIMIT) {
+      c.issues.push({
+        code: 'custom',
+        input: c.value,
+        message: `must have at most ${TAGS_PER_SHOW_LIMIT} entries`,
+      });
+    }
+  })
+  .transform((toks) => [...new Set(toks)]);
 
 export function showSchema(ctx: ShowSchemaContext) {
   // Migration must run BEFORE the object parse — z.object strips unknown keys,
@@ -3331,6 +3531,17 @@ function showObjectSchema(ctx: ShowSchemaContext) {
         max: EXCLUDED_PLAYLISTS_PER_SHOW,
         overflowError: `must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`,
       }),
+      // Organisation only — tags steer nothing on air. Declared LAST so the
+      // persisted key order of every pre-existing field is unchanged, and
+      // defaulted to [] so a show written before the field round-trips byte
+      // identically apart from the new empty list.
+      //
+      // Unlike every other list here a bad entry is REFUSED rather than
+      // dropped: a tag is typed by hand in the editor, and a tag that silently
+      // vanishes on save is the failure the skill conversion called out. The
+      // lenient load twin (repairShowTags) drops instead, because a hand-edited
+      // settings.json should cost the show a filter chip, not the show.
+      tags: showTags,
     })
     // Needs two fields at once, so it cannot live on guestPersonaIds itself.
     .check((c) => {
@@ -3418,6 +3629,26 @@ export function repairShowStringList(
 }
 
 /**
+ * Tags, repaired: lowercased, invalid entries dropped, de-duplicated, capped.
+ *
+ * The cap is applied AFTER the validity filter, not before, so a stored list
+ * padded with junk still yields the operator's real tags rather than spending
+ * the budget on entries that were never going to survive.
+ */
+export function repairShowTags(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const tag = item.trim().toLowerCase();
+    if (!SHOW_TAG_RE.test(tag) || out.includes(tag)) continue;
+    out.push(tag);
+    if (out.length >= TAGS_PER_SHOW_LIMIT) break;
+  }
+  return out;
+}
+
+/**
  * Every per-field repair the load path applies before parsing, in one place.
  *
  * `undefined` lets the schema's own default apply. Each repair lands on a value
@@ -3480,6 +3711,11 @@ export function repairShowForLoad(
             typeof g === 'string' && g !== host && (personaIds == null || personaIds.includes(g)))
           .slice(0, GUESTS_PER_SHOW)
       : undefined,
+    // Lenient twin of the strict `tags` field: an invalid tag is DROPPED here
+    // rather than failing the show, the same posture skill.ts's
+    // normalizeSkillTags takes against a hand-edited SKILL.md. Non-array reads
+    // as absent so the schema's [] default applies.
+    tags: repairShowTags(raw.tags),
     playlistIds: repairShowStringList(raw.playlistIds, { max: PLAYLISTS_PER_SHOW }),
     excludedPlaylistIds: repairShowStringList(raw.excludedPlaylistIds, {
       max: EXCLUDED_PLAYLISTS_PER_SHOW,

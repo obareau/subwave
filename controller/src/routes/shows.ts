@@ -28,6 +28,7 @@ import { readCommunityShow } from '../shows/community.js';
 import { SLUG_RE } from '../skills/loader.js';
 import { queue } from '../broadcast/queue.js';
 import { rollSessionNow } from '../broadcast/scheduler.js';
+import { diagnoseShowCandidates } from '../music/show-candidates.js';
 
 export const router = express.Router();
 
@@ -45,6 +46,12 @@ async function showPostContext() {
     minTrackSeconds: settings.minTrackSeconds(),
   });
 }
+
+// Read-only: accepts the editor draft but never persists or schedules it.
+router.post('/shows/candidates', requireAdmin, validateBodyAsync(showPostContext), async (req, res) => {
+  try { res.json(await diagnoseShowCandidates(req.body.show)); }
+  catch (err: any) { queue.log('error', 'POST /shows/candidates failed: ' + err.message); res.status(500).json({ error: err.message }); }
+});
 
 router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => {
   const slug = String(req.params.slug);

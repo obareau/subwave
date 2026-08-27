@@ -89,12 +89,43 @@ const FEATURE_SPLIT = /\s*[([]?\s*\b(?:feat|ft|featuring)\b\.?\s+/i;
 // with Sirens" and "Chase x Status"-style names would lose their tail.
 const JOIN_SPLIT = /\s+(?:&|\+|and)\s+/i;
 
+// Typographic noise that carries no identity: curly quotes against straight
+// ones ("Guns N’ Roses" vs "Guns N' Roses" — the same act, tagged either way
+// depending on which ripper wrote the file), and runs of whitespace. Folded
+// BEFORE the splits above so a curly apostrophe can't hide a join marker.
+const APOSTROPHES = /[‘’ʼ´`]/g;
+
+// A leading article is decoration, not identity — "The Clash" and "Clash" are
+// one act, and a station tagged from two sources routinely carries both. Only
+// stripped when something survives it, so "The The" keys as "the".
+const LEADING_ARTICLE = /^the\s+/;
+
+// Exact full-name aliases for acts whose catalogue tags genuinely alternate
+// between a named lead and their ensemble credit. This must never become a
+// generic suffix strip: "The Beta Band", "Manchester Orchestra" and "Kronos
+// Quartet" are complete act names, and collapsing them onto Beta/Manchester/
+// Kronos feeds a false equivalence into `blockedArtists`, whose pool-rescue
+// filter is HARD rather than a preference. Add only a verified full-act alias.
+const ARTIST_ROOT_ALIASES = new Map<string, string>([
+  ['jimi hendrix experience', 'jimi hendrix'],
+  ['glenn miller orchestra', 'glenn miller'],
+  ['dave matthews band', 'dave matthews'],
+  ['bill evans trio', 'bill evans'],
+]);
+
 // The LEAD artist of a credit — `artistKey` collapsed onto its primary act, so
 // a collaboration shares a key with the artist who leads it (#1251):
 //
 //   "Marvin Gaye & Tammi Terrell"  → "marvin gaye"
 //   "Kanye West (feat. Jay-Z)"     → "kanye west"
+//   "The Jimi Hendrix Experience"  → "jimi hendrix"
+//   "The Clash"                    → "clash"
 //   "Sly & the Family Stone"       → "sly & the family stone"   (unchanged)
+//
+// …and past verified name variants one act picks up across a catalogue tagged
+// from more than one source (#1406): a leading article, exact full-name aliases,
+// and curly-vs-straight apostrophes. The aliases are exact because an ensemble
+// suffix alone is not evidence that the preceding words name a lead artist.
 //
 // The `the …` exception on the join keeps band names whole: "X & the Y" is one
 // act, not two credits, and stripping it would key half the Motown and soul
@@ -113,7 +144,7 @@ const JOIN_SPLIT = /\s+(?:&|\+|and)\s+/i;
 // queue.recentlyPlayed builds from raw tag text. This is a MATCHING key.
 export function artistRootKey(song: CandidateLike | string): string {
   const raw = typeof song === 'string' ? song : (song?.artist || '');
-  const base = raw.toLowerCase().trim();
+  const base = raw.toLowerCase().replace(APOSTROPHES, "'").replace(/\s+/g, ' ').trim();
   if (!base) return '';
 
   let root = base;
@@ -125,6 +156,14 @@ export function artistRootKey(song: CandidateLike | string): string {
     const tail = root.slice(join.index + join[0].length).trim();
     if (tail && !/^the\b/.test(tail)) root = root.slice(0, join.index).trim();
   }
+
+  // Article and exact alias lookup come AFTER the splits, so the join's `the …`
+  // exception still sees the tail it was written to protect ("Sly & the Family
+  // Stone" is whole before either of these runs) and the alias is judged against
+  // the LEAD act's name rather than a collaborator's.
+  const unarticled = root.replace(LEADING_ARTICLE, '').trim();
+  if (unarticled) root = unarticled;
+  root = ARTIST_ROOT_ALIASES.get(root) ?? root;
 
   return root || base;
 }

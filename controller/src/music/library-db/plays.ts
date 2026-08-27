@@ -42,6 +42,8 @@ export function recordPlay(p: PlayWrite): void {
 export interface LastAiredIndex {
   byId: Map<string, number>;
   byKey: Map<string, number>;
+  playStatsById: Map<string, TrackPlayStats>;
+  playStatsByKey: Map<string, TrackPlayStats>;
 }
 
 // Two queries, not one GROUP BY over (track_id, title, artist): each half is
@@ -55,19 +57,23 @@ export function lastAiredIndex(): LastAiredIndex {
   const d = requireDb();
   const byId = new Map<string, number>();
   const byKey = new Map<string, number>();
+  const playStatsById = new Map<string, TrackPlayStats>();
+  const playStatsByKey = new Map<string, TrackPlayStats>();
 
   for (const r of d.prepare(`
-    SELECT track_id, MAX(played_at) AS last_at
+    SELECT track_id, COUNT(*) AS n, MAX(played_at) AS last_at
     FROM plays WHERE track_id IS NOT NULL AND track_id != '' GROUP BY track_id
-  `).all() as Array<{ track_id: string; last_at: string }>) {
+  `).all() as Array<{ track_id: string; n: number; last_at: string }>) {
     const at = Date.parse(r.last_at);
-    if (Number.isFinite(at)) byId.set(r.track_id, at);
+    if (!Number.isFinite(at)) continue;
+    byId.set(r.track_id, at);
+    playStatsById.set(r.track_id, { count: r.n, lastPlayedAtMs: at });
   }
 
   for (const r of d.prepare(`
-    SELECT title, artist, MAX(played_at) AS last_at
+    SELECT title, artist, COUNT(*) AS n, MAX(played_at) AS last_at
     FROM plays WHERE title IS NOT NULL AND title != '' GROUP BY title, artist
-  `).all() as Array<{ title: string; artist: string | null; last_at: string }>) {
+  `).all() as Array<{ title: string; artist: string | null; n: number; last_at: string }>) {
     const at = Date.parse(r.last_at);
     if (!Number.isFinite(at)) continue;
     // GROUP BY is on the RAW columns while the key is lowercased+trimmed, so
@@ -75,9 +81,14 @@ export function lastAiredIndex(): LastAiredIndex {
     const key = `${r.title.toLowerCase().trim()}|${(r.artist || '').toLowerCase().trim()}`;
     const prev = byKey.get(key);
     if (prev == null || at > prev) byKey.set(key, at);
+    const prevStats = playStatsByKey.get(key);
+    playStatsByKey.set(key, {
+      count: (prevStats?.count ?? 0) + r.n,
+      lastPlayedAtMs: Math.max(prevStats?.lastPlayedAtMs ?? 0, at),
+    });
   }
 
-  return { byId, byKey };
+  return { byId, byKey, playStatsById, playStatsByKey };
 }
 
 // Random sample of tracks the station has never aired, or last aired before
@@ -113,6 +124,37 @@ export function deepCutTracks(cutoffIso: string, limit: number): TrackRecord[] {
   return ids.map((id) => byId.get(id)).filter((r): r is TrackRow => !!r).map(rowToTrack);
 }
 
+export interface TrackPlayStats {
+  count: number;
+  lastPlayedAtMs: number;
+}
+
+// Lifetime plays per artist, keyed by lowercased+trimmed artist name (the same
+// normalisation the "title|artist" half of lastAiredIndex uses) — the picker
+// tools have no artist id to group on, only the free-text field. One GROUP BY
+// over the whole table: cheap next to lastAiredIndex's two, and memoised the
+// same way (library.ts's artistPlayStats), so it still runs once per TTL
+// window rather than once per candidate.
+export interface ArtistPlayStats {
+  count: number;
+  lastPlayedAtMs: number;
+}
+
+export function artistPlayIndex(): Map<string, ArtistPlayStats> {
+  const d = requireDb();
+  const out = new Map<string, ArtistPlayStats>();
+  for (const r of d.prepare(`
+    SELECT LOWER(TRIM(artist)) AS artist, COUNT(*) AS n, MAX(played_at) AS last_at
+    FROM plays WHERE artist IS NOT NULL AND TRIM(artist) != ''
+    GROUP BY LOWER(TRIM(artist))
+  `).all() as Array<{ artist: string; n: number; last_at: string }>) {
+    const at = Date.parse(r.last_at);
+    if (!Number.isFinite(at)) continue;
+    out.set(r.artist, { count: r.n, lastPlayedAtMs: at });
+  }
+  return out;
+}
+
 export function listPlays(opts: { limit?: number; offset?: number } = {}): { total: number; rows: PlayRecord[] } {
   const d = requireDb();
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
@@ -139,5 +181,3 @@ export function listPlays(opts: { limit?: number; offset?: number } = {}): { tot
   }));
   return { total, rows };
 }
-
-

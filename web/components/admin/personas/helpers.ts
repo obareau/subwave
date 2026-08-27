@@ -39,6 +39,10 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
       speed: typeof p?.tts?.speed === 'number' ? p.tts.speed : 1,
     },
     skills: Array.isArray(p?.skills) ? p.skills : allSkills,
+    // Unlike `skills`, an absent value is NOT a stand-in for "everything" — a
+    // persona that carries no tags carries no tags, which is what every
+    // persona saved before the field does.
+    tags: Array.isArray(p?.tags) ? p.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean) : [],
   };
 }
 
@@ -106,8 +110,10 @@ export async function fetchDicebearAvatar(): Promise<string> {
   const style = DICEBEAR_STYLES[Math.floor(Math.random() * DICEBEAR_STYLES.length)];
   // Random seed so two clicks never produce the same face.
   const seed = Math.random().toString(36).slice(2) + Date.now().toString(36);
-  const url = `https://api.dicebear.com/9.x/${style}/png?seed=${encodeURIComponent(seed)}&size=${AVATAR_TARGET_PX}`;
-  const res = await fetch(url);
+  // admin-query-imperative: random-avatar-download
+  const res = await fetch(
+    `https://api.dicebear.com/9.x/${style}/png?seed=${encodeURIComponent(seed)}&size=${AVATAR_TARGET_PX}`,
+  );
   if (!res.ok) throw new Error(`DiceBear fetch failed (${res.status})`);
   const blob = await res.blob();
   return await new Promise<string>((resolve, reject) => {

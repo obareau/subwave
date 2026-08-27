@@ -268,7 +268,14 @@ const MAX_EXCHANGE_LINES = 5;
 // task builders — the grounding rule has to be provably ON this path too. A
 // guest open/close is the beat most likely to reach for a record ("wait till
 // you hear what we've got"), and it had only the listener-messages clause.
-export function exchangeSystem({ show, castBlock, beatTask, langClause = '' }: any): string {
+//
+// The station house rules land here as well (#1420): this prompt goes through
+// neither renderDjPrompt nor agentPersonaPreamble, so without the explicit
+// append an operator's TTS-tag or number-spelling rules reached every solo
+// beat of the show and were silently dropped from the open and the close.
+export function exchangeSystem({ host = null, show, castBlock, beatTask }: any): string {
+  const lang = String(host?.language || '').trim() || 'English';
+  const langClause = ` Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective(host)}`;
   return `You write short on-air exchanges between the hosts of "${show.name}" on a personal internet radio station.
 
 The cast (persona id — name (role): voice notes):
@@ -279,7 +286,7 @@ Rules:
 - Each speaker stays in THEIR OWN character per the voice notes.
 - ${beatTask}
 - Plain spoken words only: no stage directions, no asterisks, no emoji. No invented listener messages, callers, or events.
-- ${PROGRAMME_GROUNDING_RULE}${langClause}`;
+- ${PROGRAMME_GROUNDING_RULE}${langClause}${settings.castHouseRulesBlock()}`;
 }
 
 export async function generateProgrammeExchange({
@@ -303,14 +310,11 @@ export async function generateProgrammeExchange({
     ...guests.map((g: any) => `- ${g.id} — ${g.name} (GUEST): ${soulBrief(g.soul) || 'no notes'}`),
   ].join('\n');
 
-  const lang = String(host?.language || '').trim();
-  const langClause = lang ? ` Everyone speaks ${lang} on air; keep proper nouns untranslated.` : '';
-
   const beatTask = beat === 'outro'
     ? `The show is wrapping up in the next few minutes: sign the episode off together — a callback to what the hour was about, quick thanks between hosts, done.${nextShowName ? ` "${nextShowName}" is up next; the host may give it a quick nod.` : ''} Music keeps playing after — you're closing the show, not the station.`
     : `This is the TOP of the show: the host welcomes listeners in and sets up what this episode is about; the guest(s) chip in as themselves. Tease what's coming without over-promising.`;
 
-  const system = exchangeSystem({ show, castBlock, beatTask, langClause });
+  const system = exchangeSystem({ host, show, castBlock, beatTask });
 
   const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
   if (show?.topic) ctxLines.push(`The show's brief: ${show.topic}`);

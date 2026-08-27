@@ -169,6 +169,7 @@ export interface RawTrack {
   artist: string | null;
   album: string | null;
   year: number | null;
+  genres: string[];
   genre: string | null;
   durationSec: number | null;
   moods: string[];
@@ -242,6 +243,7 @@ export interface TrackDetail {
     artist: string | null;
     album: string | null;
     year: number | null;
+    genres: string[];
     genre: string | null;
     durationSec: number | null;
     moods: string[];
@@ -286,12 +288,43 @@ export interface TrackDetail {
 
 const NO_GENRE = '—';
 
-// Built once per load so a keystroke doesn't re-lowercase five fields per track.
-function searchTextOf(t: Pick<RawTrack, 'title' | 'artist' | 'album' | 'genre' | 'moods'>): string {
-  return [t.title, t.artist, t.album, t.genre, ...(t.moods || [])]
+// Older controllers expose only `genre`; keep that scalar as a compatibility
+// fallback while current payloads carry the complete OpenSubsonic tag array.
+export function trackGenres(t: Pick<RawTrack, 'genres' | 'genre'>): string[] {
+  if (Array.isArray(t.genres) && t.genres.length) return t.genres;
+  return t.genre ? [t.genre] : [];
+}
+
+export function genreText(t: Pick<RawTrack, 'genres' | 'genre'>): string {
+  return trackGenres(t).join(' · ');
+}
+
+// Built once per load so a keystroke doesn't re-lowercase every field per track.
+function searchTextOf(t: Pick<RawTrack, 'title' | 'artist' | 'album' | 'genres' | 'genre' | 'moods'>): string {
+  return [t.title, t.artist, t.album, ...trackGenres(t), ...(t.moods || [])]
     .filter(Boolean)
     .join('\n')
     .toLowerCase();
+}
+
+export interface ObservatoryFilters {
+  query: string;
+  energy: Set<string>;
+  moods: Set<string>;
+  genres: Set<string>;
+  sources: Set<string>;
+  analysedOnly: boolean;
+}
+
+export function matchesObservatoryTrack(t: ObsTrack, filters: ObservatoryFilters): boolean {
+  if (filters.energy.size && !(t.energy && filters.energy.has(t.energy))) return false;
+  if (filters.sources.size && !(t.source && filters.sources.has(t.source))) return false;
+  if (filters.genres.size && !trackGenres(t).some((genre) => filters.genres.has(genre))) return false;
+  if (filters.moods.size && !t.moods.some((mood) => filters.moods.has(mood))) return false;
+  if (filters.analysedOnly && !t.analysed) return false;
+  const query = filters.query.trim().toLowerCase();
+  if (query && !t.searchText.includes(query)) return false;
+  return true;
 }
 
 // Jittered off a dedicated seed so positions don't shift if this logic changes.
@@ -317,6 +350,18 @@ function energyToVal(energy: Energy, id: string): number {
 const SOUND_MAP_MIN = 50; // absolute floor of mapped tracks
 const SOUND_MAP_COVERAGE = 0.6; // fraction of tracks that must be mapped
 
+function genreAnchor(
+  t: Pick<RawTrack, 'genres' | 'genre'>,
+  centers: Record<string, { x: number; y: number }>,
+): { x: number; y: number } {
+  const tagged = trackGenres(t);
+  const anchors = (tagged.length ? tagged : [NO_GENRE]).map((genre) => centers[genre]!);
+  return {
+    x: anchors.reduce((sum, anchor) => sum + anchor.x, 0) / anchors.length,
+    y: anchors.reduce((sum, anchor) => sum + anchor.y, 0) / anchors.length,
+  };
+}
+
 export function layoutTracks(raw: RawTrack[]): {
   tracks: ObsTrack[];
   genres: string[];
@@ -326,8 +371,10 @@ export function layoutTracks(raw: RawTrack[]): {
   // Most-populous first, for a stable angular assignment.
   const counts: Record<string, number> = {};
   raw.forEach((t) => {
-    const g = t.genre || NO_GENRE;
-    counts[g] = (counts[g] || 0) + 1;
+    const tagged = trackGenres(t);
+    for (const genre of tagged.length ? tagged : [NO_GENRE]) {
+      counts[genre] = (counts[genre] || 0) + 1;
+    }
   });
   const genres = Object.keys(counts).sort((a, b) => (counts[b] ?? 0) - (counts[a] ?? 0) || a.localeCompare(b));
   const n = Math.max(1, genres.length);
@@ -344,11 +391,13 @@ export function layoutTracks(raw: RawTrack[]): {
     const sums: Record<string, { x: number; y: number; c: number }> = {};
     raw.forEach((t) => {
       if (t.mapX == null || t.mapY == null) return;
-      const g = t.genre || NO_GENRE;
-      (sums[g] ||= { x: 0, y: 0, c: 0 });
-      sums[g]!.x += px(t.mapX);
-      sums[g]!.y += px(t.mapY);
-      sums[g]!.c++;
+      const tagged = trackGenres(t);
+      for (const genre of tagged.length ? tagged : [NO_GENRE]) {
+        (sums[genre] ||= { x: 0, y: 0, c: 0 });
+        sums[genre]!.x += px(t.mapX);
+        sums[genre]!.y += px(t.mapY);
+        sums[genre]!.c++;
+      }
     });
     const centers: Record<string, { x: number; y: number; angle: number }> = {};
     genres.forEach((g) => {
@@ -365,8 +414,9 @@ export function layoutTracks(raw: RawTrack[]): {
         x = px(t.mapX);
         y = px(t.mapY);
       } else {
-        // unmapped (no audio vector yet) → hover its genre's neighbourhood
-        const c = centers[t.genre || NO_GENRE]!;
+        // Unmapped tracks sit between every scene they belong to rather than
+        // collapsing onto the generated primary genre.
+        const c = genreAnchor(t, centers);
         const rng = mulberry32(hashStr(t.id) ^ 0xc0ffee);
         x = c.x + gauss(rng) * 45;
         y = c.y + gauss(rng) * 45;
@@ -396,8 +446,7 @@ export function layoutTracks(raw: RawTrack[]): {
   });
 
   const tracks: ObsTrack[] = raw.map((t, idx) => {
-    const g = t.genre || NO_GENRE;
-    const c = centers[g]!;
+    const c = genreAnchor(t, centers);
     const rng = mulberry32(hashStr(t.id) ^ 0xc0ffee);
     const spread = 50 + rng() * 30;
     const x = c.x + gauss(rng) * spread;
@@ -440,7 +489,7 @@ export function sourceStyle(source: string | null): SourceStyle {
   }
 }
 
-// Synapse links — one nearby same-genre neighbour per node, via a uniform
+// Synapse links — one nearby shared-genre neighbour per node, via a uniform
 // spatial grid so the pass stays O(n) at any density. Returns index pairs.
 //
 // Per-track distance-check budget across the 9-cell probe. The grid keeps the
@@ -464,39 +513,49 @@ export function buildSynapseLinks(tracks: ObsTrack[]): [number, number][] {
   const cellKey = (g: string, x: number, y: number) =>
     `${g}|${Math.floor(x / CELL)}|${Math.floor(y / CELL)}`;
   tracks.forEach((t, i) => {
-    const k = cellKey(t.genre || NO_GENRE, t.x, t.y);
-    const bucket = grid.get(k);
-    if (bucket) bucket.push(i);
-    else grid.set(k, [i]);
+    const tagged = trackGenres(t);
+    for (const genre of tagged.length ? tagged : [NO_GENRE]) {
+      const key = cellKey(genre, t.x, t.y);
+      const bucket = grid.get(key);
+      if (bucket) bucket.push(i);
+      else grid.set(key, [i]);
+    }
   });
   const out: [number, number][] = [];
   const seen = new Set<number>();
   const n = tracks.length;
   tracks.forEach((t, i) => {
-    const g = t.genre || NO_GENRE;
+    const tagged = trackGenres(t);
     const gx = Math.floor(t.x / CELL);
     const gy = Math.floor(t.y / CELL);
     let best = -1;
     let bd = Infinity;
     let budget = LINK_SCAN_BUDGET;
+    // Single-genre tracks occupy one grid partition, so they need no duplicate
+    // guard. Allocate it only for multi-genre tracks, keeping the common
+    // 200k-track pass as lean as the scalar implementation.
+    const checked = tagged.length > 1 ? new Set<number>() : null;
     // Own cell first, ring after: when the budget engages, candidates must come
     // from the track's immediate neighbourhood, or every link in a dense cluster
     // spans a cell diagonal (measured p95 8u → 76u starting at the corner cell).
     // Own-cell-first also keeps picks mutual, so the a<b dedup still collapses
     // most pairs.
-    probe: for (const [dx, dy] of PROBE_ORDER) {
-      const cell = grid.get(`${g}|${gx + dx}|${gy + dy}`);
-      if (!cell) continue;
-      for (const j of cell) {
-        if (j === i) continue;
-        const ddx = t.x - tracks[j]!.x;
-        const ddy = t.y - tracks[j]!.y;
-        const d = ddx * ddx + ddy * ddy;
-        if (d < bd) {
-          bd = d;
-          best = j;
+    probe: for (const genre of (tagged.length ? tagged : [NO_GENRE])) {
+      for (const [dx, dy] of PROBE_ORDER) {
+        const cell = grid.get(`${genre}|${gx + dx}|${gy + dy}`);
+        if (!cell) continue;
+        for (const j of cell) {
+          if (j === i || checked?.has(j)) continue;
+          checked?.add(j);
+          const ddx = t.x - tracks[j]!.x;
+          const ddy = t.y - tracks[j]!.y;
+          const d = ddx * ddx + ddy * ddy;
+          if (d < bd) {
+            bd = d;
+            best = j;
+          }
+          if (--budget <= 0) break probe;
         }
-        if (--budget <= 0) break probe;
       }
     }
     if (best >= 0) {
@@ -646,6 +705,7 @@ export function buildMockLibrary(count = 400): LibraryData {
       artist,
       album,
       year,
+      genres: [scene.genre],
       genre: scene.genre,
       durationSec: 150 + Math.floor(rng() * 200),
       moods,
@@ -667,7 +727,7 @@ export function buildMockLibrary(count = 400): LibraryData {
       x,
       y,
       _eseed: Math.floor(rng() * 1e9),
-      searchText: searchTextOf({ title, artist, album, genre: scene.genre, moods }),
+      searchText: searchTextOf({ title, artist, album, genres: [scene.genre], genre: scene.genre, moods }),
     });
   }
 
@@ -753,7 +813,9 @@ export function buildMockDetail(track: ObsTrack): TrackDetail {
       ? []
       : structure.filter((s) => s.kind === 'verse' || s.kind === 'chorus').map((s) => ({ startMs: s.startMs, endMs: s.endMs }));
 
-  const lastfmTags = [track.genre?.toLowerCase(), ...track.moods].filter(Boolean).slice(0, 4) as string[];
+  const lastfmTags = [...trackGenres(track).map((genre) => genre.toLowerCase()), ...track.moods]
+    .filter(Boolean)
+    .slice(0, 4) as string[];
 
   // Reuse the editorial moods with plausible cosines so the SOUNDS LIKE row
   // shows in the demo.
@@ -778,6 +840,7 @@ export function buildMockDetail(track: ObsTrack): TrackDetail {
       artist: track.artist,
       album: track.album,
       year: track.year,
+      genres: track.genres,
       genre: track.genre,
       durationSec: track.durationSec,
       moods: track.moods,

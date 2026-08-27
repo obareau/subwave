@@ -23,9 +23,21 @@ export function lifetimeTokenCount() {
   return lifetimeTokens;
 }
 
+function logSuccess(call: any) {
+  if (!call.ok) return;
+  const usage = Number.isFinite(call.usage?.input) && Number.isFinite(call.usage?.output)
+    ? `${call.usage.input}/${call.usage.output} tokens`
+    : 'token usage unavailable';
+  console.log(`[${call.kind}] ${call.model} via ${call.via} — ${call.ms}ms, ${usage}`);
+}
+
 export function record(call: any) {
   recentCalls.unshift(call);
   if (recentCalls.length > MAX_CALLS) recentCalls.length = MAX_CALLS;
+  // Metadata only: prompts and responses stay in /debug and events.jsonl.
+  // One line per success makes long-running container logs attributable by
+  // generator without enabling raw request capture (#1435).
+  logSuccess(call);
   // Mirror summarizeLlm: only successful calls that report usage contribute.
   if (call.ok && call.usage?.total) lifetimeTokens += call.usage.total;
 

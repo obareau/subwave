@@ -37,7 +37,7 @@ export const ANGLES = {
     'Make one small, true observation that has nothing to do with music, then let the song pick it up.',
     'Name the artist only in passing, folded into a thought — never "this is X by Y".',
     'Pose a tiny question or thought and let the track be the answer.',
-    'Acknowledge a listener-shaped moment (commute, late shift, weekend, midweek lull) without naming anyone, then ease in.',
+    'Acknowledge what this point in the day might feel like for a listener, using only the supplied current context, then ease in.',
     'Say one honest sentence about how this track lands right now, and get out of the way.',
     'React to the shift in the room as it comes on — how it lifts, settles, darkens, or opens things up.',
   ],

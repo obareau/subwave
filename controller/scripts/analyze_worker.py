@@ -94,6 +94,17 @@ CLAP_WINDOWS = int(os.environ.get("ANALYZE_CLAP_WINDOWS", "").strip() or "3")
 # outro signal, behave as today").
 OUTRO_SECONDS = float(os.environ.get("ANALYZE_OUTRO_SECONDS", "").strip() or "20")
 
+# --- Silence trim (dead-air gaps at the file's edges) -----------------------
+# Absolute peak floor (dBFS) below which a frame counts as SILENCE. This is
+# deliberately NOT the relative gate estimate_intro_ms / analyze_outro use:
+# those ask "where does the music come in / start winding down" against the
+# track's OWN loud level, so a quiet piano intro or a long ring-out trips them.
+# A dead-air gap is an absolute property of the file — near-digital silence, a
+# bad rip's leading blank, mastering slack at the end — and measuring it
+# against a relative reference eats real music. Emitted as lead_silence_ms /
+# tail_silence_ms; the controller decides whether a gap is worth cutting.
+SILENCE_DBFS = float(os.environ.get("ANALYZE_SILENCE_DBFS", "").strip() or "-50")
+
 # --- Vocal-activity ranges (optional, opt-in) ------------------------------
 # Off unless ANALYZE_VOCAL_ACTIVITY is truthy. Runs Demucs source separation to
 # isolate the vocal stem, then thresholds its energy envelope into present/
@@ -600,6 +611,54 @@ def estimate_key_ranges(chroma, sr, librosa, window_s=10.0):
         return None
 
 
+def silence_edges_ms(y, sr):
+    """(lead_ms, tail_ms, tail_start_ms) of near-silence at the edges of the
+    decoded buffer `y`, measured against the ABSOLUTE SILENCE_DBFS floor.
+
+    `tail_start_ms` is where the trailing gap OPENS, as an offset into this
+    buffer — the caller adds the buffer's own position in the file to make it
+    absolute. It exists because the gap LENGTH alone can only become a cue
+    point by subtracting from a duration, and the only duration the controller
+    has is the container tag, which disagrees with the decoded file often
+    enough (VBR headers) to move the cut by that difference.
+
+    Returns (None, None, None) when NO frame in the buffer clears the floor: a
+    window with nothing audible in it cannot say where the gap ends, only that
+    it outlasts the window, and a guess there would cut real audio. Callers
+    treat None as "no signal, behave as today"."""
+    import numpy as np
+
+    if y is None or np.size(y) == 0 or not sr:
+        return (None, None, None)
+    y = np.asarray(y)
+    if y.ndim > 1:
+        y = np.max(np.abs(y), axis=0)
+    n = int(y.size)
+    frame, hop = 2048, 512
+    # Frame-wise PEAK, not RMS: a 2048-sample RMS window straddling the first
+    # transient averages it away and reads the attack as still-silent, which
+    # would trim the head of the note we are trying to preserve.
+    #
+    # The stride runs to `n`, not to the last WHOLE frame: numpy clamps the
+    # short final slices. Stopping at `n - frame + 1` leaves up to hop-1
+    # samples at the very end unexamined (~23ms at 22.05 kHz) — small, but it
+    # is signal read as gap, i.e. an error in the one direction that CUTS
+    # audio, and the tail is the edge where a wrong cue point costs a song's
+    # ending rather than its first note.
+    starts = np.arange(0, max(1, n), hop)
+    peaks = np.array([float(np.max(np.abs(y[s : s + frame]))) for s in starts])
+    thr = 10.0 ** (SILENCE_DBFS / 20.0)
+    loud = np.nonzero(peaks >= thr)[0]
+    if loud.size == 0:
+        return (None, None, None)
+    lead_ms = float(starts[int(loud[0])]) / float(sr) * 1000.0
+    # The tail gap opens at the END of the last audible frame, not its start.
+    last_end = min(n, int(starts[int(loud[-1])]) + frame)
+    tail_ms = float(n - last_end) / float(sr) * 1000.0
+    tail_start_ms = float(last_end) / float(sr) * 1000.0
+    return (max(0.0, lead_ms), max(0.0, tail_ms), max(0.0, tail_start_ms))
+
+
 def estimate_intro_ms(y, sr, librosa):
     """Rough intro length: the first time the short-term energy rises and stays
     above a fraction of the track's typical loud level — i.e. where the track
@@ -681,6 +740,15 @@ def estimate_sections(y, sr, librosa, chroma=None):
 # so a worker with embeddings DISABLED never needs torch/transformers/onnx and
 # the librosa-only venv keeps working.
 # ---------------------------------------------------------------------------
+def clap_batch_enabled(mode, device):
+    """Only the published CUDA transformers path benefits from window batching.
+
+    CPU torch keeps the old one-window memory envelope, and arbitrary ONNX
+    exports may not have a dynamic batch axis.
+    """
+    return mode == "transformers" and device == "cuda"
+
+
 class ClapEmbedder:
     def __init__(self):
         self.mode = None
@@ -725,41 +793,29 @@ class ClapEmbedder:
             self.mode = "transformers"
             log(f"CLAP transformers model loaded: {hf_id}")
 
-    def embed(self, y48, sr):
+    def _embed_onnx(self, y48, sr):
         import numpy as np
 
-        return_tensors = "np" if self.mode == "onnx" else "pt"
         # transformers renamed the ClapProcessor audio kwarg `audios` → `audio`
         # and turned the old name into a hard error (not just a warning) in
         # recent releases. Try the new name, fall back to the old one so this
         # works against whatever transformers the analyzer venv resolved.
         try:
             inputs = self.processor(
-                audio=y48, sampling_rate=sr, return_tensors=return_tensors
+                audio=y48, sampling_rate=sr, return_tensors="np"
             )
         except (TypeError, ValueError):
             inputs = self.processor(
-                audios=y48, sampling_rate=sr, return_tensors=return_tensors
+                audios=y48, sampling_rate=sr, return_tensors="np"
             )
         feats = inputs["input_features"]
+        feats_np = np.asarray(feats, dtype=np.float32)
+        out = self.session.run(None, {self.input_name: feats_np})
+        return np.asarray(out[0]).reshape(-1)
 
-        if self.mode == "onnx":
-            feats_np = np.asarray(feats, dtype=np.float32)
-            out = self.session.run(None, {self.input_name: feats_np})
-            vec = np.asarray(out[0]).reshape(-1)
-        else:
-            import torch
-
-            feats = feats.to(resolve_device())
-            with torch.no_grad():
-                emb = self.model.get_audio_features(input_features=feats)
-            # transformers ≤4.x returns the projected 512-d audio-features
-            # tensor directly; 5.x returns a BaseModelOutputWithPooling whose
-            # .pooler_output is that same projected embedding. Unwrap the new
-            # shape so this works against whatever the analyzer venv resolved.
-            if hasattr(emb, "pooler_output"):
-                emb = emb.pooler_output
-            vec = emb.cpu().numpy().reshape(-1)
+    @staticmethod
+    def _normalise(vec):
+        import numpy as np
 
         if vec.shape[0] != CLAP_EMBED_DIM:
             raise RuntimeError(
@@ -770,6 +826,65 @@ class ClapEmbedder:
         if norm > 0:
             vec = vec / norm
         return [float(x) for x in vec]
+
+    def _embed_transformers(self, windows, sr):
+        import numpy as np
+        import torch
+
+        audio = list(windows)
+        try:
+            inputs = self.processor(
+                audio=audio, sampling_rate=sr, return_tensors="pt"
+            )
+        except (TypeError, ValueError):
+            inputs = self.processor(
+                audios=audio, sampling_rate=sr, return_tensors="pt"
+            )
+        feats = inputs["input_features"].to(resolve_device())
+        with torch.no_grad():
+            emb = self.model.get_audio_features(input_features=feats)
+        # transformers ≤4.x returns the projected tensor directly; 5.x wraps
+        # it in BaseModelOutputWithPooling.
+        if hasattr(emb, "pooler_output"):
+            emb = emb.pooler_output
+        rows = np.asarray(emb.cpu().numpy())
+        if rows.ndim == 1:
+            rows = rows.reshape(1, -1)
+        if rows.shape[0] != len(audio):
+            raise RuntimeError(
+                f"unexpected CLAP embedding batch {rows.shape[0]} (want {len(audio)})"
+            )
+        return [self._normalise(row) for row in rows]
+
+    def embed_many(self, windows, sr):
+        """Embed one track's windows, batching only the CUDA model forward."""
+        if not windows:
+            return []
+        if self.mode == "onnx":
+            return [self._normalise(self._embed_onnx(window, sr)) for window in windows]
+        if not self.batches_windows():
+            return [self._embed_transformers([window], sr)[0] for window in windows]
+        try:
+            return self._embed_transformers(windows, sr)
+        except Exception as ex:  # noqa: BLE001 - preserve the old memory envelope
+            log(f"CLAP window batch failed ({ex}); retrying sequentially")
+            try:
+                import torch
+
+                torch.cuda.empty_cache()
+            except Exception:  # noqa: BLE001 - cache release is best-effort
+                pass
+            return [self._embed_transformers([window], sr)[0] for window in windows]
+
+    def batches_windows(self):
+        """Whether decoded windows should be retained for one model batch."""
+        return self.mode == "transformers" and clap_batch_enabled(
+            self.mode, resolve_device()
+        )
+
+    def embed(self, y48, sr):
+        """Compatibility surface for callers that genuinely have one window."""
+        return self.embed_many([y48], sr)[0]
 
     def _resolve_text_model(self):
         """The CLAP text tower. In transformers mode it's the loaded ClapModel;
@@ -854,6 +969,8 @@ def embed_windows(embedder, path, librosa, duration_s):
     header-duration probe (0.0 = unknown → leading window only)."""
     import numpy as np
 
+    batch_windows = embedder.batches_windows()
+    windows = []
     vecs = []
     for offset in clap_window_offsets(duration_s, ANALYZE_SECONDS):
         try:
@@ -867,7 +984,17 @@ def embed_windows(embedder, path, librosa, duration_s):
             continue
         if offset > 0 and len(y48) < CLAP_SR * 5:
             continue  # truncated tail of a byte-capped download
-        vecs.append(np.asarray(embedder.embed(y48, CLAP_SR), dtype=np.float64))
+        if batch_windows:
+            windows.append(y48)
+        else:
+            # Preserve the CPU/ONNX one-window memory envelope: decode, embed,
+            # and release each window before moving to the next offset.
+            vecs.append(np.asarray(embedder.embed(y48, CLAP_SR), dtype=np.float64))
+    if batch_windows:
+        vecs = [
+            np.asarray(vec, dtype=np.float64)
+            for vec in embedder.embed_many(windows, CLAP_SR)
+        ]
     if not vecs:
         return None
     mean = np.mean(vecs, axis=0)
@@ -877,20 +1004,35 @@ def embed_windows(embedder, path, librosa, duration_s):
     return [float(x) for x in mean]
 
 
-def analyze_outro(path, librosa, duration_s):
+def analyze_outro(path, librosa, duration_s, complete=None):
     """Tail features for the crossfade seam — the outgoing track's ending is
     what actually decides whether a transition lands. Decodes the last
     OUTRO_SECONDS and returns
       {startMs, ending: 'fade'|'cold', lufs?, bpm?, beats?, bars?}
     with all timestamps ABSOLUTE (offset by the tail's position), or None when
-    the track is too short / the tail decodes short (a truncated file's "tail"
-    is mid-song audio — never emit features measured off the wrong region).
+    the tail decodes short (a truncated file's "tail" is mid-song audio — never
+    emit features measured off the wrong region).
+
+    A track too short for a distinct outro returns only the edge-silence
+    fields, and only when `complete` is True — see the gate below.
     Pure librosa (+ optional pyloudnorm), so this runs on the LEAN tier too."""
     import numpy as np
 
-    if not duration_s or duration_s <= OUTRO_SECONDS + 1.0:
-        return None  # too short to have a distinct outro
-    offset = max(0.0, duration_s - OUTRO_SECONDS)
+    if not duration_s:
+        return None
+    distinct_outro = duration_s > OUTRO_SECONDS + 1.0
+    # The short-track path reads the tail off a decode that starts at ZERO, so
+    # the short-decode backstop below cannot prove completeness the way it does
+    # for a real tail window: there, the seek to duration-20s is itself the
+    # proof (a truncated file cannot reach it), while from offset 0 a file
+    # truncated to 70% decodes 70% and passes. Nothing but the caller's own
+    # completeness flag can settle it, so a short track with an UNKNOWN
+    # completeness is skipped rather than measured mid-song — and skipped
+    # BEFORE the decode, which is also the full-file decode this path would
+    # otherwise pay for on every short track that previously returned here.
+    if not distinct_outro and complete is not True:
+        return None
+    offset = max(0.0, duration_s - OUTRO_SECONDS) if distinct_outro else 0.0
     # Channel-preserving decode for the loudness meter (the tail LUFS must be
     # comparable to the body's stereo loudness_lufs — issue #998); RMS shape
     # and the beat grid work off the mono downmix as before.
@@ -898,8 +1040,23 @@ def analyze_outro(path, librosa, duration_s):
     y = librosa.to_mono(y_src) if y_src is not None else None
     # Validation backstop for an unknown completeness: a truncated file either
     # errors here or decodes well short of the requested tail — skip it.
-    if y is None or len(y) < ANALYZE_SR * OUTRO_SECONDS * 0.6:
+    expected_s = min(OUTRO_SECONDS, duration_s)
+    if y is None or len(y) < ANALYZE_SR * expected_s * 0.6:
         return None
+
+    # A short track has no distinct musical outro to characterize, but a
+    # COMPLETE file still exposes its real tail. Return only that independent
+    # edge measurement; analyze() lifts it to the top-level result and then
+    # discards the empty outro shell.
+    if not distinct_outro:
+        _lead_t, tail_silence_ms, tail_start_ms = silence_edges_ms(y, sr)
+        if tail_silence_ms is None:
+            return None
+        return {
+            "tail_silence_ms": int(round(tail_silence_ms)),
+            # offset is 0.0 here, so the buffer offset IS the file offset.
+            "tail_start_ms": int(round(offset * 1000.0 + tail_start_ms)),
+        }
 
     hop = 512
     rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=hop)[0]
@@ -949,6 +1106,20 @@ def analyze_outro(path, librosa, duration_s):
         log(f"outro beat grid failed: {e}")
 
     out = {"startMs": int(round(wind_start_s * 1000.0)), "ending": ending}
+    # Trailing dead air (absolute floor — see SILENCE_DBFS). Rides this decode
+    # because the tail window is already in memory AND because this function is
+    # the one place a COMPLETE file is proven: a byte-capped download's "tail"
+    # is mid-song, and a cue_out measured off it would cut the song in half.
+    # Lifted to a top-level result field by analyze(), so outro_json never
+    # carries it. A fully-silent tail window reads None and is omitted — the
+    # gap outlasts OUTRO_SECONDS and we cannot see where it begins.
+    _lead_t, tail_silence_ms, tail_start_ms = silence_edges_ms(y, sr)
+    if tail_silence_ms is not None:
+        out["tail_silence_ms"] = int(round(tail_silence_ms))
+        # ABSOLUTE offset of the gap's start, so the controller never has to
+        # reconstruct it as (tagged duration - gap): the tag and the decoded
+        # file disagree often enough to move the cut by the difference.
+        out["tail_start_ms"] = int(round(offset * 1000.0 + tail_start_ms))
     if lufs is not None:
         out["lufs"] = lufs
     if bpm_t is not None:
@@ -1551,7 +1722,10 @@ def measure_loudness(y, sr):
         return None, None
 
 
-def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None, stems_dir=None):
+def analyze(
+    librosa, url=None, path=None, embed=None, vocal=None, complete=None,
+    stems_dir=None, embedding_only=False,
+):
     import numpy as np
 
     # A controller-provided path is pre-fetched onto the shared volume and
@@ -1583,11 +1757,6 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None,
             log(f"duration probe failed ({e})")
             duration_s = 0.0
 
-        # Decode once WITH channels (a mono file still comes back 1-D): the
-        # loudness meter needs real stereo for a correct BS.1770 channel sum
-        # (issue #998); every other feature works off the mono downmix.
-        y_src, sr = load_audio(librosa, path, sr=ANALYZE_SR, mono=False, duration=ANALYZE_SECONDS)
-        y = librosa.to_mono(y_src)
         # CLAP wants 48 kHz mono — decode fresh copies at that rate from the
         # SAME file (still present here, before the finally removes owned
         # temps), windowed across the track (see embed_windows). A model/
@@ -1603,6 +1772,20 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None,
             except Exception as e:  # noqa: BLE001 — embedding is best-effort
                 log(f"audio embedding failed: {e}")
                 audio_embedding = None
+        # A sounds-like backfill over an otherwise-current track needs only the
+        # CLAP vector. Returning here avoids re-running every CPU acoustic
+        # feature (and Demucs via an env default) merely to fill that one column.
+        if embedding_only:
+            return {"audio_embedding": audio_embedding} if audio_embedding is not None else {}
+        # Decode once WITH channels (a mono file still comes back 1-D): the
+        # loudness meter needs real stereo for a correct BS.1770 channel sum
+        # (issue #998); every other baseline feature works off the mono downmix.
+        # This deliberately follows the embedding-only return above: a CLAP
+        # backfill must not pay for the baseline window it will not consume.
+        y_src, sr = load_audio(
+            librosa, path, sr=ANALYZE_SR, mono=False, duration=ANALYZE_SECONDS
+        )
+        y = librosa.to_mono(y_src)
         # Outro (tail) features — only meaningful off a complete file; a
         # byte-capped download's "tail" is mid-song. Best-effort like the rest.
         # With an UNKNOWN completeness (old caller) the original path's
@@ -1612,7 +1795,7 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None,
         # risk measuring mid-song audio as the ending.
         if complete is not False and (complete is True or decoded_tmp is None):
             try:
-                outro = analyze_outro(path, librosa, duration_s)
+                outro = analyze_outro(path, librosa, duration_s, complete)
             except Exception as e:  # noqa: BLE001 — outro is best-effort
                 log(f"outro analysis failed: {e}")
                 outro = None
@@ -1654,7 +1837,7 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None,
         # the outro's beat grid; [] = analysed instrumental tail, mirroring
         # the head semantics. TAIL_VOCAL_MIN_LOUD (see its definition) guards
         # against separation bleed on a fading outro.
-        if detector is not None and outro is not None:
+        if detector is not None and outro is not None and "startMs" in outro:
             try:
                 tail_offset = max(0.0, duration_s - OUTRO_SECONDS)
                 y_tail, _srt = load_audio(
@@ -1724,6 +1907,12 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None,
 
     intro_ms = estimate_intro_ms(y, sr, librosa)
 
+    # Leading dead air, off the SAME decoded head window (free). Absolute
+    # floor, NOT intro_ms's relative one — see SILENCE_DBFS. None when the
+    # whole window reads silent: the gap outlasts ANALYZE_SECONDS and we
+    # cannot see where it ends, so the controller trims nothing.
+    lead_silence_ms, _tail_head, _tail_start_head = silence_edges_ms(y, sr)
+
     # When vocal activity was measured, the start of the first vocal range is a
     # truer intro than the energy heuristic (an instrumental intro is exactly
     # the vocal-free leading region). Prefer it; fall back to the heuristic for
@@ -1755,6 +1944,18 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None,
         "intro_ms": int(intro_ms) if intro_ms is not None else None,
         "confidence": confidence,
     }
+    # Edge dead air. Head rides this pass; the tail is measured inside
+    # analyze_outro (the only place a COMPLETE file is proven) and lifted out
+    # of the outro dict HERE so outro_json never carries it. Omitted when not
+    # measured — absence means "no silence signal, behave as today".
+    if lead_silence_ms is not None:
+        result["lead_silence_ms"] = int(round(lead_silence_ms))
+    if outro is not None and "tail_silence_ms" in outro:
+        result["tail_silence_ms"] = outro.pop("tail_silence_ms")
+        if "tail_start_ms" in outro:
+            result["tail_start_ms"] = outro.pop("tail_start_ms")
+        if not outro:
+            outro = None
     # Only carry loudness fields when measured — absence signals "no loudness
     # this pass", so a worker without pyloudnorm is byte-for-byte today.
     if loudness_lufs is not None:
@@ -1916,6 +2117,7 @@ def main():
                     librosa, url=url, path=path,
                     embed=req.get("embed"), vocal=req.get("vocal"),
                     complete=req.get("complete"), stems_dir=req.get("stems_dir"),
+                    embedding_only=req.get("embedding_only") is True,
                 )
                 # If a getter stamped the clock, this request DID use a model —
                 # re-stamp so the countdown starts from the end of the work, not

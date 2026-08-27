@@ -2,8 +2,12 @@
 // pure helpers that read them. Part of the settings/ split — see ../settings.ts.
 
 import { config } from '../config.js';
+// Pure policy constant — artist-guard.ts imports only music/recency.ts, which
+// imports nothing, so this stays a leaf and can't cycle back through settings.
+import { ARTIST_VARIETY_WINDOW } from '../broadcast/dj-agent/artist-guard.js';
 import {
   BEDS_CROSS_SEC_BOUNDS,
+  SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
   BEDS_THRESHOLD_SEC_BOUNDS,
   CROSSFADE_DURATION_BOUNDS,
   JINGLE_RATIO_BOUNDS,
@@ -67,6 +71,14 @@ export const DEFAULTS = {
     // pulled — no decode, no Navidrome downloads — resuming mid-track on connect.
     idleWhenEmpty: false,
     idleAfterMinutes: 10,
+    // Icecast's <limits><clients> ceiling, applied at broadcast boot. 100 is
+    // the figure the entrypoint has always defaulted to, so an upgrade renders
+    // a byte-identical icecast.xml. An ICECAST_MAX_CLIENTS in the environment
+    // still WINS over this — the var predates the setting and is wired into
+    // every compose file — which is why the entrypoint logs which source it
+    // took. The setting exists for AIO/Unraid, where there is no .env to put
+    // the var in at all.
+    maxListeners: 100,
   },
   // Per-track loudness normalisation (music/mix.ts gainForLoudness), read live at
   // annotate time. maxBoostDb caps the upward direction only, and the boost is
@@ -158,8 +170,9 @@ export const DEFAULTS = {
   djPrompts: [],
   activeDjPromptId: '',
   // Per-station rules (TTS control tags, "spell out numbers", orthography)
-  // appended to EVERY spoken-output prompt — both renderDjPrompt and
-  // agentPersonaPreamble, which the djPrompt template never reaches (#1182).
+  // appended to EVERY spoken-output prompt — renderDjPrompt, agentPersonaPreamble
+  // and the multi-voice cast prompts (castHouseRulesBlock), none of which the
+  // djPrompt template reaches (#1182, #1420).
   djHouseRules: '',
   // Station clock switch. false = the wall clock stays off air: no time of day
   // in links, idents, hand-overs, ad-libs, banter or programme beats, and the
@@ -323,6 +336,12 @@ export const DEFAULTS = {
     // Clamped to library size at use so a small catalogue never fully blocks; 0
     // disables. Listener requests are exempt. See music/recency.ts.
     noRepeatWindow: config.queue.noRepeatWindow,
+    // Artist spacing, in slots: the agent path re-picks when its choice repeats
+    // an artist from the last N slots, not just the one on air. Soft by design —
+    // if the run surfaced nothing fresher the original pick stands, so this
+    // never costs the station a slot. 0 leaves only the back-to-back guard,
+    // which is always on. See broadcast/dj-agent/artist-guard.ts.
+    artistVarietyWindow: ARTIST_VARIETY_WINDOW,
     // Gives the listener-request agent (never the per-track picker) an
     // `identifyRequestedTrack` tool that resolves a DESCRIBED track via web search
     // and matches it locally. Off by default: needs a search provider and costs a
@@ -499,13 +518,33 @@ export const DEFAULTS = {
   // so toggling costs no mixer restart (unlike jingleRatio).
   beds: {
     enabled: false,
+    // Front-pad a LISTENER REQUEST's intro with a bed instead of talking over
+    // the song's opening, regardless of how short the intro is (#1465). Someone
+    // asked for this track, so its first bars belong to them. On by default
+    // WITHIN beds.enabled, which is itself off by default — so a fresh station
+    // is unchanged, and a station already running beds gains this at upgrade.
+    // That second half is a deliberate behaviour change, not an oversight.
+    requestIntros: true,
     // Bed when the DJ's clip runs longer than this. Consulted ONLY where the
     // incoming track's vocal onset is unknown; a measured onset wins. See
-    // bed-policy.rampBudgetMs.
+    // bed-policy.rampBudgetMs. Requests ignore it — see requestIntros.
     thresholdSec: 12,
     // The bed's own exit crossfade — how long the next song takes to ramp in under
     // the DJ's closing words.
     crossSec: 6,
+  },
+  // Dead-air trim — cut near-silent runs off the head/tail of a track so a bad
+  // rip's leading blank or a long mastering gap doesn't air as silence
+  // (music/silence-trim.ts stamps liq_cue_in / liq_cue_out; radio.liq's
+  // cue_cut does the cutting). OFF by default: it acts on a MEASUREMENT, and
+  // an upgrade must sound byte-identical until the operator asks for this.
+  // Controller-side only — no mixer restart.
+  silenceTrim: {
+    enabled: false,
+    // Gaps shorter than this are left alone. A track legitimately opens a beat
+    // after zero, and a segued album's inter-track space is deliberate; only a
+    // gap the listener would call dead air is worth a cue point.
+    minGapMs: 1500,
   },
   // Fire-and-forget station-event POSTs (event list in broadcast/webhooks.ts).
   webhooks: [] as Webhook[],
@@ -559,6 +598,7 @@ export const BOUNDS = {
   // Ceiling from the shared show schema: the strict show validator bounds-checks
   // a show's override against this station figure, so two copies would drift.
   maxTrackSeconds: { min: 0, max: SHOW_MAX_TRACK_SECONDS, type: 'int' },
+  silenceTrimMinGapMs: { ...SILENCE_TRIM_MIN_GAP_MS_BOUNDS, type: 'int' },
   loudnessTargetLufs: { ...LOUDNESS_TARGET_LUFS_BOUNDS, type: 'float' },
   loudnessMaxBoostDb: { ...LOUDNESS_MAX_BOOST_DB_BOUNDS, type: 'float' },
 };

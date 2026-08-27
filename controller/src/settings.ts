@@ -60,6 +60,7 @@ import {
   clampMaxOutputTokens,
   clampDiscoverySteps,
   clampNoRepeatWindow,
+  clampArtistVarietyWindow,
   clampNumCtx,
   clampRepeatPenalty,
   clampTtsGain,
@@ -86,7 +87,7 @@ import {
 } from './settings/defaults.js';
 import { validateCompatParams } from './settings/compat-params.js';
 import { parseSettingsPatchKey } from './settings/patch-registry.js';
-import { STREAM_BUFFER_SECONDS_BOUNDS, maxTrackSecondsValueSchema } from './schemas/settings.js';
+import { STREAM_BUFFER_SECONDS_BOUNDS, STREAM_MAX_LISTENERS_BOUNDS, maxTrackSecondsValueSchema } from './schemas/settings.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
@@ -208,6 +209,7 @@ export {
 export {
   agentLanguageReminder,
   agentPersonaPreamble,
+  castHouseRulesBlock,
   effectiveFrequency,
   effectiveMaxTrackSec,
   effectsActive,
@@ -222,6 +224,7 @@ export {
   resolveActiveShow,
   resolveOnAirLocation,
   resolvePersonaById,
+  spokenProperNounDirective,
 } from './settings/persona.js';
 export { writeLiquidsoapSettings } from './settings/liquidsoap.js';
 export type {
@@ -443,6 +446,16 @@ export async function load() {
         stored.stream.idleAfterMinutes <= 1440
           ? stored.stream.idleAfterMinutes
           : DEFAULTS.stream.idleAfterMinutes,
+      // Same shape and the same shared constant as bufferSeconds above: the
+      // load path must bound against exactly what streamSchema accepts, or a
+      // saved value silently reverts on the next cold start and the handoff
+      // file hands the entrypoint a figure the operator never chose.
+      maxListeners:
+        Number.isInteger(stored.stream?.maxListeners) &&
+        stored.stream.maxListeners >= STREAM_MAX_LISTENERS_BOUNDS.min &&
+        stored.stream.maxListeners <= STREAM_MAX_LISTENERS_BOUNDS.max
+          ? stored.stream.maxListeners
+          : DEFAULTS.stream.maxListeners,
     },
     loudness: {
       targetLufs:
@@ -792,11 +805,18 @@ export async function load() {
       // Clamped to [0, 1000] (≤ the 2500-entry sidecar cap); pre-field
       // settings.json picks up the config/env-seeded default.
       noRepeatWindow: clampNoRepeatWindow(stored.llm?.noRepeatWindow, DEFAULTS.llm.noRepeatWindow),
+      // Clamped to [0, 25]; a settings.json written before the field existed
+      // picks up the shipped default, so an upgrade turns spacing on rather
+      // than silently keeping the on-air-only guard it was filed against.
+      artistVarietyWindow: clampArtistVarietyWindow(
+        stored.llm?.artistVarietyWindow,
+        DEFAULTS.llm.artistVarietyWindow,
+      ),
       requestWebResolve:
         typeof stored.llm?.requestWebResolve === 'boolean'
           ? stored.llm.requestWebResolve
           : DEFAULTS.llm.requestWebResolve,
-      // Clamped to [5s, 180s]; settings.json files from before the field
+      // Clamped to [5s, 300s]; settings.json files from before the field
       // existed pick up the default.
       agentTimeoutMs: clampAgentTimeout(stored.llm?.agentTimeoutMs, DEFAULTS.llm.agentTimeoutMs),
       pauseWhenEmpty:
@@ -958,8 +978,20 @@ export async function load() {
     },
     beds: {
       enabled: typeof stored.beds?.enabled === 'boolean' ? stored.beds.enabled : DEFAULTS.beds.enabled,
+      requestIntros: typeof stored.beds?.requestIntros === 'boolean' ? stored.beds.requestIntros : DEFAULTS.beds.requestIntros,
       thresholdSec: Number.isFinite(stored.beds?.thresholdSec) ? stored.beds.thresholdSec : DEFAULTS.beds.thresholdSec,
       crossSec: Number.isFinite(stored.beds?.crossSec) ? stored.beds.crossSec : DEFAULTS.beds.crossSec,
+    },
+    silenceTrim: {
+      enabled:
+        typeof stored.silenceTrim?.enabled === 'boolean'
+          ? stored.silenceTrim.enabled
+          : DEFAULTS.silenceTrim.enabled,
+      minGapMs: Number.isInteger(stored.silenceTrim?.minGapMs) &&
+        stored.silenceTrim.minGapMs >= BOUNDS.silenceTrimMinGapMs.min &&
+        stored.silenceTrim.minGapMs <= BOUNDS.silenceTrimMinGapMs.max
+        ? stored.silenceTrim.minGapMs
+        : DEFAULTS.silenceTrim.minGapMs,
     },
     webhooks: normalizeWebhooks(stored.webhooks),
     webhooksPolicy: {
@@ -1147,6 +1179,16 @@ export async function update(patch) {
     // because it is not an encoder field and restarts for a different reason.
     if (st.bufferSeconds !== undefined && st.bufferSeconds !== cur.stream.bufferSeconds) {
       next.stream.bufferSeconds = st.bufferSeconds as number;
+      restart = true;
+    }
+    // Concurrent-listener ceiling (Icecast <limits><clients>). Same lifecycle
+    // as bufferSeconds above — icecast.xml, rendered once at container boot —
+    // so the same change-gate and the same restart=true. What differs is that
+    // an ICECAST_MAX_CLIENTS in the broadcast container's environment WINS at
+    // render time, so this save can legitimately be a no-op on air; the
+    // entrypoint logs which source it took and the admin hint says so.
+    if (st.maxListeners !== undefined && st.maxListeners !== cur.stream.maxListeners) {
+      next.stream.maxListeners = st.maxListeners as number;
       restart = true;
     }
     // Idle pause is enforced controller-side over telnet (broadcast/
@@ -1594,6 +1636,11 @@ export async function update(patch) {
     if (l.noRepeatWindow !== undefined) {
       next.llm.noRepeatWindow = clampNoRepeatWindow(Number(l.noRepeatWindow), next.llm.noRepeatWindow);
     }
+    if (l.artistVarietyWindow !== undefined) {
+      next.llm.artistVarietyWindow = clampArtistVarietyWindow(
+        Number(l.artistVarietyWindow), next.llm.artistVarietyWindow,
+      );
+    }
     if (l.requestWebResolve !== undefined) {
       next.llm.requestWebResolve = !!l.requestWebResolve;
     }
@@ -1864,17 +1911,33 @@ export async function update(patch) {
   if ('beds' in patch) {
     const bd = parseSettingsPatchKey<{
       enabled?: boolean;
+      requestIntros?: boolean;
       thresholdSec?: number;
       crossSec?: number;
     }>('beds', patch.beds);
     if (bd.enabled !== undefined) {
       next.beds.enabled = bd.enabled;
     }
+    if (bd.requestIntros !== undefined) {
+      next.beds.requestIntros = bd.requestIntros;
+    }
     if (bd.thresholdSec !== undefined) {
       next.beds.thresholdSec = bd.thresholdSec;
     }
     if (bd.crossSec !== undefined) {
       next.beds.crossSec = bd.crossSec;
+    }
+  }
+  if ('silenceTrim' in patch) {
+    const st = parseSettingsPatchKey<{
+      enabled?: boolean;
+      minGapMs?: number;
+    }>('silenceTrim', patch.silenceTrim);
+    if (st.enabled !== undefined) {
+      next.silenceTrim.enabled = st.enabled;
+    }
+    if (st.minGapMs !== undefined) {
+      next.silenceTrim.minGapMs = st.minGapMs;
     }
   }
   if ('ui' in patch) {

@@ -226,11 +226,6 @@ app.listen(config.server.port, async () => {
   try {
     await settings.load();
     const s = settings.get();
-    config.weather.lat = s.weather.lat;
-    config.weather.lng = s.weather.lng;
-    config.weather.locationName = s.weather.locationName;
-    config.weather.onAirLocation = s.weather.onAirLocation;
-    config.weather.units = s.weather.units;
     await settings.ensureLiquidsoapSettingsFile();
     console.log(
       `[settings] loaded. jingleRatio=${s.jingleRatio} crossfadeDuration=${s.crossfadeDuration} location=${s.weather.locationName} onAir=${settings.resolveOnAirLocation(s)}`,

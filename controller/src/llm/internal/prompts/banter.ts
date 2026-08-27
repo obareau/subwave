@@ -7,6 +7,7 @@
 // can't invent a voice we can't render.
 
 import { z } from 'zod';
+import * as settings from '../../../settings.js';
 import { soulBrief } from '../core/pure.js';
 import { djObject } from '../strategy/object.js';
 import { buildContextLines } from './context.js';
@@ -30,6 +31,28 @@ function castBlock(host: any, guests: any[]): string {
   return [entry(host, 'HOST'), ...guests.map((g: any) => entry(g, 'GUEST'))].join('\n');
 }
 
+// The exchange's system prompt. Exported pure for the same reason as
+// programme.ts's exchangeSystem: the station house rules have to be PROVABLY
+// on this path (issue #1420 — they weren't), and a test that only asserts the
+// block builder exists is exactly the regression it fails to catch.
+export function banterSystem({ host, guests, show = null }: any): string {
+  const showClause = show?.name ? ` of "${show.name}"` : '';
+  const lang = String(host?.language || '').trim() || 'English';
+  const langClause = ` Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective(host)}`;
+  return `You write short on-air exchanges between the hosts${showClause} on a personal internet radio station, mid-show. This is people who know each other talking in one studio: quick, warm, a little loose — real speech, not sketch comedy or a scripted bit.
+
+The cast (persona id — name (role): voice notes):
+${castBlock(host, guests)}
+
+Rules:
+- ${MIN_LINES} to ${MAX_LINES} lines total, at least two different speakers. Let the turn-taking breathe — it doesn't have to alternate mechanically, but nobody monologues.
+- Each speaker stays in THEIR OWN character per the voice notes. The host carries the room; guests chip in as themselves.
+- Ground it in the moment you're given (the track playing, the hour, the show) — react, riff, disagree gently, tease. One thread, not a topic list.
+- This is a conversation, NOT a link: do not introduce, back-announce, or name-drop the next track, do not read a station ident, do not announce the time.
+- No greetings or sign-offs — the show is already rolling. No invented listener messages, callers, or events.
+- Plain spoken words only: no stage directions, no asterisks, no emoji.${langClause}${settings.castHouseRulesBlock()}`;
+}
+
 // Returns air-ready lines [{ persona, text }] in order, or null when the model
 // couldn't produce a usable exchange (fewer than two lines or a single voice
 // throughout — a monologue should go through the normal segment paths, not
@@ -48,23 +71,9 @@ export async function generateBanter({
   });
 
   // The host's on-air language governs the room — co-hosts on one show share
-  // a broadcast language, same rule as the rest of the station.
-  const lang = String(host?.language || '').trim();
-  const langClause = lang ? ` Everyone speaks ${lang} on air; keep proper nouns (artist names, track titles, the station name) untranslated.` : '';
-
-  const showClause = show?.name ? ` of "${show.name}"` : '';
-  const system = `You write short on-air exchanges between the hosts${showClause} on a personal internet radio station, mid-show. This is people who know each other talking in one studio: quick, warm, a little loose — real speech, not sketch comedy or a scripted bit.
-
-The cast (persona id — name (role): voice notes):
-${castBlock(host, guests)}
-
-Rules:
-- ${MIN_LINES} to ${MAX_LINES} lines total, at least two different speakers. Let the turn-taking breathe — it doesn't have to alternate mechanically, but nobody monologues.
-- Each speaker stays in THEIR OWN character per the voice notes. The host carries the room; guests chip in as themselves.
-- Ground it in the moment you're given (the track playing, the hour, the show) — react, riff, disagree gently, tease. One thread, not a topic list.
-- This is a conversation, NOT a link: do not introduce, back-announce, or name-drop the next track, do not read a station ident, do not announce the time.
-- No greetings or sign-offs — the show is already rolling. No invented listener messages, callers, or events.
-- Plain spoken words only: no stage directions, no asterisks, no emoji.${langClause}`;
+  // a broadcast language, same rule as the rest of the station. banterSystem
+  // owns the language and spoken-name policy so pure prompt tests cover it.
+  const system = banterSystem({ host, guests, show });
 
   const ctxLines = buildContextLines(context, { contextFields: BANTER_CONTEXT_FIELDS });
   if (current?.title) ctxLines.push(`On air right now: "${current.title}" by ${current.artist || 'unknown'}`);

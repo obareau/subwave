@@ -21,7 +21,12 @@ import { runAudioMoodPass } from './audio-moods.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { quietGateDecision, type QuietState } from './analyze-quiet-pure.js';
-import { backfillDecision, failureCountsAgainstTrack, SYSTEMIC_FAILURE_RUN } from './analyze-capability.js';
+import {
+  analysisModeForTrack,
+  backfillDecision,
+  failureCountsAgainstTrack,
+  SYSTEMIC_FAILURE_RUN,
+} from './analyze-capability.js';
 import { probeListenerCount } from '../broadcast/listeners.js';
 
 // Structured status events for the panel, mirrored to the terse `[analyze] …`
@@ -286,8 +291,8 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   // Audio backfill: also target already-analysed tracks lacking a CLAP vector,
   // so enabling embeddings on an analysed library fills in without a full
-  // --re-analyze. Re-running recomputes bpm/key (same values, harmless) and
-  // stores the vector from the same call.
+  // --re-analyze. Tracks selected only by this widening skip the already-current
+  // baseline features and ask the worker for their CLAP vector alone.
   //
   // Two gates, both narrow. NOT under a fixed re-scan scope: that already covers
   // the previously-analysed set and re-embeds via embed:true, so widening would
@@ -421,6 +426,14 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     logEvent(analyzer.vocalActivityError() ? 'warning' : 'info', stemDecision.notice);
   }
 
+  // Only ids pulled in solely by the CLAP widening may take the fast path. A
+  // baseline/re-analysis id needs every acoustic feature. Vocal and stem work
+  // currently applies to every id in its pass, so those runs stay full too.
+  const fullAnalysisIds = new Set(bpmIds);
+  if (vocalBackfill || stemCache) {
+    for (const id of ids) fullAnalysisIds.add(id);
+  }
+
   // Say how many tracks the scope is deliberately leaving out. Silence here is
   // what made the old behaviour so confusing in reverse: "all tracks current"
   // is true of a library with 90 files that can never be analysed, and reads as
@@ -516,6 +529,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     // doesn't keep pulling audio for a queue it isn't going to compute yet.
     await waitForQuiet(quietGate, { done: i, total: ids.length });
     const id = ids[i];
+    const embeddingOnly = analysisModeForTrack(id, fullAnalysisIds, audioBackfill) === 'embedding-only';
     const downloadPromise = inflight;
     // Kick off the NEXT download before awaiting this one's analysis so the
     // fetch overlaps the compute.
@@ -589,76 +603,92 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       // Lyrics still override the stored ranges below either way.
       const vocal = vocalBackfill ? (lyricVocal && !stems_dir ? false : true) : undefined;
       const a = localPath
-        ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete, stems_dir })
-        : await analyzer.analyze(id, { embed, vocal, stems_dir });
-      // Lyrics win over the worker's vocal output when present: the ranges are
-      // ground truth, and a synced onset is a truer intro than the energy
-      // heuristic the worker returns once Demucs is skipped. An instrumental
-      // marker (introMs null) keeps the energy-based intro.
-      const vocalRanges = lyricVocal ? lyricVocal.vocalRanges : a.vocalRanges;
-      // Tail ranges for lyric-decided tracks (feature: vocal-aware
-      // transitions): vocal:false above skips the worker's tail Demucs pass,
-      // so a.outro comes back with NO vocalRanges — and without a fill here
-      // the sung tracks the feature exists for never get tail data
-      // (mix.vocalTailFor stays null) while the tail-widened backfill
-      // re-targets them on every pass, forever — the same churn class as the
-      // "275/7093" report. Lyrics are tail ground truth exactly as they are
-      // for the head: clip the whole-track ranges into the outro window
-      // (20s mirrors the worker's ANALYZE_OUTRO_SECONDS default; the
-      // wind-down start bounds it when the tagged duration is unknown).
-      // Lyric-decided ⇒ override, matching vocalRanges above — a
-      // stems-forced Demucs tail is still trumped by synced timing.
-      let outro = a.outro;
-      if (lyricVocal && outro) {
-        const durMs = (Number(db.getTrack(id)?.durationSec) || 0) * 1000;
-        const windowStartMs = durMs > 0 ? Math.min(outro.startMs, durMs - 20_000) : outro.startMs;
-        outro = {
-          ...outro,
-          vocalRanges: clipRangesToTail(lyricVocal.vocalRanges, windowStartMs, durMs > 0 ? durMs : null),
-        };
-      }
-      db.upsertTrackAnalysis(id, {
-        bpm: a.bpm,
-        musicalKey: a.musicalKey,
-        introMs: lyricVocal?.introMs != null ? lyricVocal.introMs : a.introMs,
-        confidence: a.confidence,
-        loudnessLufs: a.loudnessLufs,
-        peakDb: a.peakDb,
-        sections: a.sections,
-        pace: a.paceCurve,
-        beats: a.beats,
-        bars: a.bars,
-        keyRanges: a.keyRanges,
-        vocalRanges,
-        outro,
-        // Stamp the stem attempt whenever the worker actually reached the
-        // stem-writing step — true (written) OR false (the write failed for
-        // this track). Both are settled outcomes, and stamping the miss is
-        // what stops a track that can never produce stems from being
-        // re-targeted on every pass forever. null means the worker never got
-        // that far (no stems_dir requested, or no Demucs), so the track stays
-        // in scope for a later, better-equipped pass.
-        stemsAttempted: a.stemsCached !== null,
-      });
-      if (vocalRanges != null) vocalAnalyzed += 1;
-      // Stuck-case telemetry (vocal-aware transitions): a vocal pass that
-      // produced head ranges but NO outro (incomplete download — the file
-      // grew past ANALYZE_MAX_BYTES since its outro was stored) can't write
-      // tail vocal data, and the upsert's COALESCE keeps the old tail-missing
-      // outro — so the widened backfill will re-target this track every pass.
-      // Say so instead of churning silently. Lyric-decided tracks hit the
-      // same wall (no outro → nothing for the lyric fill above to clip into);
-      // otherwise keyed off the WORKER's ranges, not the lyric-resolved ones:
-      // it's the Demucs tail pass that's stuck.
-      if (a.outro == null && (lyricVocal != null || (vocal && a.vocalRanges != null))) {
-        const prior = db.getTrack(id);
-        if (prior?.outro && prior.outro.vocalRanges == null) {
-          console.log(`[analyze] ${id}: tail vocals not computable (incomplete download; stored outro predates tail detection) — stays in the vocal backfill scope`);
+        ? await analyzer.analyzePathWithUrlFallback(id, localPath, {
+            embed,
+            vocal,
+            complete: localComplete,
+            stems_dir,
+            embedding_only: embeddingOnly || undefined,
+          })
+        : await analyzer.analyze(id, {
+            embed,
+            vocal,
+            stems_dir,
+            embedding_only: embeddingOnly || undefined,
+          });
+      if (!embeddingOnly) {
+        // Lyrics win over the worker's vocal output when present: the ranges are
+        // ground truth, and a synced onset is a truer intro than the energy
+        // heuristic the worker returns once Demucs is skipped. An instrumental
+        // marker (introMs null) keeps the energy-based intro.
+        const vocalRanges = lyricVocal ? lyricVocal.vocalRanges : a.vocalRanges;
+        // Tail ranges for lyric-decided tracks (feature: vocal-aware
+        // transitions): vocal:false above skips the worker's tail Demucs pass,
+        // so a.outro comes back with NO vocalRanges — and without a fill here
+        // the sung tracks the feature exists for never get tail data
+        // (mix.vocalTailFor stays null) while the tail-widened backfill
+        // re-targets them on every pass, forever — the same churn class as the
+        // "275/7093" report. Lyrics are tail ground truth exactly as they are
+        // for the head: clip the whole-track ranges into the outro window
+        // (20s mirrors the worker's ANALYZE_OUTRO_SECONDS default; the
+        // wind-down start bounds it when the tagged duration is unknown).
+        // Lyric-decided ⇒ override, matching vocalRanges above — a
+        // stems-forced Demucs tail is still trumped by synced timing.
+        let outro = a.outro;
+        if (lyricVocal && outro) {
+          const durMs = (Number(db.getTrack(id)?.durationSec) || 0) * 1000;
+          const windowStartMs = durMs > 0 ? Math.min(outro.startMs, durMs - 20_000) : outro.startMs;
+          outro = {
+            ...outro,
+            vocalRanges: clipRangesToTail(lyricVocal.vocalRanges, windowStartMs, durMs > 0 ? durMs : null),
+          };
+        }
+        db.upsertTrackAnalysis(id, {
+          bpm: a.bpm,
+          musicalKey: a.musicalKey,
+          introMs: lyricVocal?.introMs != null ? lyricVocal.introMs : a.introMs,
+          confidence: a.confidence,
+          loudnessLufs: a.loudnessLufs,
+          peakDb: a.peakDb,
+          sections: a.sections,
+          pace: a.paceCurve,
+          beats: a.beats,
+          bars: a.bars,
+          keyRanges: a.keyRanges,
+          vocalRanges,
+          outro,
+          leadSilenceMs: a.leadSilenceMs,
+          tailSilenceMs: a.tailSilenceMs,
+          tailStartMs: a.tailStartMs,
+          // Stamp the stem attempt whenever the worker actually reached the
+          // stem-writing step — true (written) OR false (the write failed for
+          // this track). Both are settled outcomes, and stamping the miss is
+          // what stops a track that can never produce stems from being
+          // re-targeted on every pass forever. null means the worker never got
+          // that far (no stems_dir requested, or no Demucs), so the track stays
+          // in scope for a later, better-equipped pass.
+          stemsAttempted: a.stemsCached !== null,
+        });
+        if (vocalRanges != null) vocalAnalyzed += 1;
+        // Stuck-case telemetry (vocal-aware transitions): a vocal pass that
+        // produced head ranges but NO outro (incomplete download — the file
+        // grew past ANALYZE_MAX_BYTES since its outro was stored) can't write
+        // tail vocal data, and the upsert's COALESCE keeps the old tail-missing
+        // outro — so the widened backfill will re-target this track every pass.
+        // Say so instead of churning silently. Lyric-decided tracks hit the
+        // same wall (no outro → nothing for the lyric fill above to clip into);
+        // otherwise keyed off the WORKER's ranges, not the lyric-resolved ones:
+        // it's the Demucs tail pass that's stuck.
+        if (a.outro == null && (lyricVocal != null || (vocal && a.vocalRanges != null))) {
+          const prior = db.getTrack(id);
+          if (prior?.outro && prior.outro.vocalRanges == null) {
+            console.log(`[analyze] ${id}: tail vocals not computable (incomplete download; stored outro predates tail detection) — stays in the vocal backfill scope`);
+          }
         }
       }
       // Opportunistically store the CLAP audio vector whenever the backend
-      // carried one. Independent of the bpm/key write above: a track analysed
-      // before CLAP was enabled simply gets its vector on the next pass once
+      // carried one. Independent of the baseline write above: a track analysed
+      // before CLAP was enabled can take the embedding-only path once
       // unanalysedAudioIds re-targets it. The first vector written stamps the
       // audio-embedding provenance row.
       if (a.audioEmbedding && a.audioEmbedding.length === db.AUDIO_EMBEDDING_DIM) {

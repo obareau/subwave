@@ -21,7 +21,6 @@ import * as piper from '../../audio/piper.js';
 import * as llmProvider from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
-import { invalidateWeatherCache } from '../../context.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
@@ -105,6 +104,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         archive: s.archive,
         stream: s.stream,
         loudness: s.loudness,
+        silenceTrim: s.silenceTrim,
         station: s.station,
         stationDescription: s.stationDescription,
         timezone: s.timezone,
@@ -227,18 +227,10 @@ router.get('/settings', requireAdmin, async (req, res) => {
 router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) => {
   try {
     const result = await settings.update(req.body || {});
-    // Apply live: weather location flows through config.weather to context.js
+    // context.ts reads the live settings cache and keys its forecast cache by
+    // this block, so every settings.update() writer applies immediately — the
+    // route only owns the operator-facing log.
     if ('weather' in (req.body || {})) {
-      config.weather.lat = result.saved.weather.lat;
-      config.weather.lng = result.saved.weather.lng;
-      config.weather.locationName = result.saved.weather.locationName;
-      config.weather.onAirLocation = result.saved.weather.onAirLocation;
-      config.weather.units = result.saved.weather.units;
-      // Not optional for onAirLocation: getWeather() bakes the attributed
-      // location into its cached result, so without this the DJ keeps naming
-      // the old place — and /now-playing keeps publishing it — for a full
-      // cache TTL after the operator changes it.
-      invalidateWeatherCache();
       queue.log(
         'scheduler',
         `weather location → ${result.saved.weather.locationName} (${result.saved.weather.units}) · on air → ${settings.resolveOnAirLocation(result.saved)}`,
@@ -377,5 +369,4 @@ router.post('/settings/navidrome/test', requireAdmin, async (req, res) => {
   }
   res.json(await subsonic.pingWith({ url, user, pass, client: 'sub-wave-admin' }));
 });
-
 

@@ -171,6 +171,12 @@ is exactly what the web-search skill did when a search came back empty
 `{ available: false }` merely means "no external item this time" — that is what
 the built-in `curiosity` does.
 
+On the autonomous pool-mode tick, grounded `{ available: false }` results are
+skipped before the LLM call and logged with the selected skill. The scheduler
+then backs that skill off in memory for the shorter of its configured cooldown
+or 15 minutes, so an empty source does not consume retrieval work again on the
+next five-minute tick. Successful-air cooldowns remain separate.
+
 So a cron suits a skill that is worth hearing at a fixed moment every time — a
 morning bulletin, a sign-off, a running joke tied to a particular hour. It still
 suits a skill that speaks *only when something is notable* less well: it fires

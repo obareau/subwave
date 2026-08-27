@@ -39,9 +39,13 @@ import {
   AudioLines,
   Waves,
   Mic,
+  Braces,
+  Boxes,
+  Webhook,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
+import AdminQueryProvider from './AdminQueryProvider';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import NavidromeBanner from './NavidromeBanner';
@@ -195,7 +199,23 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: 'System',
     items: [
-      { href: '/admin/connect', id: 'connect', label: 'Connect', icon: Plug },
+      // Three separate "where is the stream URL?" reports (#1300, #1485) landed
+      // while /admin/connect already served exactly that, on its third tab,
+      // behind a nav label that never says so. The panel was never the problem;
+      // the two words in the rail were. Expanding its tabs as children puts the
+      // literal phrase "Stream URLs" in the sidebar, and that tab now leads.
+      {
+        href: '/admin/connect',
+        id: 'connect',
+        label: 'Connect',
+        icon: Plug,
+        children: [
+          { href: '/admin/connect?tab=integrations', id: 'connect-integrations', label: 'Stream URLs', icon: Radio, tab: 'integrations', defaultTab: true },
+          { href: '/admin/connect?tab=endpoints', id: 'connect-endpoints', label: 'API', icon: Braces, tab: 'endpoints' },
+          { href: '/admin/connect?tab=mcp', id: 'connect-mcp', label: 'MCP', icon: Boxes, tab: 'mcp' },
+          { href: '/admin/connect?tab=webhooks', id: 'connect-webhooks', label: 'Webhooks', icon: Webhook, tab: 'webhooks' },
+        ],
+      },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
@@ -268,27 +288,12 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
     [signIn, pathname, router],
   );
 
-  // Probe an admin endpoint on first paint so a revoked token surfaces the
-  // sign-in form proactively.
-  useEffect(() => {
-    if (!hydrated || !auth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        await adminFetch('/settings');
-      } catch {}
-      if (cancelled) return;
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [hydrated, auth, adminFetch]);
-
   // First-run redirect into the wizard. Public endpoint, no auth needed.
   useEffect(() => {
     if (!hydrated) return;
     if (pathname?.startsWith('/onboarding')) return;
     const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
+    // admin-query-imperative: first-run-redirect
     fetch(`${API}/onboarding/status`)
       .then(r => (r.ok ? r.json() : null))
       .then((j: { needsSetup?: boolean } | null) => {
@@ -317,40 +322,42 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   }
 
   return (
-    <div className="admin-root paper">
-      {/* Narrower than the shadcn 16rem default — the nav is short labels. */}
-      <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>
-        <AdminSidebar pathname={pathname} onSignOut={signOut} />
-        <SidebarInset className="min-w-0 bg-transparent">
-          <TopBar pathname={pathname} />
-          <NavidromeBanner adminFetch={adminFetch} onStatus={setNavidromeOk} />
-          <MusicStarvedBanner adminFetch={adminFetch} suppressed={!navidromeOk} />
-          <div
-            className={
-              fullBleed
-                ? 'flex w-full min-w-0 flex-1 flex-col'
-                : 'mx-auto w-full max-w-[1440px] min-w-0 px-6 py-6'
-            }
-          >
-            {/* No y translate — vertical drift feels twitchy on a list of panels. */}
-            <AnimatePresence mode="wait" initial={false}>
-              <m.div
-                key={pathname}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.12 }}
-                className={fullBleed ? 'flex min-h-full flex-1 flex-col' : undefined}
-              >
-                {children}
-              </m.div>
-            </AnimatePresence>
-          </div>
-        </SidebarInset>
-      </SidebarProvider>
-      <AdminCommandMenu />
-      {/* Toaster is mounted once at the app shell (app/layout.tsx). */}
-    </div>
+    <AdminQueryProvider key={auth}>
+      <div className="admin-root paper">
+        {/* Narrower than the shadcn 16rem default — the nav is short labels. */}
+        <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>
+          <AdminSidebar pathname={pathname} onSignOut={signOut} adminFetch={adminFetch} />
+          <SidebarInset className="min-w-0 bg-transparent">
+            <TopBar pathname={pathname} />
+            <NavidromeBanner adminFetch={adminFetch} onStatus={setNavidromeOk} />
+            <MusicStarvedBanner adminFetch={adminFetch} suppressed={!navidromeOk} />
+            <div
+              className={
+                fullBleed
+                  ? 'flex w-full min-w-0 flex-1 flex-col'
+                  : 'mx-auto w-full max-w-[1440px] min-w-0 px-6 py-6'
+              }
+            >
+              {/* No y translate — vertical drift feels twitchy on a list of panels. */}
+              <AnimatePresence mode="wait" initial={false}>
+                <m.div
+                  key={pathname}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className={fullBleed ? 'flex min-h-full flex-1 flex-col' : undefined}
+                >
+                  {children}
+                </m.div>
+              </AnimatePresence>
+            </div>
+          </SidebarInset>
+        </SidebarProvider>
+        <AdminCommandMenu />
+        {/* Toaster is mounted once at the app shell (app/layout.tsx). */}
+      </div>
+    </AdminQueryProvider>
   );
 }
 
@@ -413,9 +420,11 @@ function AdminCommandMenu() {
 function AdminSidebar({
   pathname,
   onSignOut,
+  adminFetch,
 }: {
   pathname: string | null;
   onSignOut: () => void;
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }) {
   const { setOpenMobile, isMobile } = useSidebar();
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
@@ -440,7 +449,7 @@ function AdminSidebar({
           </span>
         </Link>
         <span className="caption px-1 group-data-[collapsible=icon]:hidden">control center</span>
-        <StationSwitcher onNavigate={closeOnMobileNav} />
+        <StationSwitcher adminFetch={adminFetch} onNavigate={closeOnMobileNav} />
       </SidebarHeader>
 
       <SidebarContent className="gap-4 px-2 py-1">
@@ -537,7 +546,7 @@ function AdminSidebar({
         </SidebarMenu>
 
         {process.env.NEXT_PUBLIC_APP_VERSION ? (
-          <div className="border-t border-dashed border-[var(--separator-strong)] px-1 pt-3 text-[10px] tracking-[0.18em] text-muted uppercase group-data-[collapsible=icon]:hidden">
+          <div className="border-t border-dashed border-[var(--separator-strong)] px-1 pt-1.5 text-[10px] tracking-[0.18em] text-muted uppercase group-data-[collapsible=icon]:hidden">
             v{process.env.NEXT_PUBLIC_APP_VERSION}
           </div>
         ) : null}
@@ -827,4 +836,3 @@ function SignedOutHeader() {
     </header>
   );
 }
-

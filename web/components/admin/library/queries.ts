@@ -1,8 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
-import { errorMessage, notify } from '../../../lib/notify';
 import type { BlockRef, Energy, LikedSort, SearchMode, Sort, TagEvent, Track, Vocal } from './types';
 
 // The query-key factory and the cache-wide row operations. Deliberately imports
@@ -32,12 +30,15 @@ export const libraryKeys = {
   likedAll: ['library', 'rows', 'liked'] as const,
   history: (page: number) => ['library', 'history', page] as const,
   blocked: () => ['library', 'blocked'] as const,
+  blockRules: () => ['library', 'block-rules'] as const,
   likeIndex: () => ['library', 'likeIndex'] as const,
   coverage: () => ['library', 'coverage'] as const,
   tagger: () => ['library', 'tagger'] as const,
-  settings: () => ['library', 'settings'] as const,
+  analysisFailures: () => ['library', 'analysis-failures'] as const,
+  moodVocab: () => ['library', 'mood-vocab'] as const,
   genres: () => ['library', 'genres'] as const,
   playlists: () => ['library', 'playlists'] as const,
+  rulePlaylists: () => ['library', 'rule-playlists'] as const,
 };
 
 /**
@@ -48,19 +49,6 @@ export const libraryKeys = {
  * (coverage, tagger, settings, likeIndex) pass enabled=false. A global
  * QueryCache onError would toast all of them.
  */
-export function useQueryErrorToast(error: unknown, enabled: boolean): void {
-  const lastRef = useRef<string | null>(null);
-  useEffect(() => {
-    // Resetting on a cleared error is load-bearing: without it a
-    // failure → success → same failure sequence toasts only once.
-    if (!enabled || !error) { lastRef.current = null; return; }
-    const msg = errorMessage(error);
-    if (lastRef.current === msg) return;
-    lastRef.current = msg;
-    notify.err(msg);
-  }, [error, enabled]);
-}
-
 // --- cross-list cache patching ----------------------------------------------
 // The three shapes below are the whole contract between the row lists and the
 // operations that reach across them. All three are real and all three must be
@@ -111,6 +99,26 @@ export function patchAllRows(qc: QueryClient, fn: (t: Track) => Track) {
  */
 export function applyBlockMarks(qc: QueryClient, marks: Record<string, BlockRef | null>) {
   patchAllRows(qc, t => (t.id in marks ? { ...t, blockedBy: marks[t.id] } : t));
+}
+
+/**
+ * A manual era-year override landed (#1418). The endpoint returns every track
+ * id it actually updated, so cache targeting uses those ids rather than album
+ * titles — album titles are not identities, and unrelated artists commonly
+ * publish namesakes. `originalYear: null` is the CLEAR: the source goes back to
+ * null too, which returns the row to "the file's own year" in eraSourceNote.
+ */
+export function applyEraYearEvent(qc: QueryClient, ev: {
+  originalYear: number | null;
+  trackIds: string[];
+}) {
+  const trackIds = new Set(ev.trackIds);
+
+  patchAllRows(qc, r => (!trackIds.has(r.id) ? r : {
+    ...r,
+    originalYear: ev.originalYear,
+    originalYearSource: ev.originalYear == null ? null : 'manual',
+  }));
 }
 
 /**

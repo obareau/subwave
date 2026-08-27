@@ -85,6 +85,50 @@ bootstrap_state_dirs() {
     return 0
 }
 
+# Listener buffer depth comes only from the controller-written handoff. An env
+# override would change Icecast's real burst without changing /now-playing or
+# voice-event timing, putting every listener-facing clock on the wrong offset.
+read_state_num() {
+    # $1 = filename, $2 = fallback. Non-numeric or missing → fallback.
+    _v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)
+    case "$_v" in
+        ''|*[!0-9]*) echo "$2" ;;
+        *) echo "$_v" ;;
+    esac
+}
+
+stream_buffer_seconds() {
+    read_state_num liquidsoap_stream_buffer_seconds.txt 22
+}
+
+# Concurrent-listener ceiling (Icecast <limits><clients>). Two sources, and the
+# ENV one WINS: ICECAST_MAX_CLIENTS shipped long before the setting and is wired
+# into all three compose files, so demoting it would silently change a
+# configured station on upgrade. The setting
+# (stream.maxListeners -> liquidsoap_icecast_max_clients.txt) is what reaches
+# AIO/Unraid, where there is no .env to put the var in at all.
+#
+# Echoes "<value> <source>" so the caller can LOG which source won. An operator
+# editing the admin field on a station whose .env pins the var otherwise sees
+# the number save and nothing happen.
+#
+# A non-numeric or zero value would render a station nobody can tune into (or
+# invalid XML), so either source falls back to 100 rather than failing icecast
+# at boot. docker/aio/supervisor.sh carries the same function; both are driven
+# from one table by scripts/max-listeners.test.ts.
+resolve_max_clients() {
+    _src=ICECAST_MAX_CLIENTS
+    _v="${ICECAST_MAX_CLIENTS:-}"
+    if [ -z "$_v" ]; then
+        _src=settings
+        _v=$(read_state_num liquidsoap_icecast_max_clients.txt 100)
+    fi
+    case "$_v" in
+        *[!0-9]*|''|0) echo "100 fallback:$_v@$_src" ;;
+        *) echo "$_v $_src" ;;
+    esac
+}
+
 # Sourcing with SUBWAVE_BROADCAST_LIB=1 defines the helpers above WITHOUT
 # booting a station, so scripts/state-bootstrap.test.ts can drive them.
 if [ "${SUBWAVE_BROADCAST_LIB:-}" = "1" ]; then
@@ -171,32 +215,19 @@ export ICECAST_HOST=localhost
 # Substitution is plain sed with `|` delimiters — the secrets are hex and every
 # other value numeric, so there's no escaping risk.
 
-# Concurrent-listener ceiling. A non-numeric value would render invalid XML and
-# fail icecast at boot, so fall back to 100 with a warning instead.
-ICECAST_MAX_CLIENTS="${ICECAST_MAX_CLIENTS:-100}"
-case "$ICECAST_MAX_CLIENTS" in
-    *[!0-9]*|'')
-        echo "broadcast: ICECAST_MAX_CLIENTS='$ICECAST_MAX_CLIENTS' is not a number — using 100" >&2
-        ICECAST_MAX_CLIENTS=100
-        ;;
-esac
+# Concurrent-listener ceiling — see resolve_max_clients above for the two
+# sources and why env wins.
+MAX_CLIENTS_LINE="$(resolve_max_clients)"
+ICECAST_MAX_CLIENTS="${MAX_CLIENTS_LINE%% *}"
+echo "broadcast: max listeners $ICECAST_MAX_CLIENTS (from ${MAX_CLIENTS_LINE#* })" >&2
 
 # Listener buffer depth (<burst-size>, #993/#1114). Sized in SECONDS and
 # converted per bitrate here, because burst-size is a byte count — a fixed one
 # means wildly different depths per mount (512 KB is ~22s at 192k, ~66s at
-# 64k). Env override > controller-written settings files > default; read from
-# state so a settings change applies on the next bounce.
-read_state_num() {
-    # $1 = filename, $2 = fallback. Non-numeric or missing → fallback.
-    _v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)
-    case "$_v" in
-        ''|*[!0-9]*) echo "$2" ;;
-        *) echo "$_v" ;;
-    esac
-}
-
+# 64k). Read from controller-written state so the real and advertised depths
+# stay identical; a settings change applies on the next container bounce.
 STREAM_BITRATE="${ICECAST_STREAM_BITRATE:-$(read_state_num liquidsoap_stream_bitrate.txt 192)}"
-BUFFER_SECONDS="${ICECAST_BUFFER_SECONDS:-$(read_state_num liquidsoap_stream_buffer_seconds.txt 22)}"
+BUFFER_SECONDS="$(stream_buffer_seconds)"
 case "$STREAM_BITRATE" in *[!0-9]*|'') STREAM_BITRATE=192 ;; esac
 case "$BUFFER_SECONDS" in *[!0-9]*|'') BUFFER_SECONDS=22 ;; esac
 [ "$BUFFER_SECONDS" -gt 60 ] && BUFFER_SECONDS=60

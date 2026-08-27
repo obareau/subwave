@@ -146,8 +146,11 @@ ANALYZER_HEAVY=1`}</CodeBlock>
         <p className="bs-eyebrow">ON AN NVIDIA GPU</p>
         <h2>The CUDA flavour — same features, much faster.</h2>
         <p>
-          Hosts with an NVIDIA card can run the heavy stack on the GPU instead of pinning
-          CPU cores, a big speed-up on deep library ingestion. It&rsquo;s a compose{' '}
+          Hosts with an NVIDIA card can run CLAP and Demucs on the GPU, a big speed-up on
+          deep library ingestion. Decode, resampling, and the baseline acoustic features
+          still use the CPU; CUDA accelerates the model stages rather than replacing the
+          whole analyzer. Sounds-like backfills skip already-current baseline features and
+          batch each track&rsquo;s CLAP windows into one CUDA model call. It&rsquo;s a compose{' '}
           <em>overlay</em>, not an <code className="bs-code-inline">.env</code> toggle (a
           GPU reservation can&rsquo;t be switched from <code className="bs-code-inline">.env</code>):
         </p>

@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict';
 import { artistKey, artistRootKey, filterPickerCandidates } from '../src/music/recency.js';
-import { ARTIST_VARIETY_WINDOW, alternativeCandidates } from '../src/broadcast/dj-agent/artist-guard.js';
+import { ARTIST_VARIETY_WINDOW, alternativeCandidates, artistGuardCause } from '../src/broadcast/dj-agent/artist-guard.js';
 import { queue } from '../src/broadcast/queue.js';
 
 // ── artistRootKey: collaborations collapse, band names don't ────────────────
@@ -42,11 +42,121 @@ const intact = [
   'Bob Marley & The Wailers',
   'Florence + the Machine',
   'Booker T. & the M.G.\'s',
-  'The Clash',
   'AC/DC',
 ];
 for (const raw of intact) {
   assert.equal(artistRootKey(raw), raw.toLowerCase().trim(), `"${raw}" must keep its whole name`);
+}
+
+// ── name variants of ONE act collapse together (#1406) ─────────────────────
+
+// The reported bypass: "The Jimi Hendrix Experience" straight into "Jimi
+// Hendrix" — two tags for one artist, so the guard never fired.
+const variants: [string, string][] = [
+  ['The Jimi Hendrix Experience', 'jimi hendrix'],
+  ['Jimi Hendrix', 'jimi hendrix'],
+  ['The Clash', 'clash'],
+  ['Clash', 'clash'],
+  ['Glenn Miller Orchestra', 'glenn miller'],
+  ['Dave Matthews Band', 'dave matthews'],
+  ['The Bill Evans Trio', 'bill evans'],
+  // Curly vs straight apostrophe — the same act off two different rippers.
+  ['Guns N\u2019 Roses', "guns n' roses"],
+  ["Guns N' Roses", "guns n' roses"],
+  // Whitespace runs are noise, not identity.
+  ['The   Jimi  Hendrix   Experience', 'jimi hendrix'],
+];
+for (const [raw, want] of variants) {
+  assert.equal(artistRootKey(raw), want, `"${raw}" \u2192 "${want}"`);
+}
+
+// An ensemble word can be part of an act's real name rather than a removable
+// credit. Generic suffix stripping turns these unrelated pairs into the same
+// hard-block key, so the fallback rescue can discard a legitimate alternative.
+const distinctEnsembleNames: [string, string, string][] = [
+  ['The Beta Band', 'beta band', 'Beta'],
+  ['Manchester Orchestra', 'manchester orchestra', 'Manchester'],
+  ['Unknown Mortal Orchestra', 'unknown mortal orchestra', 'Unknown Mortal'],
+  ['Kronos Quartet', 'kronos quartet', 'Kronos'],
+];
+for (const [raw, want, unrelated] of distinctEnsembleNames) {
+  assert.equal(artistRootKey(raw), want, `"${raw}" must keep its complete act name`);
+  assert.notEqual(
+    artistRootKey(raw),
+    artistRootKey(unrelated),
+    `"${raw}" and "${unrelated}" are unrelated artists`,
+  );
+}
+
+const betaRescuePool = [
+  { id: 'beta', title: 'A Different Track', artist: 'Beta' },
+];
+assert.deepEqual(
+  filterPickerCandidates(betaRescuePool, {
+    blockedArtists: new Set([artistRootKey('The Beta Band')]),
+  }).map((song) => song.id),
+  ['beta'],
+  'a hard rescue block for The Beta Band must not discard Beta',
+);
+
+// Normalisation must never empty a key — an empty root matches nothing and
+// would silently switch the guard off for that artist.
+assert.equal(artistRootKey('The Band'), 'band', 'an act that is ONLY a suffix keeps it');
+assert.equal(artistRootKey('The The'), 'the', 'an act that is ONLY an article keeps it');
+assert.equal(artistRootKey('Orchestra'), 'orchestra', 'a bare suffix is a name, not a suffix');
+
+// The article strip runs AFTER the join, so the join's "the ..." exception —
+// the thing keeping half the Motown bench off a first name — still sees the
+// tail it was written for.
+assert.equal(
+  artistRootKey('Sly & the Family Stone'),
+  'sly & the family stone',
+  'the article strip must not reach a band name through the join exception',
+);
+
+// ── artistGuardCause: when does the guard fire ─────────────────────────────
+
+{
+  const recent = new Set(['the beatles', 'marvin gaye'].map((a) => artistRootKey(a)));
+  assert.equal(
+    artistGuardCause(artistRootKey('Marvin Gaye'), artistRootKey('Marvin Gaye'), recent),
+    'onair',
+    'a pick matching the on-air artist is the back-to-back cause',
+  );
+  // The #1406 case: legal by the old guard, three slots after the same artist.
+  assert.equal(
+    artistGuardCause(artistRootKey('The Beatles'), artistRootKey('Marvin Gaye'), recent),
+    'recent',
+    'a pick inside the spacing window fires on the recent cause',
+  );
+  assert.equal(
+    artistGuardCause(artistRootKey('The Clash'), artistRootKey('Marvin Gaye'), recent),
+    null,
+    'an artist outside the window is not guarded',
+  );
+  // Normalisation and the guard are one mechanism: the variant must reach it.
+  assert.equal(
+    artistGuardCause(
+      artistRootKey('Jimi Hendrix'),
+      artistRootKey('The Jimi Hendrix Experience'),
+      new Set(),
+    ),
+    'onair',
+    'a name variant of the on-air act is still back-to-back',
+  );
+  // Window off (operator set 0) → back-to-back protection is NOT disableable.
+  assert.equal(
+    artistGuardCause(artistRootKey('Marvin Gaye'), artistRootKey('Marvin Gaye'), new Set()),
+    'onair',
+    'an empty window still guards back-to-back',
+  );
+  assert.equal(
+    artistGuardCause(artistRootKey('The Beatles'), artistRootKey('Marvin Gaye'), new Set()),
+    null,
+    'an empty window guards nothing else',
+  );
+  // An untagged pick is not evidence of a repeat, on either cause.
+  assert.equal(artistGuardCause('', artistRootKey('Marvin Gaye'), recent), null, 'no artist, no guard');
 }
 
 // Empty / missing artist is empty, never a wildcard that matches everything.
@@ -208,7 +318,7 @@ setPlays([
 
 const twoBack = queue.neighbourArtistRoots(2);
 assert(twoBack.has('marvin gaye'), 'a played collaboration registers under its lead artist');
-assert(twoBack.has('the clash'), 'the duplicate sidecar row must not consume a slot');
+assert(twoBack.has(artistRootKey('The Clash')), 'the duplicate sidecar row must not consume a slot');
 assert(!twoBack.has('sly & the family stone'), 'n=2 must not reach the third distinct play');
 
 assert.equal(queue.neighbourArtistRoots(0).size, 0, 'n=0 → empty window');
@@ -216,7 +326,7 @@ assert.equal(queue.neighbourArtistRoots(-3).size, 0, 'negative n → empty windo
 
 (queue as any).current = { track: { id: 'CUR', title: 'On Air', artist: 'The Beatles' } };
 const withCurrent = queue.neighbourArtistRoots(1);
-assert(withCurrent.has('the beatles'), 'the on-air artist is always in the window');
+assert(withCurrent.has(artistRootKey('The Beatles')), 'the on-air artist is always in the window');
 assert(withCurrent.has('marvin gaye'), 'the N sidecar artists ride alongside current');
 
 // Queued-but-unaired tracks are neighbours too: with a pair-aware drain (or a
@@ -228,8 +338,8 @@ assert(withCurrent.has('marvin gaye'), 'the N sidecar artists ride alongside cur
 ];
 const withQueued = queue.neighbourArtistRoots(2);
 assert(withQueued.has('curtis mayfield'), 'a queued artist is inside the window');
-assert(withQueued.has('the isley brothers'), 'so is the one queued behind it');
-assert(withQueued.has('the beatles'), 'the queued side does not displace the on-air track');
+assert(withQueued.has(artistRootKey('The Isley Brothers')), 'so is the one queued behind it');
+assert(withQueued.has(artistRootKey('The Beatles')), 'the queued side does not displace the on-air track');
 // A pick appends to the END of the queue, so the window takes the queue's tail.
 assert(
   !queue.neighbourArtistRoots(1).has('curtis mayfield'),

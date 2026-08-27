@@ -3,6 +3,7 @@
 import type { ChangeEvent } from 'react';
 import { useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { Btn, Card } from '../ui';
@@ -31,6 +32,12 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<TestResult | null>(null);
 
+  // These creds are section-local (setup-config.json, not settings.json), so
+  // the panel cannot diff them for the sticky save bar — this section says so
+  // itself. A typed password is always a change: the GET only ever returns a
+  // `passSet` flag, never the value, so there is nothing to compare it to.
+  const dirty = url !== (nv?.url ?? '') || user !== (nv?.user ?? '') || pass !== '';
+
   const env = { url: !!nv?.env?.url, user: !!nv?.env?.user, pass: !!nv?.env?.pass };
   const allEnv = env.url && env.user && env.pass;
   const passSet = !!nv?.passSet;
@@ -51,7 +58,7 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
     setTesting(true);
     setResult(null);
     try {
-      const r = await adminFetch('/settings/navidrome/test', {
+      const r = await adminResponse(adminFetch, '/settings/navidrome/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body()),
@@ -70,7 +77,7 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
     if (!env.pass && !pass && !passSet) return notify.err('Password is required');
     setBusy(true);
     try {
-      const r = await adminFetch('/settings/navidrome', {
+      const r = await adminResponse(adminFetch, '/settings/navidrome', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body()),
@@ -201,6 +208,7 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
           busy={busy}
           onSave={save}
           saveLabel="Save music source"
+          dirty={dirty}
         />
       )}
     </>

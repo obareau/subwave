@@ -3,7 +3,9 @@
 import { useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { notify } from '../../../lib/notify';
+import { AdminResponseError, adminJson, adminResponse } from '../../../lib/admin-query';
 import { llmProviderLabel } from '../llm/providerMeta';
+import { patchSettingsAudio, settingsKeys } from '../settings/queries';
 import { useLibrary } from './LibraryContext';
 import { libraryKeys } from './queries';
 import { useAdminMutation, useAdminQuery, type AdminFetch } from './useAdminQuery';
@@ -29,26 +31,30 @@ import type { SettingsResponse } from './types';
 async function postAudioSetting(
   fetcher: AdminFetch, patch: Record<string, unknown>,
 ): Promise<void> {
-  const r = await fetcher('/settings', {
+  await adminJson(fetcher, '/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ audio: patch }),
   });
-  const j = await r.json().catch(() => ({})) as { error?: string };
-  if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
 }
 
 // POST a tagger/analysis start. They differ only in path, body and the message
 // their failure carries.
 function startRun(path: string, body: unknown, what: string) {
   return async (fetcher: AdminFetch): Promise<void> => {
-    const r = await fetcher(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const j = await r.json().catch(() => ({})) as { error?: string };
-    if (!r.ok) throw new Error(j.error || `${what} (${r.status})`);
+    try {
+      await adminJson(fetcher, path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      if (error instanceof AdminResponseError) {
+        const detail = typeof error.body.error === 'string' ? error.body.error : null;
+        throw new Error(detail || `${what} (${error.status})`);
+      }
+      throw error;
+    }
   };
 }
 
@@ -56,19 +62,24 @@ export function useTaggerControls() {
   const { adminFetch, ready, coverage, reloadCoverage, tagger } = useLibrary();
   const qc = useQueryClient();
 
-  const [failures, setFailures] = useState<AnalysisFailure[] | null>(null);
   const [batch, setBatch] = useState<Batch>('500');
   const [logOpen, setLogOpen] = useState(false);
 
   // Slow loop: the rarely-changing settings-derived bits. Silent on failure —
   // a 30s poll that toasts on a blip is noise.
   const settingsQuery = useAdminQuery<SettingsResponse>({
-    key: libraryKeys.settings(),
+    key: settingsKeys.detail(),
     path: '/settings',
     refetchInterval: 30_000,
     staleTime: 0,
   });
   const settings = settingsQuery.data;
+  const failuresQuery = useAdminQuery<{ failures?: AnalysisFailure[] }>({
+    key: libraryKeys.analysisFailures(),
+    path: '/library/analysis-failures?limit=200',
+    enabled: false,
+  });
+  const failures = failuresQuery.data?.failures ?? null;
 
   const libStats: LibraryStatsLite | null = settings?.libraryStats ?? null;
   const audio = settings?.values?.audio;
@@ -95,7 +106,7 @@ export function useTaggerControls() {
     : null;
 
   const reloadSettings = useCallback(
-    () => qc.invalidateQueries({ queryKey: libraryKeys.settings() }),
+    () => qc.invalidateQueries({ queryKey: settingsKeys.detail() }),
     [qc],
   );
   const reloadTagger = useCallback(
@@ -103,18 +114,13 @@ export function useTaggerControls() {
     [qc],
   );
 
-  // Per-track analysis failures (#1300 bug 3c). Fetched on demand and kept off
-  // the query cache: `coverage.analysisFailed` already says whether there is
+  // Per-track analysis failures (#1300 bug 3c). The disabled query is fetched
+  // only on demand: `coverage.analysisFailed` already says whether there is
   // anything to look at, and on a healthy station that is zero forever.
   const loadFailures = useCallback(async () => {
     if (!ready) return;
-    try {
-      const r = await adminFetch('/library/analysis-failures?limit=200');
-      if (!r.ok) return;
-      const j = (await r.json()) as { failures?: AnalysisFailure[] };
-      setFailures(j.failures || []);
-    } catch { /* transient */ }
-  }, [adminFetch, ready]);
+    await failuresQuery.refetch();
+  }, [failuresQuery, ready]);
 
   // Forget the failure history so the next run retries these tracks — the
   // operator's move after fixing the cause. Refreshes coverage so the banner
@@ -122,12 +128,11 @@ export function useTaggerControls() {
   const clearFailures = useCallback(async () => {
     if (!ready) return;
     try {
-      const r = await adminFetch('/library/analysis-failures/clear', { method: 'POST' });
-      if (!r.ok) return;
-      setFailures([]);
+      await adminResponse(adminFetch, '/library/analysis-failures/clear', { method: 'POST' });
+      qc.setQueryData(libraryKeys.analysisFailures(), { failures: [] });
       void reloadCoverage();
     } catch { /* transient */ }
-  }, [adminFetch, ready, reloadCoverage]);
+  }, [adminFetch, qc, ready, reloadCoverage]);
 
   const remaining = coverage?.total != null ? Math.max(0, coverage.total - coverage.tagged) : null;
 
@@ -135,7 +140,7 @@ export function useTaggerControls() {
   // Each opens the log and refreshes the tagger snapshot; failures toast
   // through useAdminMutation's shared onError.
 
-  const startM = useAdminMutation<TagSteps | undefined, void>({
+  const startM = useAdminMutation<void, TagSteps | undefined>({
     request: (steps, fetcher) => {
       const limit = batch === 'all' ? null : parseInt(batch, 10);
       const body: Record<string, unknown> = limit && limit > 0 ? { limit } : {};
@@ -148,9 +153,7 @@ export function useTaggerControls() {
 
   const stopM = useAdminMutation<void, void>({
     request: async (_v, fetcher) => {
-      const r = await fetcher('/tag-library/stop', { method: 'POST' });
-      const j = await r.json().catch(() => ({})) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `tagger stop failed (${r.status})`);
+      await adminResponse(fetcher, '/tag-library/stop', { method: 'POST' });
     },
     onDone: () => { notify.ok('stopping tagger…'); void reloadTagger(); },
   });
@@ -158,7 +161,7 @@ export function useTaggerControls() {
   // Each opt maps to a tag-library CLI flag (reseed / reEnrich / reAnalyze /
   // upgrade). Sends no limit — a partial reseed leaves the library in a mixed
   // state KNN can't use, and `thenTag` continues into a full forward pass.
-  const rescanM = useAdminMutation<RescanOpts, void>({
+  const rescanM = useAdminMutation<void, RescanOpts>({
     request: (opts, fetcher) => startRun('/tag-library', opts, 're-scan failed')(fetcher),
     onDone: () => { notify.ok('re-scan started…'); setLogOpen(true); void reloadTagger(); },
   });
@@ -204,9 +207,7 @@ export function useTaggerControls() {
   // before invalidating, so the switch moves at once rather than waiting out
   // the poll.
   const patchAudioSetting = useCallback((patch: Record<string, unknown>) => {
-    qc.setQueryData<SettingsResponse>(libraryKeys.settings(), prev => (prev
-      ? { ...prev, values: { ...prev.values, audio: { ...prev.values?.audio, ...patch } } }
-      : prev));
+    patchSettingsAudio(qc, patch);
     void reloadSettings();
   }, [qc, reloadSettings]);
 

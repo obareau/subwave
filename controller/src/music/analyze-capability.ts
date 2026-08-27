@@ -117,6 +117,18 @@ export function backfillDecision(x: CapabilityInputs): CapabilityDecision {
   };
 }
 
+// Tracks pulled in only because their CLAP vector is missing do not need the
+// baseline acoustic pass repeated. Any baseline/vocal/stem scope membership
+// keeps the full path; audioBackfill is explicit so ordinary analysis never
+// becomes embedding-only by accident.
+export function analysisModeForTrack(
+  id: string,
+  fullAnalysisIds: ReadonlySet<string>,
+  audioBackfill: boolean,
+): 'full' | 'embedding-only' {
+  return audioBackfill && !fullAnalysisIds.has(id) ? 'embedding-only' : 'full';
+}
+
 // How many tracks in a row may fail before the pass stops treating a throw as
 // evidence about the FILE. Five: a run of five consecutive failures is not five
 // bad files landing next to each other in id order, it is the thing they share

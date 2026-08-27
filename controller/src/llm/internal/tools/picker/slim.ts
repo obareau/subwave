@@ -8,19 +8,9 @@ import * as subsonic from '../../../../music/subsonic.js';
 import * as library from '../../../../music/library.js';
 import { durationSeconds } from '../../../../music/recency.js';
 import { unairedFlag } from '../../../../music/airing.js';
+import { resolveEraYear } from '../../../../music/show-filter.js';
 
 export function slim(s: any) {
-  const base = {
-    id: s.id,
-    title: s.title,
-    artist: s.artist,
-    album: s.album || null,
-    year: s.year || null,
-    // Every genre tag, comma-joined ("Hip-Hop, Rap") — one compact field the
-    // model reads as-is, whether the source is a raw Subsonic child (genres
-    // [{name}] + scalar) or a library slimTrack row (genres string[]).
-    genre: subsonic.songGenres(s).join(', ') || null,
-  };
   // Surface the editorial tags + measured acoustic facts when known — merged
   // per field from the song itself (library sources, via slimTrack) and a
   // library lookup (Subsonic sources). The lookup always runs: Subsonic songs
@@ -34,6 +24,28 @@ export function slim(s: any) {
   // (0..1 perceptual energy) and `sections` (structural-part count over the
   // opening) feed FLOW reasoning per PICKER_CRITERIA in llm/dj.ts.
   const rec = s.id ? library.get(s.id) : null;
+  // Era year, never the raw `year` (issue #1418) — this is the year the picker
+  // reasons about flow and decade with, so a reissue anthology's date makes a
+  // 1964 soul single look like 2010s material. #842 precedence via
+  // resolveEraYear, reading the era fields off the candidate when it carries
+  // them (library slimTrack rows) and off `rec` otherwise. Null when unknown,
+  // same as any other field the agent is never shown a guess for.
+  const eraYear = resolveEraYear(
+    s.year ?? rec?.year,
+    s.originalYear ?? rec?.originalYear,
+    s.yearUntrusted ?? rec?.yearUntrusted ?? s.isCompilation ?? rec?.isCompilation,
+  );
+  const base = {
+    id: s.id,
+    title: s.title,
+    artist: s.artist,
+    album: s.album || null,
+    year: eraYear,
+    // Every genre tag, comma-joined ("Hip-Hop, Rap") — one compact field the
+    // model reads as-is, whether the source is a raw Subsonic child (genres
+    // [{name}] + scalar) or a library slimTrack row (genres string[]).
+    genre: subsonic.songGenres(s).join(', ') || null,
+  };
   const moods = Array.isArray(s.moods) && s.moods.length ? s.moods : (rec?.moods ?? []);
   const energy = s.energy ?? rec?.energy ?? null;
   // Length reads from whichever field the raw candidate carries (Subsonic
@@ -58,6 +70,19 @@ export function slim(s: any) {
   // when the index can't answer at all: see unairedFlag for why an empty index
   // must not stamp `unaired: true` on every candidate at once.
   const unaired = unairedFlag(s, library.lastAiredInfo());
+  // Play-frequency signal (#1382-adjacent): without this the model has no way
+  // to tell "never aired" from "aired constantly" from "aired once, ages ago"
+  // — it was observed treating every candidate as equally novel. Song-level
+  // counts come from the same durable plays table as the artist-level stats;
+  // artist-level comes from library.artistPlayStatsFor, keyed on the free-text
+  // artist name since candidates carry no artist id. Days-ago, not raw
+  // timestamps — the model reasons about recency, not clock time, and this
+  // keeps the field self-explanatory without a "now" reference in context.
+  // Omitted entirely for a track/artist with no play on record, mirroring
+  // `unaired` — silence means "never", not "0 days ago".
+  const daysAgo = (ms: number) => Math.max(0, Math.round((Date.now() - ms) / 86400000));
+  const songStats = library.trackPlayStatsFor(s);
+  const artistStats = library.artistPlayStatsFor(s.artist);
   return {
     ...base,
     ...(moods.length ? { moods } : {}),
@@ -70,5 +95,7 @@ export function slim(s: any) {
     ...(pace != null ? { pace } : {}),
     ...(sections != null ? { sections } : {}),
     ...(unaired ? { unaired: true } : {}),
+    ...(songStats ? { play_count: songStats.count, last_played_days_ago: daysAgo(songStats.lastPlayedAtMs) } : {}),
+    ...(artistStats ? { artist_play_count: artistStats.count, artist_last_played_days_ago: daysAgo(artistStats.lastPlayedAtMs) } : {}),
   };
 }

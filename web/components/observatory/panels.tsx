@@ -7,8 +7,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  genreText,
   heat,
   tally,
+  trackGenres,
   arcPath,
   embeddingVector,
   normaliseFingerprint,
@@ -378,7 +380,7 @@ function Meter({ value, label, cells = 20, display }: { value: number; label: st
 // STATS VIEW — library overview, recomputed from the filtered list.
 export function StatsView({ stats, list, filtered }: { stats: ObservatoryStats; list: ObsTrack[]; filtered: boolean }) {
   const moods = useMemo(() => tally(list, (t) => t.moods).slice(0, 8), [list]);
-  const genres = useMemo(() => tally(list, (t) => t.genre), [list]);
+  const genres = useMemo(() => tally(list, (t) => trackGenres(t)), [list]);
   const moodTagCount = useMemo(() => tally(list, (t) => t.moods).length, [list]);
   const energy = useMemo(() => {
     const o = { low: 0, medium: 0, high: 0 };
@@ -525,7 +527,7 @@ export function Dossier({
 
       <div className="dossier-title-block">
         <div className="t-caption ad-muted">
-          {(track.genre || 'UNFILED')}
+          {(genreText(track) || 'UNFILED')}
           {track.year ? ` · ${track.year}` : ''}
         </div>
         <h2 className="dossier-title">{track.title || 'Untitled'}</h2>

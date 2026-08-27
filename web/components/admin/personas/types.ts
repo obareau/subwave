@@ -36,6 +36,9 @@ export interface Persona {
   avatar: string;
   tts: PersonaTts;
   skills: string[];
+  /** Operator organisation tags. They filter and group the roster and nothing
+   *  else — no prompt, no public route, no on-air behaviour reads them. */
+  tags: string[];
 }
 
 // Mirrors the controller's djPrompts entries (settings.ts:validateDjPromptsStrict).
@@ -52,7 +55,8 @@ export interface FormState {
   djPrompts: DjPromptPreset[];
   activeDjPromptId: string;
   // Station house rules — appended to EVERY spoken-output prompt, including
-  // the agent paths the template never reaches (issue #1182). '' = off.
+  // the agent and multi-voice cast paths the template never reaches
+  // (issues #1182, #1420). '' = off.
   djHouseRules: string;
 }
 

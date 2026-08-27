@@ -1,6 +1,7 @@
 // The handoff-file write path and the spoken-segment serialiser.
 //
-// Liquidsoap polls each handoff file (say.txt, intro.txt, sfx.txt, next.txt)
+// Liquidsoap polls each handoff file (say.txt, intro.txt, sfx.txt, next.txt,
+// jingle-now.txt)
 // and deletes it after reading, so two writes inside one poll window silently
 // lose the first (issue #140). Every write goes through writeHandoff(), which
 // serialises per file and waits for the previous one to be consumed. On top of
@@ -54,7 +55,10 @@ export async function writeHandoff(path: string, contents: string, { maxWaitMs =
   // return. Errors don't break the chain — the .catch above ensures the next
   // writer still gets its turn.
   const release = next.then(() => waitForConsumed(path, maxWaitMs).catch(() => undefined));
-  _handoffChains.set(path, release);
+  // The caller owns `next` and must see a failed write. The internal tail is
+  // bookkeeping only: keep it fulfilled so a rejected write neither becomes
+  // an unhandled rejection nor poisons the next writer for this file.
+  _handoffChains.set(path, release.catch(() => undefined));
   return next;
 }
 
@@ -125,13 +129,16 @@ export interface QueuedVoice {
 // only tells a consumer roughly how long it has to get ready.
 let _chainFreeAt = 0;
 
-// Pure so the arithmetic is testable without a mixer. Both inputs are epoch ms
-// deadlines the clip has to clear: the serialiser's current holder, and any
-// jingle still audible (airVoice sleeps out the same window below).
+// Pure so the arithmetic is testable without a mixer. Two of the inputs are
+// epoch ms deadlines the clip has to clear: the serialiser's current holder,
+// and any jingle still audible. `jingleWindowMs` is that jingle's own total
+// window — the SAME bound waitForJingleClear applies below, so the estimate a
+// consumer prepares against and the sleep it actually takes cannot diverge.
 export function airInEstimate(
-  { now, chainFreeAt, jingleClearAt }: { now: number; chainFreeAt: number; jingleClearAt: number },
+  { now, chainFreeAt, jingleClearAt, jingleWindowMs = JINGLE_WAIT_CEILING_MS }:
+    { now: number; chainFreeAt: number; jingleClearAt: number; jingleWindowMs?: number },
 ): { waitMs: number; estimatedAirInMs: number } {
-  const jingleWait = Math.min(JINGLE_WAIT_MAX_MS, Math.max(0, jingleClearAt - now));
+  const jingleWait = jingleWaitMs(now, jingleClearAt, jingleWindowMs);
   const chainWait = Math.max(0, chainFreeAt - now);
   const waitMs = Math.max(chainWait, jingleWait);
   return { waitMs, estimatedAirInMs: waitMs + HANDOFF_TO_AIR_MS };
@@ -156,8 +163,10 @@ export async function airVoice(
   const voiceId = mintVoiceId();
   const uri = voiceUri(wavPath, gainDb, voiceId);
   const now = Date.now();
+  const jingle = jingleWindow();
   const { waitMs, estimatedAirInMs } = airInEstimate({
-    now, chainFreeAt: _chainFreeAt, jingleClearAt: jingleClearAtMs(),
+    now, chainFreeAt: _chainFreeAt,
+    jingleClearAt: jingle.clearAtMs, jingleWindowMs: jingle.windowMs,
   });
   // This clip's own turn, then its hold — what the NEXT caller will wait for.
   _chainFreeAt = now + waitMs + holdMs;
@@ -202,13 +211,22 @@ function mintVoiceId(): string {
 // Before any voice handoff, sleep out whatever remains of that window.
 //
 // The marker is never deleted — a stale one simply computes a window in the
-// past. If the jingle WAV can't be measured (non-WAV upload, path not visible
-// to a native-dev controller), a fixed fallback length keeps the guard useful
-// without wedging the chain.
+// past. Clip length comes from the marker's own `durationSec`, measured by
+// Liquidsoap (radio.liq's jingle_duration) which can read any container it can
+// decode; wavDurationMs is the fallback for a marker written by an older
+// broadcast image, and only parses RIFF. If neither can measure it, a fixed
+// fallback keeps the guard useful without wedging the chain.
 
-const JINGLE_FALLBACK_MS = 15_000; // clip length when the WAV can't be parsed
+const JINGLE_FALLBACK_MS = 15_000; // clip length when nothing can measure it
 const JINGLE_TAIL_MS = 1_000;      // fade tail + poll slack
-const JINGLE_WAIT_MAX_MS = 60_000; // never wedge the voice chain on a bad marker
+// Absolute backstop. NOT a cap on how long a jingle may be — the on-demand path
+// exists precisely to air a sponsor spot or a two-minute announcement, and a
+// fixed 60s ceiling here silently let the DJ talk over everything past the first
+// minute of one. The real protection against a bad marker is clamping the sleep
+// to the window's OWN length below, which a future-dated startedAt cannot
+// inflate. This only catches a clip so long that holding every ident and time
+// check behind it is worse than the collision.
+const JINGLE_WAIT_CEILING_MS = 600_000;
 
 // How recent a bed-playing.json startedAt must be to count as a live edge in
 // onBedStarted. Detection latency is one 1.5s watcher tick; anything much
@@ -216,21 +234,59 @@ const JINGLE_WAIT_MAX_MS = 60_000; // never wedge the voice chain on a bad marke
 // is never deleted, and the in-memory dedupe baseline doesn't persist).
 export const BED_MARKER_FRESH_MS = 10_000;
 
-function jingleClearAtMs(): number {
+// The guard window as two numbers: when the clip clears, and how long the window
+// is in total. The second is what bounds the sleep — see jingleWaitMs. Exported
+// as the test seam for the marker's durationSec precedence.
+export function jingleWindow(): { clearAtMs: number; windowMs: number } {
+  const none = { clearAtMs: 0, windowMs: 0 };
   try {
     const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
     const startedMs = Number(m?.startedAt) * 1000; // liquidsoap time() is unix seconds
-    if (!Number.isFinite(startedMs) || startedMs <= 0) return 0;
-    const clipMs = (typeof m?.filename === 'string' && wavDurationMs(m.filename)) || JINGLE_FALLBACK_MS;
+    if (!Number.isFinite(startedMs) || startedMs <= 0) return none;
+    // Liquidsoap's own measurement first (any container), then the RIFF parse
+    // for markers from an older broadcast image, then the blind fallback.
+    const measuredSec = Number(m?.durationSec);
+    const clipMs = (Number.isFinite(measuredSec) && measuredSec > 0 ? measuredSec * 1000 : 0)
+      || (typeof m?.filename === 'string' && wavDurationMs(m.filename))
+      || JINGLE_FALLBACK_MS;
     const crossMs = (Number(settings.get()?.crossfadeDuration) || 10) * 1000;
-    return startedMs + clipMs + crossMs + JINGLE_TAIL_MS;
+    const windowMs = clipMs + crossMs + JINGLE_TAIL_MS;
+    return { clearAtMs: startedMs + windowMs, windowMs };
   } catch {
-    return 0; // no marker (or unreadable) — nothing on air to avoid
+    return none; // no marker (or unreadable) — nothing on air to avoid
   }
 }
 
+// When the marker last reported THIS jingle starting, or 0. Used by
+// queue.playJingle to retire a pending press once it has been heard. Matched on
+// the basename because the marker carries Liquidsoap's resolved path while the
+// caller holds a library filename.
+export function jingleAiredAtMs(filename: string): number {
+  try {
+    const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
+    if (typeof m?.filename !== 'string') return 0;
+    if (m.filename.split('/').pop() !== filename) return 0;
+    const startedMs = Number(m?.startedAt) * 1000;
+    return Number.isFinite(startedMs) && startedMs > 0 ? startedMs : 0;
+  } catch {
+    return 0;
+  }
+}
+
+// How long to hold a voice handoff behind a jingle. Three bounds, in order:
+// `clearAtMs - now` is the honest remaining wait; `windowMs` caps it at the
+// clip's OWN length, so a startedAt dated into the future (clock skew, a
+// corrupt marker) can never buy more than one clip's worth of silence; the
+// ceiling is the backstop for an implausibly long clip. Exported and pure
+// because it is the whole guard — airInEstimate's forecast and the sleep below
+// must not be able to drift apart.
+export function jingleWaitMs(now: number, clearAtMs: number, windowMs: number): number {
+  return Math.max(0, Math.min(clearAtMs - now, windowMs, JINGLE_WAIT_CEILING_MS));
+}
+
 async function waitForJingleClear() {
-  const waitMs = Math.min(JINGLE_WAIT_MAX_MS, jingleClearAtMs() - Date.now());
+  const { clearAtMs, windowMs } = jingleWindow();
+  const waitMs = jingleWaitMs(Date.now(), clearAtMs, windowMs);
   if (waitMs > 0) await sleep(waitMs);
 }
 
@@ -315,4 +371,3 @@ function wavDurationMs(path: string): number | null {
     if (fd != null) closeSync(fd);
   }
 }
-

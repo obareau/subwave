@@ -180,6 +180,7 @@ function projectRows(rows: any[]) {
     artist: t.artist,
     album: t.album,
     year: t.year,
+    genres: t.genres,
     genre: t.genre,
     durationSec: t.durationSec,
     moods: t.moods,

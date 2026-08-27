@@ -10,9 +10,12 @@ import { useObservatory, useTrackDetail } from '../../lib/observatory';
 import { StatsView, Dossier } from './panels';
 import Tooltip, { type TipState } from './Tooltip';
 import {
+  genreText,
+  matchesObservatoryTrack,
   nearest,
   sourceStyle,
   tally,
+  trackGenres,
   type ColorBy,
   type MapProjectionStatus,
   type ObsTrack,
@@ -185,16 +188,14 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
 
   const matched = useMemo(() => {
     if (!lib) return [];
-    const qq = qDebounced.trim().toLowerCase();
-    return lib.tracks.filter((t) => {
-      if (energy.size && !(t.energy && energy.has(t.energy))) return false;
-      if (sources.size && !(t.source && sources.has(t.source))) return false;
-      if (genres.size && !(t.genre && genres.has(t.genre))) return false;
-      if (moods.size && !t.moods.some((m) => moods.has(m))) return false;
-      if (analysedOnly && !t.analysed) return false;
-      if (qq && !t.searchText.includes(qq)) return false;
-      return true;
-    });
+    return lib.tracks.filter((track) => matchesObservatoryTrack(track, {
+      query: qDebounced,
+      energy,
+      moods,
+      genres,
+      sources,
+      analysedOnly,
+    }));
   }, [lib, qDebounced, energy, moods, genres, sources, analysedOnly]);
 
   const matchSet = useMemo(() => new Set(matched.map((t) => t.idx)), [matched]);
@@ -340,7 +341,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
             artist: t.artist,
             album: t.album,
             year: t.year,
-            genre: t.genre,
+            genre: trackGenres(t).join(', ') || null,
           }),
         });
         const body = await res.json().catch(() => null);
@@ -492,7 +493,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
                     <span className="hit-title">{t.title || 'Untitled'}</span>
                     <span className="hit-artist">
                       {t.artist || 'Unknown'}
-                      {t.genre ? ` · ${t.genre}` : ''}
+                      {genreText(t) ? ` · ${genreText(t)}` : ''}
                     </span>
                   </button>
                 ))}

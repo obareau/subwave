@@ -469,6 +469,34 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
         pathParams: [{ name: 'name', required: true, description: 'Sound-effect name from GET /sfx', example: 'whoosh' }],
         responseExample: { ok: true },
       },
+      {
+        method: 'GET',
+        path: '/jingles',
+        summary: 'List jingles',
+        description:
+          'The jingle library — idents, sweepers and event announcements. Unlike ' +
+          'sound effects these have no length cap. Filenames feed ' +
+          'POST /jingles/:filename/play.',
+        auth: 'admin',
+        responseExample: { jingles: [{ filename: 'jingle_a1b2c3d4.wav', text: 'Doors close at eleven', source: 'upload' }] },
+      },
+      {
+        method: 'POST',
+        path: '/jingles/:filename/play',
+        summary: 'Air a jingle',
+        description:
+          'Queue a jingle to air at the next safe track boundary, at full level with the ' +
+          'programme yielding to it. Use this rather than POST /sfx/:name/play for ' +
+          'anything longer than a stinger — an effect is mixed UNDER the music and ' +
+          'capped at 10s. Queued, not instant: the station never cuts a song off ' +
+          'mid-play, and active speech or a bed/track pair defers it. 404 if the filename is ' +
+          'unknown; 409 if that jingle is already queued and has not aired — the queue has no ' +
+          'cancel, so a retried call would air the announcement twice.',
+        auth: 'admin',
+        mutatesAir: true,
+        pathParams: [{ name: 'filename', required: true, description: 'Jingle filename from GET /jingles', example: 'jingle_a1b2c3d4.wav' }],
+        responseExample: { ok: true, filename: 'jingle_a1b2c3d4.wav' },
+      },
     ],
   },
   {
@@ -553,6 +581,8 @@ export const MCP_TOOLS: McpToolDoc[] = [
   { name: 'subwave_run_skill', title: 'Run a skill', description: 'Run a named skill segment on air.', endpoint: 'POST /dj/skill', auth: 'admin', mutatesAir: true },
   { name: 'subwave_list_sfx', title: 'List sound effects', description: 'The sound-effect stinger library.', endpoint: 'GET /sfx', auth: 'admin' },
   { name: 'subwave_play_sfx', title: 'Play a sound effect', description: 'Play a stinger on air now.', endpoint: 'POST /sfx/:name/play', auth: 'admin', mutatesAir: true },
+  { name: 'subwave_list_jingles', title: 'List jingles', description: 'The jingle library — idents and announcements, no length cap.', endpoint: 'GET /jingles', auth: 'admin' },
+  { name: 'subwave_play_jingle', title: 'Air a jingle', description: 'Queue a jingle to air at the next safe boundary, at full level.', endpoint: 'POST /jingles/:filename/play', auth: 'admin', mutatesAir: true },
   { name: 'subwave_refresh_playlist', title: 'Refresh playlist', description: 'Rebuild the fallback auto-playlist.', endpoint: 'POST /dj/refresh-playlist', auth: 'admin' },
 ];
 
@@ -577,7 +607,7 @@ export const STREAM_MOUNTS: StreamMountDoc[] = [
     format: 'Ogg Opus',
     codec: 'opus',
     description:
-      'Low-bitrate, high-quality Opus at 48kHz. Enable in Settings → Streams. ' +
+      'Low-bitrate, high-quality Opus at 48kHz. Enable in Settings → Danger zone. ' +
       'Chromium-based browsers upgrade to it automatically; iOS/Firefox stay on MP3.',
     settingFlag: 'opusEnabled',
     alwaysOn: false,
@@ -588,7 +618,7 @@ export const STREAM_MOUNTS: StreamMountDoc[] = [
     codec: 'flac',
     description:
       'Lossless capture of the processed bus at 44.1kHz. Enable in Settings → ' +
-      'Streams. For external players — the web/native players do not auto-select it.',
+      'Danger zone. For external players — the web/native players do not auto-select it.',
     settingFlag: 'flacEnabled',
     alwaysOn: false,
   },
@@ -597,7 +627,7 @@ export const STREAM_MOUNTS: StreamMountDoc[] = [
     format: 'AAC (ADTS)',
     codec: 'aac',
     description:
-      'AAC-LC at 44.1kHz, served as audio/aac. Enable in Settings → Streams. For ' +
+      'AAC-LC at 44.1kHz, served as audio/aac. Enable in Settings → Danger zone. For ' +
       'external players that prefer AAC.',
     settingFlag: 'aacEnabled',
     alwaysOn: false,

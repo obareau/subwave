@@ -184,6 +184,18 @@ ${list}`;
 
 let tickBusy = false;
 const lastFired = new Map<string, number>(); // kind → ms timestamp of last aired segment
+const lastUnavailable = new Map<string, number>(); // kind → ms timestamp of last unusable pool-mode fetch
+
+// An unavailable source should not consume another retrieval + scheduler slot
+// on the very next 5-minute tick, but it also should not inherit a multi-hour
+// on-air cooldown when the next track may change its answer. Cap the retry
+// delay at 15 minutes and respect a shorter operator-authored cooldown.
+const UNAVAILABLE_RETRY_BACKOFF_MS = 15 * 60 * 1000;
+function unavailableRetryBackoffMs(cap: { cooldownMs?: unknown }): number {
+  const cooldownMs = Number(cap.cooldownMs);
+  if (!Number.isFinite(cooldownMs) || cooldownMs < 0) return UNAVAILABLE_RETRY_BACKOFF_MS;
+  return Math.min(cooldownMs, UNAVAILABLE_RETRY_BACKOFF_MS);
+}
 
 // Dedup memory carried across ticks — passed straight into the segment tools.
 // Curiosity dedup is NOT here anymore: it lives in the durable ledger in
@@ -235,6 +247,7 @@ function availableCapabilities(ctx, now: Date) {
     // (scheduler.ts syncSkillCrons), which bypasses this function altogether.
     if (cap.cronOnly) continue;
     if (now.getTime() - (lastFired.get(cap.kind) || 0) < cap.cooldownMs) continue;
+    if (now.getTime() - (lastUnavailable.get(cap.kind) || 0) < unavailableRetryBackoffMs(cap)) continue;
     // Window gating: custom skills opt into commute-hours-only firing via
     // `window: commute` in their SKILL.md frontmatter. (No built-in is
     // commute-gated by default since the traffic skill was retired.)
@@ -435,15 +448,25 @@ async function deadlinedSegmentObject(args: Record<string, unknown>) {
   }
 }
 
-// Runs the simple path for one tick: choose, fetch, one djObject call.
+// Runs the simple path for one tick: choose, fetch, and, only when the source is
+// usable (or the skill explicitly permits free generation), one djObject call.
 // Returns { seg, reason } in the same shape agenticTick consumes from the
-// agent — seg is null for silence. A failed data fetch is silence without a
-// model call: the model can't say anything true about data it never got.
+// agent — seg is null for silence. Unusable data is silence without a model
+// call: the model can't say anything true about data it never got.
 async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
   const cap = chooseCapability(caps, ctx);
   if (!cap) return { seg: null, reason: 'nothing fresh to say' };
   const data = await fetchSegmentData(cap, ctx, segmentState);
-  if (data?.error) return { seg: null, reason: `${cap.kind} data fetch failed (${data.error})` };
+  const blocked = standDownReason(cap, data);
+  if (blocked || data?.error) {
+    lastUnavailable.set(cap.kind, Date.now());
+    return {
+      seg: null,
+      reason: blocked || `${cap.kind} data fetch failed (${data.error})`,
+      skippedBeforeLlm: cap.kind,
+    };
+  }
+  lastUnavailable.delete(cap.kind);
   const recentCuriosity = cap.kind === 'curiosity' ? recentAiredCuriosity() : undefined;
   const out = await deadlinedSegmentObject({
     system: simpleSystem(speaker, cap, freq, sfxCatalog),
@@ -504,10 +527,11 @@ export async function agenticTick(ctx) {
 
     let seg: { kind: string; text: string; sfx: string | null } | null = null;
     let silentReason: string | undefined;
+    let skippedBeforeLlm: string | undefined;
     if (!settings.get().llm?.pickerAgent) {
       // Pool mode: the operator's model isn't trusted with tool loops, so the
       // director runs the code-driven single-call path instead of the agent.
-      ({ seg, reason: silentReason } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }));
+      ({ seg, reason: silentReason, skippedBeforeLlm } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }));
     } else {
       // When curiosity is on offer, brief the agent with what it already aired so
       // a pool-exhausted fallback doesn't repeat itself (issue #577).
@@ -524,7 +548,11 @@ export async function agenticTick(ctx) {
     }
 
     if (!seg || !seg.text || !seg.text.trim()) {
-      queue.log('scheduler', `Segment agent stayed silent — ${silentReason || 'nothing to add'}`);
+      if (skippedBeforeLlm) {
+        queue.log('scheduler', `[segment] ${skippedBeforeLlm} → unavailable → skipped before LLM — ${silentReason}`);
+      } else {
+        queue.log('scheduler', `Segment agent stayed silent — ${silentReason || 'nothing to add'}`);
+      }
       return;
     }
 

@@ -13,15 +13,31 @@ export interface TrackRecord {
   title: string | null;
   artist: string | null;
   album: string | null;
+  // Subsonic album/artist ids — what lets the never-play blocklist match an
+  // ALBUM or ARTIST entry EXACTLY on a library-sourced candidate, instead of
+  // through the normalised-name fallback that a compilation or a "feat."
+  // credit defeats. null = not walked since the migration that added them.
+  albumId: string | null;
+  artistId: string | null;
   year: number | null;
   // Original-release-year surface (issue #842): the track's TRUE first-release
   // year when it differs from the file's `year` tag (reissues, compilation
   // albums). null = unresolved; era filtering falls back to `year` (except on
   // compilations, whose plain year is the compilation's own date — untrusted).
   originalYear: number | null;
-  originalYearSource: string | null;      // 'album-tag' | 'musicbrainz'
+  originalYearSource: string | null;      // 'album-tag' | 'musicbrainz' | 'manual'
   originalYearCheckedAt: string | null;   // last lookup attempt, hit or miss
-  isCompilation: boolean | null;          // Navidrome album flag; null = unknown
+  isCompilation: boolean | null;          // Navidrome album FLAG; null = unknown
+  // Derived era suspicion (issue #1418, music/era-suspect.ts): "this album's
+  // year is the reissue's, not the recordings'". Kept SEPARATE from
+  // isCompilation, which stays the raw Navidrome fact — the flag is false on
+  // exactly the reissue anthologies this exists for, so one column cannot be
+  // both. null = not yet walked since the migration.
+  eraUntrusted: boolean | null;
+  // What era resolution actually consults: the flag OR the derived judgement.
+  // Composed HERE, once, so no call site re-decides it — resolveEraYear takes
+  // this, never `isCompilation`.
+  yearUntrusted: boolean | null;
   // Every genre tag on the file (OpenSubsonic multi-value genres). The single
   // source of truth — `genre` below is a generated column over genres[0]
   // (the "primary" tag), kept for the scalar consumers and indexes.
@@ -62,6 +78,17 @@ export interface TrackRecord {
   // Outro (tail) features — the track's measured ending (fade vs cold, tail
   // loudness/tempo/bar grid). null → no outro signal, today's transitions.
   outro: TrackOutro | null;
+  // Edge dead air (ms) — near-silent runs at the file's very start / very end,
+  // measured against an ABSOLUTE dBFS floor. Distinct from introMs and
+  // outro.startMs, which are relative gates over MUSICAL content. null → not
+  // measured; music/silence-trim.ts treats null as "trim nothing".
+  leadSilenceMs: number | null;
+  tailSilenceMs: number | null;
+  // Where the trailing gap OPENS, absolute ms from byte zero — the cue_out
+  // itself, rather than a length that has to be subtracted from a duration the
+  // analyzer never saw. null on rows analysed before this column existed;
+  // silence-trim.ts then falls back to (duration - tailSilenceMs).
+  tailStartMs: number | null;
   // Sound-map coordinates — a 2D UMAP projection of the CLAP audio vector,
   // normalised to [0,1] per axis (music/map-projection.ts). The Observatory
   // places nodes by these when present, so tracks that SOUND alike sit close.
@@ -122,11 +149,18 @@ export interface TrackRow {
   title: string | null;
   artist: string | null;
   album: string | null;
+  // Subsonic ids for the track's album and artist. NULL on any row not walked
+  // since the migration that added them — every consumer treats that as
+  // "unknown" and falls back to the name it already had.
+  album_id: string | null;
+  artist_id: string | null;
   year: number | null;
   original_year: number | null;
   original_year_source: string | null;
   original_year_checked_at: string | null;
   is_compilation: number | null;
+  era_untrusted: number | null;
+  text_vector_dirty: number;
   genres: string | null; // JSON array; `genre` is generated from genres[0]
   genre: string | null;
   duration_sec: number | null;
@@ -156,6 +190,9 @@ export interface TrackRow {
   key_ranges_json: string | null;
   audio_moods: string | null;
   outro_json: string | null;
+  lead_silence_ms: number | null;
+  tail_silence_ms: number | null;
+  tail_start_ms: number | null;
   map_x: number | null;
   map_y: number | null;
 }
@@ -164,16 +201,25 @@ export interface TrackMeta {
   title?: string | null;
   artist?: string | null;
   album?: string | null;
+  /** Subsonic album/artist ids. Omitted by the non-walk writers (manual tag
+   *  edits, the analyzer's metadata top-up), which have no id to offer —
+   *  upsertTrackMeta COALESCEs, so an omitted id never clears a stored one. */
+  albumId?: string | null;
+  artistId?: string | null;
   year?: number | string | null;
   genres?: string[] | null;
   duration?: number | null;
-  // Walk-time original-year surface (issue #842). `originalYear` here is the
-  // ALBUM's originalReleaseDate.year (source 'album-tag'); the walk passes it
-  // only for non-compilation albums (a compilation's original date is the
-  // compilation's own, not its songs'). Never overwrites a per-track
-  // 'musicbrainz' resolution — see upsertTrackMeta.
+  // Walk-time original-year surface (issue #842/#1418). `originalYear` here is
+  // the ALBUM's originalReleaseDate.year (source 'album-tag'), and the walk
+  // passes it only when it is INFORMATIVE — not on an era-suspect album, and
+  // not when it merely echoes the release year, which tells us nothing and
+  // would hide the track from the lookup that can actually answer. Never
+  // overwrites a per-track 'musicbrainz' or 'manual' value — see
+  // upsertTrackMeta.
   originalYear?: number | null;
   isCompilation?: boolean | null;
+  /** music/era-suspect.albumEraSuspect's verdict for this track's album. */
+  eraUntrusted?: boolean | null;
 }
 
 export interface TrackEnrichment {
@@ -222,5 +268,4 @@ export interface LibraryStats {
   withAudioEmbedding: number;
   updatedAt: string | null;
 }
-
 

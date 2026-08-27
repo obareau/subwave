@@ -6,6 +6,7 @@ import {
 } from 'react-hook-form';
 import { z } from 'zod';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, SelectField } from '@/lib/form-fields';
@@ -22,6 +23,10 @@ import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import {
+  useSettingsMutation,
+  useSettingsQuery,
+} from './settings/queries';
+import {
   festivalsSchema,
   SETTINGS_FESTIVAL_DESCRIPTION_MAX,
   SETTINGS_FESTIVAL_NAME_MAX,
@@ -36,6 +41,10 @@ import {
 type FestivalsArray = z.output<ReturnType<typeof festivalsSchema>>;
 type FestivalsFormValues = { festivals: FestivalsArray };
 type Festival = FestivalsArray[number];
+type FestivalSettingsData = {
+  values?: { festivals?: unknown };
+  tts?: { moods?: unknown };
+};
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -211,6 +220,10 @@ function FestivalModalFields({
 
 export default function FestivalsSection() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
+  const settingsQuery = useSettingsQuery<FestivalSettingsData>({
+    adminFetch,
+    enabled: hydrated && !needsAuth,
+  });
   const [loaded, setLoaded] = useState(false);
   const [moods, setMoods] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -224,6 +237,8 @@ export default function FestivalsSection() {
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const editSnapshot = useRef<Festival | null>(null);
+  const appliedRevisionRef = useRef(0);
+  const pendingSettingsRef = useRef<{ revision: number; data: FestivalSettingsData } | null>(null);
   const fieldId = useId();
 
   // moodNames is nullable on the shared context, where null means "this caller
@@ -247,33 +262,38 @@ export default function FestivalsSection() {
   });
   const watchedFestivals = useWatch({ control: arrayControl, name: 'festivals' }) ?? [];
 
-  const load = useCallback(async () => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) throw new Error(`failed (${r.status})`);
-      const j = (await r.json()) as {
-        values?: { festivals?: unknown };
-        tts?: { moods?: unknown };
-      } | null;
-      // validateFestivalsStrict normalises on every save, so trust the shape here.
-      const vals = j?.values?.festivals;
-      const loadedList = Array.isArray(vals) ? (vals as Festival[]) : [];
-      form.reset({ festivals: sortFestivals(loadedList) });
-      setLoaded(true);
-      // Vocabulary comes from the server so the dropdown can't drift from what
-      // the controller will accept.
-      const moodVals = j?.tts?.moods;
-      setMoods(Array.isArray(moodVals) ? (moodVals as string[]) : []);
-      setErr(null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
-  }, [adminFetch, form]);
+  const saveMutation = useSettingsMutation<FestivalSettingsData>({ adminFetch });
 
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    void load();
-  }, [hydrated, needsAuth, load]);
+    if (settingsQuery.error) {
+      setErr(errorMessage(settingsQuery.error));
+      return;
+    }
+    const revision = settingsQuery.dataUpdatedAt;
+    if (settingsQuery.data && revision && appliedRevisionRef.current !== revision) {
+      pendingSettingsRef.current = { revision, data: settingsQuery.data };
+    }
+    const pending = pendingSettingsRef.current;
+    if (!pending || (loaded && form.formState.isDirty)) return;
+    const j = pending.data;
+    // validateFestivalsStrict normalises on every save, so trust the shape here.
+    const vals = j?.values?.festivals;
+    const loadedList = Array.isArray(vals) ? (vals as Festival[]) : [];
+    form.reset({ festivals: sortFestivals(loadedList) });
+    setLoaded(true);
+    // Vocabulary comes from the server so the dropdown can't drift from what
+    // the controller will accept.
+    const moodVals = j?.tts?.moods;
+    setMoods(Array.isArray(moodVals) ? (moodVals as string[]) : []);
+    setErr(null);
+    appliedRevisionRef.current = pending.revision;
+    pendingSettingsRef.current = null;
+  }, [
+    settingsQuery.data, settingsQuery.dataUpdatedAt, settingsQuery.error,
+    loaded, form, form.formState.isDirty,
+  ]);
+
+  const load = useCallback(async () => { await settingsQuery.refetch(); }, [settingsQuery]);
 
   // `moods` (and so the schema's vocabulary) arrives asynchronously. Once the
   // real list lands, re-validate rather than remounting the form, which would
@@ -285,30 +305,22 @@ export default function FestivalsSection() {
   const persist = useCallback(async (list: Festival[]) => {
     setBusy(true);
     try {
-      const r = await adminFetch('/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ festivals: list }),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        error?: string;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        // A rule only the server can check still lands on the right input.
-        applyServerFieldErrors(form, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      const receipt = await saveMutation.mutateAsync({ festivals: list });
       form.reset({ festivals: sortFestivals(list) });
       setEditIdx(null);
       setEditing(false);
-      notify.ok(`${list.length} festival${list.length === 1 ? '' : 's'} saved`);
+      const saved = `${list.length} festival${list.length === 1 ? '' : 's'} saved`;
+      if (receipt.refreshError) notify.err(`${saved}, but refresh failed: ${receipt.refreshError}`);
+      else notify.ok(saved);
     } catch (e) {
+      if (e instanceof AdminResponseError) {
+        applyServerFieldErrors(form, (e.body as { fieldErrors?: Record<string, string> }).fieldErrors);
+      }
       notify.err(`Save failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
     }
-  }, [adminFetch, form]);
+  }, [form, saveMutation]);
 
   const commit = form.handleSubmit(values => persist(values.festivals));
 

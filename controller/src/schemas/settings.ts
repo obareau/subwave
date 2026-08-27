@@ -60,6 +60,14 @@ export const BEDS_THRESHOLD_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 60
 // own length too, so a long ramp on a short link can't invert the arithmetic.
 export const BEDS_CROSS_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
 
+// Dead-air trim: the smallest edge gap worth cutting. The FLOOR is what keeps
+// the feature from eating deliberate silence — a segued album leaves a beat
+// between tracks on purpose, and a mastering blank worth a cue point is
+// measured in seconds, not frames. The ceiling bounds the same mistake from
+// the other side: past 30s an operator is describing a different problem
+// (a corrupt rip) than the one a cue point solves.
+export const SILENCE_TRIM_MIN_GAP_MS_BOUNDS: SettingsNumericBound = { min: 250, max: 30000 };
+
 /**
  * `parseInt(raw, 10)` + a bounds check, exactly as the hand-rolled branch did.
  *
@@ -336,6 +344,13 @@ export const LOUDNESS_MAX_BOOST_DB_BOUNDS: SettingsNumericBound = { min: 0, max:
 // the load path drift.
 export const STREAM_BUFFER_SECONDS_BOUNDS: SettingsNumericBound = { min: 0, max: 60 };
 
+// Icecast's <limits><clients> ceiling. 1 is the floor because 0 would render a
+// station nobody can tune into; 10000 is far past what one homelab box serves
+// and exists only to keep a typo out of the config. Licensing bodies in some
+// countries calculate fees on simultaneous listener capacity, which is why this
+// is a first-class setting rather than a convenience (#1300 FR 15).
+export const STREAM_MAX_LISTENERS_BOUNDS: SettingsNumericBound = { min: 1, max: 10000 };
+
 // Falling back to the product default is what an emptied station name does —
 // see stationSchema.
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
@@ -364,6 +379,7 @@ export const sfxPatchSchema = settingsBlockOf({
 
 export const bedsPatchSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
+  requestIntros: settingsBoolLike(),
   thresholdSec: settingsFloatLike(
     BEDS_THRESHOLD_SEC_BOUNDS,
     `beds.thresholdSec must be number in [${BEDS_THRESHOLD_SEC_BOUNDS.min}, ${BEDS_THRESHOLD_SEC_BOUNDS.max}]`,
@@ -371,6 +387,14 @@ export const bedsPatchSchema = settingsBlockOf({
   crossSec: settingsFloatLike(
     BEDS_CROSS_SEC_BOUNDS,
     `beds.crossSec must be number in [${BEDS_CROSS_SEC_BOUNDS.min}, ${BEDS_CROSS_SEC_BOUNDS.max}]`,
+  ),
+});
+
+export const silenceTrimPatchSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+  minGapMs: settingsIntLike(
+    SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
+    `silenceTrim.minGapMs must be int in [${SILENCE_TRIM_MIN_GAP_MS_BOUNDS.min}, ${SILENCE_TRIM_MIN_GAP_MS_BOUNDS.max}]`,
   ),
 });
 
@@ -460,6 +484,10 @@ export const streamPatchSchema = settingsBlockOf({
   idleAfterMinutes: settingsIntLike(
     { min: 1, max: 1440 },
     'stream.idleAfterMinutes must be an integer between 1 and 1440',
+  ),
+  maxListeners: settingsIntLike(
+    STREAM_MAX_LISTENERS_BOUNDS,
+    `stream.maxListeners must be an integer between ${STREAM_MAX_LISTENERS_BOUNDS.min} and ${STREAM_MAX_LISTENERS_BOUNDS.max}`,
   ),
 });
 

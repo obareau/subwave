@@ -283,6 +283,59 @@ TAKEOVER_SHOW_NAME = "Verify Takeover Show"
 
 
 @check
+def stream_buffer(page):
+    """The listener buffer control round-trips the advertised Icecast depth.
+
+    This is the timing value that listener-facing titles and voice events use,
+    so the UI must save through the real /settings route and surface the
+    controller's existing 0-60 validation rather than applying a second rule.
+    """
+    original = json.loads(api("/settings"))["values"]["stream"]["bufferSeconds"]
+
+    try:
+        page.goto(f"{WEB}/admin/settings?section=danger")
+        page.wait_for_selector("text=Stream MP3 bitrate")
+
+        seconds = page.get_by_label("Listener buffer (seconds)")
+        assert seconds.input_value() == str(original), (
+            f"buffer field hydrated as {seconds.input_value()!r}, want {original!r}"
+        )
+
+        # The controller owns the range. Prove its fieldErrors response lands
+        # beside this input and the rejected value is not persisted.
+        seconds.fill("61")
+        with page.expect_response(
+            lambda r: r.url.endswith("/settings") and r.request.method == "POST"
+        ) as refused_info:
+            page.get_by_role("button", name="Save listener buffer").click()
+        assert refused_info.value.status == 400, (
+            f"out-of-range save returned HTTP {refused_info.value.status}, want 400"
+        )
+        field = seconds.locator(
+            "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' field ')][1]"
+        )
+        field.get_by_text("stream.bufferSeconds must be a number between 0 and 60").wait_for()
+        after_refusal = json.loads(api("/settings"))["values"]["stream"]["bufferSeconds"]
+        assert after_refusal == original, "rejected buffer value was persisted"
+
+        # A valid save persists the exact value and reports the broadcast
+        # restart the Icecast template needs before the new burst takes effect.
+        seconds.fill("17")
+        with page.expect_response(
+            lambda r: r.url.endswith("/settings") and r.request.method == "POST"
+        ) as saved_info:
+            page.get_by_role("button", name="Save listener buffer").click()
+        saved = saved_info.value
+        assert saved.status == 200, f"valid save returned HTTP {saved.status}, want 200"
+        assert saved.json().get("requiresRestart") is True, "save did not request a restart"
+        stored = json.loads(api("/settings"))["values"]["stream"]["bufferSeconds"]
+        assert stored == 17, f"buffer save stored {stored!r}, want 17"
+        page.get_by_text("Pending settings need a restart to apply.").wait_for()
+    finally:
+        api_write("POST", "/settings", {"stream": {"bufferSeconds": original}})
+
+
+@check
 def takeover(page):
     """TakeoverCard (Task 2) renders NOTHING to interact with — not "Pin a
     show", not "Takeover minutes" — when `shows.length === 0`
@@ -631,6 +684,14 @@ def skills(page):
         "brief": "Seeded by verify-forms.py's skills() check — collision fixture, torn down at the end of the same run.",
     })
 
+    skill_gets = []
+    page.on(
+        "request",
+        lambda request: skill_gets.append(request.url)
+        if request.method == "GET" and request.url.split("?", 1)[0].endswith("/dj/skills")
+        else None,
+    )
+
     try:
         page.goto(f"{WEB}/admin/skills")
         page.get_by_role("button", name="New skill").click()
@@ -658,6 +719,19 @@ def skills(page):
         # aria-describedby pointing at unrelated text — the associated node's own
         # text must be the "already exists" message.
         assert_field_error(page, slug, "already exists")
+
+        # A failed create is still a TanStack mutation, but it must leave the
+        # fresh installed-skills resource reusable. Closing the refused form,
+        # visiting another panel, and returning should neither evict nor refetch
+        # the roster inside the shared 30-second stale window.
+        dialog.get_by_text("Close", exact=True).click()
+        dialog.wait_for(state="detached")
+        page.get_by_role("link", name="Connect", exact=True).click()
+        page.wait_for_url("**/admin/connect**")
+        page.get_by_role("link", name="Skills", exact=True).click()
+        page.wait_for_url("**/admin/skills**")
+        page.get_by_text("Verify Dup Skill", exact=True).first.wait_for(state="visible")
+        assert len(skill_gets) == 1, f"failed create evicted/refetched /dj/skills: {skill_gets}"
     finally:
         # Runs whether the assertions above passed or raised — a failed run
         # must not leave the fixture behind to poison the NEXT run. 200 is
@@ -849,21 +923,19 @@ def imaging(page):
     never an API prefix.
 
     The persistence round trip is proven through the IMPORT modal, not a real
-    generation — this verify stack's ElevenLabs key reports `generatorReady:
-    true` but has 0 credits remaining (confirmed by actually attempting a
-    create: POST /sfx answered 500 `quota_exceeded`), so a real create() call
-    cannot succeed here and would be a flaky, costed round trip even on a
-    stack that does have credit. Import needs no external API — a real WAV
-    upload through /sfx/upload — and shares the same imagingImportSchema
-    name/description fields.
+    generation. Verification runs with every TTS credential neutralised, so
+    the browser stubs only GET /sfx's `generatorReady` capability to expose
+    the create form's submit state; POSTs remain real and no costed provider
+    call is made. Import needs no external API — a real WAV upload through
+    /sfx/upload — and shares the same imagingImportSchema name/description
+    fields.
 
-    Also covers ImagingPanel's own 3s poll (`setInterval(…, 3000)` — ten times
-    faster than TakeoverCard's 30s, and the panel most likely to exhibit the
-    clobber bug `assert_survives_poll` exists to catch). The Jingle ratio
-    input is the right target: it's a real on-page control fed by the SAME
-    `data` state the poll refetches, guarded by `jingleRatio == null` in
-    ImagingPanel's hydrate-once effect so an in-progress edit is meant to
-    survive every tick. `seconds=3` matches THIS panel's real interval —
+    Also covers ImagingPanel's own 3s TanStack Query `refetchInterval` — ten
+    times faster than TakeoverCard's 30s, and the panel most likely to exhibit
+    the clobber bug `assert_survives_poll` exists to catch. The Jingle ratio
+    input is the right target: it's a real on-page control hydrated from the
+    shared settings query only while clean, so an in-progress edit must
+    survive every background revision. `seconds=3` matches THIS panel's real interval —
     `assert_survives_poll`'s `seconds=35` default is calibrated for
     TakeoverCard's 30s poll and would prove nothing here (it'd fast-forward
     past 11 ticks instead of exercising one real one).
@@ -876,8 +948,22 @@ def imaging(page):
         api_write("DELETE", f"/sfx/{SFX_FIXTURE_NAME}", ok_statuses=(200, 400, 404))
 
     try:
-        # Installed BEFORE goto — like takeover()'s clock — so the poll's
-        # setInterval is one this test controls from the moment ImagingPanel
+        # The isolated stack deliberately has no ElevenLabs credential. Keep
+        # the real controller list but expose the create form's validation
+        # path without enabling or calling an external generator.
+        sfx_fixture = json.loads(api("/sfx"))
+        sfx_fixture["generatorReady"] = True
+        page.route(
+            f"{API}/sfx",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(sfx_fixture),
+            ) if route.request.method == "GET" else route.continue_(),
+        )
+
+        # Installed BEFORE goto — like takeover()'s clock — so the query's
+        # refetch timer is one this test controls from the moment ImagingPanel
         # mounts, not one already ticking on real wall-clock time.
         page.clock.install()
         page.goto(f"{WEB}/admin/imaging?tab=jingles")
@@ -1668,6 +1754,71 @@ def shows(page):
         leftover = find_show(SHOW_VERIFY_NAME)
         if leftover:
             api_write("DELETE", f"/shows/{leftover['id']}", ok_statuses=(200, 404))
+
+
+@check
+def schedule(page):
+    """Rundown board — local booking survives until one authoritative save.
+
+    The board is intentionally not an RHF form, but it is a programming
+    surface exercised beside Shows and Playlists.  Stub the controller edge so
+    the check can assert the exact PUT payload, the mounted live-schedule
+    refresh, and the shared settings-cache patch without altering the isolated
+    fixture's real week.
+    """
+    settings = json.loads(api("/settings"))
+    personas = settings.get("values", {}).get("personas", [])
+    assert personas, "verify stack needs a seeded persona"
+    show = {
+        "id": "s_verify_schedule", "name": "Verify Schedule Show",
+        "personaId": personas[0]["id"], "moods": [], "energies": [],
+    }
+    week = {str(day): [None] * 24 for day in range(7)}
+    settings["values"]["shows"] = [show]
+    settings["values"]["schedule"] = week
+    saved = {"schedule": None}
+
+    page.route(
+        f"{API}/settings",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps(settings),
+        ) if route.request.method == "GET" else route.continue_(),
+    )
+
+    def schedule_route(route):
+        if route.request.method == "PUT":
+            saved["schedule"] = json.loads(route.request.post_data or "{}").get("schedule")
+            route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps({"schedule": saved["schedule"], "dropped": 0}),
+            )
+            return
+        route.fulfill(
+            status=200, content_type="application/json",
+            body=json.dumps({"schedule": saved["schedule"] or week, "override": None}),
+        )
+
+    page.route(f"{API}/schedule", schedule_route)
+    page.goto(f"{WEB}/admin/shows/schedule")
+    brush = page.locator('button[title*="Click to arm"]').first
+    brush.wait_for(state="visible")
+    brush.click()
+    page.locator("button", has_text="+").filter(has_not_text="Add show").first.click()
+
+    save = page.get_by_role("button", name="Save the week").first
+    assert not save.is_disabled(), "Save the week stayed disabled after a booking"
+    save.click()
+    page.get_by_text("Week saved", exact=False).wait_for(state="visible")
+    assert saved["schedule"], "Rundown save sent no schedule"
+    booked = sum(1 for day in saved["schedule"].values() for show_id in day if show_id)
+    assert booked > 0, f"Rundown save carried no booked cells: {saved['schedule']}"
+
+    # The authoritative write patches settingsKeys.detail(), so navigation to
+    # the roster observes the saved hour count without another settings GET.
+    page.get_by_role("link", name="New show →").click()
+    page.wait_for_url("**/admin/shows")
+    metric = page.locator(".metric").filter(has_text="hours scheduled")
+    metric.locator(".n").get_by_text(str(booked), exact=True).wait_for(state="visible")
 
 
 PLAYLIST_NAME_MAX = 120  # controller/src/schemas/playlist.ts

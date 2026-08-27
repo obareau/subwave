@@ -441,11 +441,26 @@ class AnalyzeRequest(BaseModel):
     # persists the Demucs stems it already computes as FLAC into this dir —
     # implies the separation pass even when `vocal` wasn't requested.
     stems_dir: str | None = None
+    # CLAP backfill for a track whose baseline analysis is already current.
+    # Skips every non-embedding feature in the worker.
+    embedding_only: bool = False
 
 
 @app.post("/analyze")
 async def analyze(req: AnalyzeRequest):
     if req.path:
+        # A controller can reach this sidecar over HTTP without sharing its
+        # state mount. Name that boundary failure before handing it to the
+        # worker, so the controller can retry by URL without also retrying
+        # genuine decode/model failures.
+        if not os.path.isfile(req.path) or not os.access(req.path, os.R_OK):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "path_unavailable",
+                    "message": f"analyzer cannot read controller path: {req.path}",
+                },
+            )
         payload: dict[str, Any] = {"id": "1", "path": req.path}
     elif req.url:
         payload = {"id": "1", "url": req.url}
@@ -459,6 +474,8 @@ async def analyze(req: AnalyzeRequest):
         payload["complete"] = req.complete
     if req.stems_dir is not None:
         payload["stems_dir"] = req.stems_dir
+    if req.embedding_only:
+        payload["embedding_only"] = True
     msg = await analyzer_worker.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")
@@ -474,6 +491,7 @@ async def analyze(req: AnalyzeRequest):
     for k in (
         "loudness_lufs", "peak_db", "sections", "vocal_ranges",
         "pace_curve", "beats", "bars", "key_ranges", "outro", "stems_cached",
+        "lead_silence_ms", "tail_silence_ms", "tail_start_ms",
     ):
         if k in msg:
             out[k] = msg[k]

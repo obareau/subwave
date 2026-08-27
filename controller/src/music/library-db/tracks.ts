@@ -5,6 +5,7 @@ import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, g
 import type { TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
+import { resolveEraYear } from '../era-year.js';
 
 // ---------------------------------------------------------------------------
 // Track CRUD
@@ -25,11 +26,18 @@ export interface TrackLite {
   moods: string[];
   energy: string | null;
   year: number | null;
-  // Era-year surface (issue #842) — lets show-filter resolve a track's true
-  // era without the full getTrack() blob parse. null = unresolved / unknown.
+  // Era-year surface (issues #842, #1418) — lets show-filter resolve a track's
+  // true era without the full getTrack() blob parse. null = unresolved /
+  // unknown. `yearUntrusted` is the composed flag era resolution reads;
+  // `isCompilation` stays the raw Navidrome fact beside it.
   originalYear: number | null;
   isCompilation: boolean | null;
+  yearUntrusted: boolean | null;
   durationSec: number | null;
+  // Edge dead air (music/silence-trim.ts) — see getTrackLite.
+  leadSilenceMs: number | null;
+  tailSilenceMs: number | null;
+  tailStartMs: number | null;
 }
 
 // Lean read for the /now-playing hot path (polled every ~5s by every listener).
@@ -41,8 +49,8 @@ export interface TrackLite {
 // concurrent HTTP response, making the whole UI sluggish (#723).
 export function getTrackLite(id: string): TrackLite | null {
   const row = requireDb()
-    .prepare(`SELECT genres, genre, bpm, musical_key, moods, energy, year, original_year, is_compilation, duration_sec FROM tracks WHERE id = ?`)
-    .get(id) as Pick<TrackRow, 'genres' | 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'original_year' | 'is_compilation' | 'duration_sec'> | undefined;
+    .prepare(`SELECT genres, genre, bpm, musical_key, moods, energy, year, original_year, is_compilation, era_untrusted, duration_sec, lead_silence_ms, tail_silence_ms, tail_start_ms FROM tracks WHERE id = ?`)
+    .get(id) as Pick<TrackRow, 'genres' | 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'original_year' | 'is_compilation' | 'era_untrusted' | 'duration_sec' | 'lead_silence_ms' | 'tail_silence_ms' | 'tail_start_ms'> | undefined;
   if (!row) return null;
   return {
     genres: row.genres ? safeParseArray(row.genres) : [],
@@ -54,7 +62,19 @@ export function getTrackLite(id: string): TrackLite | null {
     year: row.year ?? null,
     originalYear: row.original_year ?? null,
     isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
+    // Same composition as rowToTrack — era consumers read this, never the
+    // raw flag (#1418).
+    yearUntrusted: (row.is_compilation === 1 || row.era_untrusted === 1)
+      ? true
+      : (row.is_compilation == null && row.era_untrusted == null ? null : false),
     durationSec: row.duration_sec ?? null,
+    // Edge dead air. Three plain INTEGER columns, so this stays the lean read
+    // #723 made it — and /now-playing needs them: an auto-playlist play has no
+    // queue item to carry the stamped cue points, so the listener's track clock
+    // can only be shortened by resolving the trim from the row itself.
+    leadSilenceMs: row.lead_silence_ms ?? null,
+    tailSilenceMs: row.tail_silence_ms ?? null,
+    tailStartMs: row.tail_start_ms ?? null,
   };
 }
 
@@ -83,26 +103,97 @@ export function hasVector(id: string): boolean {
   return !!row;
 }
 
+interface StoredEra {
+  year: number | null;
+  original_year: number | null;
+  is_compilation: number | null;
+  era_untrusted: number | null;
+}
+
+function storedEra(id: string): StoredEra | null {
+  return (requireDb()
+    .prepare(`SELECT year, original_year, is_compilation, era_untrusted FROM tracks WHERE id = ?`)
+    .get(id) as StoredEra | undefined) ?? null;
+}
+
+function resolvedStoredEra(row: StoredEra): number | null {
+  const untrusted = row.is_compilation === 1 || row.era_untrusted === 1;
+  return resolveEraYear(row.year, row.original_year, untrusted);
+}
+
+export function resolvedEraYearForTrack(id: string): number | null {
+  const row = storedEra(id);
+  return row ? resolvedStoredEra(row) : null;
+}
+
+function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): void {
+  if (!before) return;
+  const after = storedEra(id);
+  if (!after || resolvedStoredEra(before) === resolvedStoredEra(after)) return;
+  requireDb()
+    .prepare(
+      `UPDATE tracks SET text_vector_dirty = 1
+        WHERE id = ? AND EXISTS (SELECT 1 FROM track_vectors WHERE id = tracks.id)`,
+    )
+    .run(id);
+}
+
+// Existing vectors whose era-bearing source text changed. They remain in the
+// KNN index until phaseEmbed successfully replaces them.
+export function textVectorDirtyIds(): string[] {
+  return (requireDb()
+    .prepare(
+      `SELECT t.id FROM tracks t
+        JOIN track_vectors v ON v.id = t.id
+        WHERE t.text_vector_dirty = 1`,
+    )
+    .all() as Array<{ id: string }>).map(r => r.id);
+}
+
 export function upsertTrackMeta(id: string, meta: TrackMeta): void {
+  const eraBefore = storedEra(id);
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, year, original_year, original_year_source, is_compilation, genres, duration_sec)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
         album        = COALESCE(excluded.album, tracks.album),
+        -- COALESCE, like every other column here: the walk is the only writer
+        -- that HAS these ids, so a manual tag edit or an analyzer metadata
+        -- top-up passing undefined must not blank a walked row.
+        album_id     = COALESCE(excluded.album_id, tracks.album_id),
+        artist_id    = COALESCE(excluded.artist_id, tracks.artist_id),
         year         = COALESCE(excluded.year, tracks.year),
         -- Walk-time 'album-tag' years never clobber a per-track 'musicbrainz'
-        -- resolution — the MB lookup is the more specific signal (issue #842).
-        original_year = CASE WHEN tracks.original_year_source = 'musicbrainz'
-                             THEN tracks.original_year
-                             ELSE COALESCE(excluded.original_year, tracks.original_year) END,
-        original_year_source = CASE WHEN tracks.original_year_source = 'musicbrainz'
-                                    THEN tracks.original_year_source
-                                    ELSE COALESCE(excluded.original_year_source, tracks.original_year_source) END,
+        -- resolution — the MB lookup is the more specific signal (issue #842) —
+        -- nor a 'manual' one, which outranks both (#1418): an operator reading
+        -- the sleeve beats metadata that is wrong by construction on a reissue.
+        -- Conversely, when a completed album becomes era-suspect, discard an
+        -- album-tag answer recorded by an earlier partial walk. Leaving it in
+        -- place makes the non-null value look resolved and blocks MB backfill.
+        original_year = CASE
+          WHEN tracks.original_year_source IN ('musicbrainz', 'manual')
+            THEN tracks.original_year
+          WHEN excluded.era_untrusted = 1
+            AND excluded.original_year IS NULL
+            AND tracks.original_year_source = 'album-tag'
+            THEN NULL
+          ELSE COALESCE(excluded.original_year, tracks.original_year)
+        END,
+        original_year_source = CASE
+          WHEN tracks.original_year_source IN ('musicbrainz', 'manual')
+            THEN tracks.original_year_source
+          WHEN excluded.era_untrusted = 1
+            AND excluded.original_year IS NULL
+            AND tracks.original_year_source = 'album-tag'
+            THEN NULL
+          ELSE COALESCE(excluded.original_year_source, tracks.original_year_source)
+        END,
         is_compilation = COALESCE(excluded.is_compilation, tracks.is_compilation),
+        era_untrusted  = COALESCE(excluded.era_untrusted, tracks.era_untrusted),
         genres       = COALESCE(excluded.genres, tracks.genres),
         duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec)
     `,
@@ -112,13 +203,17 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       meta.title ?? null,
       meta.artist ?? null,
       meta.album ?? null,
+      meta.albumId ?? null,
+      meta.artistId ?? null,
       normaliseYear(meta.year),
       normaliseYear(meta.originalYear),
       normaliseYear(meta.originalYear) != null ? 'album-tag' : null,
       meta.isCompilation == null ? null : meta.isCompilation ? 1 : 0,
+      meta.eraUntrusted == null ? null : meta.eraUntrusted ? 1 : 0,
       meta.genres?.length ? JSON.stringify(meta.genres) : null,
       Number.isFinite(meta.duration as number) ? (meta.duration as number) : null,
     );
+  markTextVectorDirtyIfEraChanged(id, eraBefore);
 }
 
 // Tracks still owed an original-year lookup (issue #842): compilation-album
@@ -131,7 +226,13 @@ export function idsNeedingOriginalYear(retryMisses = false): string[] {
   return (
     requireDb()
       .prepare(
-        `SELECT id FROM tracks WHERE is_compilation = 1 AND original_year IS NULL ${extra}`,
+        // Era-SUSPECT, not just flagged (#1418) — the JS twin of
+        // musicbrainz.needsOriginalYearLookup, and the two must stay in
+        // agreement. Keying this on is_compilation alone is what limited the
+        // pass to 27 tracks out of 27,860 on the reported library.
+        `SELECT id FROM tracks
+          WHERE (is_compilation = 1 OR era_untrusted = 1)
+            AND original_year IS NULL ${extra}`,
       )
       .all() as Array<{ id: string }>
   ).map((r) => r.id);
@@ -142,15 +243,69 @@ export function idsNeedingOriginalYear(retryMisses = false): string[] {
 // tracks it already asked MusicBrainz about; a miss leaves original_year NULL
 // (era filtering then treats a compilation track's year as unknown).
 export function setOriginalYear(id: string, year: number | null): void {
+  const eraBefore = storedEra(id);
   requireDb()
     .prepare(
       `UPDATE tracks SET
          original_year            = COALESCE(?, original_year),
          original_year_source     = CASE WHEN ? IS NOT NULL THEN 'musicbrainz' ELSE original_year_source END,
          original_year_checked_at = ?
-       WHERE id = ?`,
+       -- Never touch a manual override (#1418), not even its checked_at stamp:
+       -- an operator answer is final until the operator clears it. Both callers
+       -- (phase-0, the retag route) already gate on needsOriginalYearLookup,
+       -- which a manual row fails on a non-null originalYear — this is the guard
+       -- at the write itself, so a third caller can't route around it.
+       WHERE id = ? AND (original_year_source IS NULL OR original_year_source <> 'manual')`,
     )
     .run(year, year, new Date().toISOString(), id);
+  markTextVectorDirtyIfEraChanged(id, eraBefore);
+}
+
+// The operator's own answer for a track's original year (issue #1418), the
+// highest-precedence of the three sources. The automatic pipeline reads the
+// album tag (the reissue's date on an anthology) and asks MusicBrainz only for
+// albums Navidrome flags as compilations — which reissue anthologies are not —
+// so on exactly the records that motivated #842 there is otherwise no way to
+// get a right answer in at all.
+//
+// `year: null` REMOVES the override rather than pinning "unknown": original_year
+// and both its stamps go back to NULL, so the track re-enters the automatic
+// pipeline and a later pass may resolve it. Pinning unknown forever would make
+// "I was wrong about this one" unrecoverable without a reset.
+//
+// The old embedding stays available to similarity search, but is marked dirty
+// so the next tag pass replaces its stale `Era:` line. Dropping it immediately
+// would create a hole in the KNN pool until that pass completes.
+export function setManualOriginalYear(id: string, year: number | null): void {
+  const eraBefore = storedEra(id);
+  if (year != null) {
+    requireDb()
+      .prepare(
+        `UPDATE tracks SET
+           original_year            = ?,
+           original_year_source     = 'manual',
+           original_year_checked_at = ?
+         WHERE id = ?`,
+      )
+      .run(year, new Date().toISOString(), id);
+  } else {
+    // Clearing removes an OVERRIDE, so it only touches rows that hold one.
+    // The route's applyToAlbum loop runs this over every album track, and a
+    // sibling may carry a 'musicbrainz' or informative 'album-tag' year — a
+    // RESOLUTION, not an override. Nulling those would read as unknown-year
+    // everywhere (era filter, DJ line, /now-playing) until a manual
+    // enrichment pass, so a non-manual row is a no-op here.
+    requireDb()
+      .prepare(
+        `UPDATE tracks SET
+           original_year            = NULL,
+           original_year_source     = NULL,
+           original_year_checked_at = NULL
+         WHERE id = ? AND original_year_source = 'manual'`,
+      )
+      .run(id);
+  }
+  markTextVectorDirtyIfEraChanged(id, eraBefore);
 }
 
 export function upsertTrackEnrichment(id: string, enrich: TrackEnrichment): void {
@@ -232,6 +387,13 @@ interface TrackAnalysisWrite {
   // pass that couldn't compute the tail (capped download, url path) must not
   // wipe an outro a previous complete-file pass measured.
   outro?: TrackOutro | null;
+  // Edge dead air (ms). The HEAD is measurable on every pass, so it overwrites
+  // like the other head features. The TAIL follows the outro's rule — only a
+  // proven-complete file can measure it, so null keeps what a previous pass
+  // wrote instead of wiping it.
+  leadSilenceMs?: number | null;
+  tailSilenceMs?: number | null;
+  tailStartMs?: number | null;
   // Whether this pass ran a stem-caching attempt for the track (feature: stem
   // backfill). true stamps stems_at so the backfill scope drops it; false/
   // undefined leaves the stamp alone. Pass true for a MISS too — see the
@@ -257,6 +419,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         beats_json          = ?,
         bars_json           = ?,
         key_ranges_json     = ?,
+        lead_silence_ms     = ?,
         -- COALESCE: vocal activity is gated separately (ANALYZE_VOCAL_ACTIVITY),
         -- so a normal bpm/key pass passes null here and must NOT wipe an
         -- existing vocal_ranges_json. A non-null value (incl. "[]" for an
@@ -265,6 +428,13 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         -- Same for the outro: only computable off a COMPLETE file, so a pass
         -- that analysed a capped download passes null and keeps what's there.
         outro_json          = COALESCE(?, outro_json),
+        -- Trailing dead air rides the outro decode and shares its rule: only a
+        -- COMPLETE file can measure it, so a capped-download pass passes null
+        -- and keeps whatever a full pass already found.
+        tail_silence_ms     = COALESCE(?, tail_silence_ms),
+        -- Same pass, same rule: the gap's absolute start is only meaningful
+        -- when the gap itself was measurable.
+        tail_start_ms       = COALESCE(?, tail_start_ms),
         -- Same COALESCE shape: a pass with the stem cache off passes null and
         -- must not clear a stamp an earlier stem pass set.
         stems_at            = COALESCE(?, stems_at),
@@ -290,8 +460,11 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.beats && a.beats.length ? JSON.stringify(a.beats) : null,
       a.bars && a.bars.length ? JSON.stringify(a.bars) : null,
       a.keyRanges && a.keyRanges.length ? JSON.stringify(a.keyRanges) : null,
+      Number.isFinite(a.leadSilenceMs as number) ? Math.max(0, Math.round(a.leadSilenceMs as number)) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
       a.outro != null ? JSON.stringify(a.outro) : null,
+      Number.isFinite(a.tailSilenceMs as number) ? Math.max(0, Math.round(a.tailSilenceMs as number)) : null,
+      Number.isFinite(a.tailStartMs as number) ? Math.max(0, Math.round(a.tailStartMs as number)) : null,
       a.stemsAttempted ? new Date().toISOString() : null,
       ANALYSIS_VERSION,
       id,
@@ -423,7 +596,8 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
-      key_ranges_json = NULL, outro_json = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
+      key_ranges_json = NULL, outro_json = NULL,
+      lead_silence_ms = NULL, tail_silence_ms = NULL, tail_start_ms = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
       audio_moods = NULL, audio_mood_scores_json = NULL,
       -- A --re-analyze is the operator saying the past doesn't apply, so the
       -- failure history goes with the analysis it describes. Without this, the
@@ -436,7 +610,11 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
   d.prepare('DELETE FROM track_audio_vectors').run();
 }
 
-export function upsertTrackVector(id: string, vector: number[] | Float32Array): void {
+export function upsertTrackVector(
+  id: string,
+  vector: number[] | Float32Array,
+  expectedEraYear: number | null,
+): void {
   if (getEmbeddingDim() === null) {
     throw new Error('library-db opened without embedding dim');
   }
@@ -453,6 +631,20 @@ export function upsertTrackVector(id: string, vector: number[] | Float32Array): 
   const d = requireDb();
   d.prepare(`DELETE FROM track_vectors WHERE id = ?`).run(id);
   d.prepare(`INSERT INTO track_vectors (id, embedding) VALUES (?, ?)`).run(id, buf);
+  // Embedding is an external await. Compare the era used to build this vector
+  // with the row as it exists at completion so a concurrent metadata/manual
+  // edit cannot have its refresh marker cleared by a stale writer.
+  d.prepare(
+    `UPDATE tracks
+        SET text_vector_dirty = CASE
+          WHEN (CASE
+            WHEN original_year > 0 THEN original_year
+            WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL
+            WHEN year > 0 THEN year
+            ELSE NULL
+          END) IS ? THEN 0 ELSE 1 END
+      WHERE id = ?`,
+  ).run(expectedEraYear, id);
 }
 
 export function dropVectors(): void {
@@ -463,6 +655,7 @@ export function dropVectors(): void {
     `CREATE VIRTUAL TABLE track_vectors USING vec0(` +
       `id TEXT PRIMARY KEY, embedding FLOAT[${getEmbeddingDim()}] distance_metric=cosine)`,
   );
+  d.prepare(`UPDATE tracks SET text_vector_dirty = 0`).run();
 }
 
 // Write a CLAP audio embedding for a track. Independent of getEmbeddingDim()
@@ -482,5 +675,3 @@ export function upsertTrackAudioVector(id: string, vector: number[] | Float32Arr
   d.prepare(`DELETE FROM track_audio_vectors WHERE id = ?`).run(id);
   d.prepare(`INSERT INTO track_audio_vectors (id, embedding) VALUES (?, ?)`).run(id, buf);
 }
-
-

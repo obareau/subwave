@@ -198,8 +198,9 @@ export function SystemPromptModal({
             <p className="mb-3 max-w-[70ch] text-[12px] leading-[1.6] text-muted">
               One template wraps the DJ&rsquo;s scripted talk (intros, links, idents, time
               checks, programme beats), shared by all personas. The tool-using agents (track
-              picker, requests, skill segments) use each persona&rsquo;s name and soul directly
-              instead — only the house rules below reach those too. Keep several saved and
+              picker, requests, skill segments) and the multi-voice guest exchanges (banter,
+              show open/close) use each persona&rsquo;s name and soul directly instead — only
+              the house rules below reach those too. Keep several saved and
               switch between them. Placeholders:{' '}
               <code>{'{name}'}</code> · <code>{'{soul}'}</code> · <code>{'{station}'}</code> ·{' '}
               <code>{'{location}'}</code> · <code>{'{language}'}</code>. <code>{'{location}'}</code> is the
@@ -245,13 +246,14 @@ export function SystemPromptModal({
             </div>
 
             {/* The one operator block that reaches EVERY spoken line: the scripted
-                talk the template wraps AND the tool-using agents it never touches
-                (issue #1182). */}
+                talk the template wraps, the tool-using agents it never touches
+                (issue #1182), and the multi-voice cast exchanges (issue #1420). */}
             <div className="mt-5 border-t border-ink/40 pt-4">
               <div className="caption mb-1.5">station house rules</div>
               <p className="mb-2 max-w-[70ch] text-[12px] leading-[1.6] text-muted">
-                Appended to <b>everything</b> the DJ speaks — scripted talk and the
-                tool-using agents alike, whichever template is active. Use it for rules
+                Appended to <b>everything</b> the DJ speaks — scripted talk, the
+                tool-using agents and guest banter alike, whichever template is
+                active. Use it for rules
                 that must never be skipped: TTS control tags, &ldquo;spell out numbers and
                 dates in words&rdquo;, language-specific spelling. Leave empty for none.
               </p>

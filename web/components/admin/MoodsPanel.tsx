@@ -1,13 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { Trash2, Palette, Clock, CalendarDays, Volume2 } from 'lucide-react';
 import {
   useController, useFieldArray, useWatch, type Control,
 } from 'react-hook-form';
 import { z } from 'zod';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, SelectField, type Option } from '@/lib/form-fields';
@@ -33,6 +35,11 @@ import {
 import { VoicePreviewButton } from './tts/VoicePreviewButton';
 import { defaultEngineVoice } from './tts/defaultVoice';
 import { ENGINE_META } from './tts/engineMeta';
+import {
+  settingsKeys,
+  useSettingsMutation,
+  useSettingsQuery,
+} from './settings/queries';
 
 interface MoodEntry {
   name: string;
@@ -57,6 +64,23 @@ interface TestVoiceDefaults {
   // Kokoro's language code, so the test sample auditions the same voice the
   // Settings → TTS "Play sample" button does.
   lang?: string;
+}
+
+interface MoodSettingsData {
+  values?: {
+    moods?: unknown;
+    moodSchedule?: unknown;
+    weatherMoods?: unknown;
+    tts?: {
+      corrections?: unknown;
+      defaultEngine?: string;
+      kokoro?: { voice?: string; lang?: string };
+      chatterbox?: { referenceVoice?: string };
+      pocketTts?: { voice?: string };
+      cloud?: { provider?: string; model?: string; voice?: string };
+      speed?: Record<string, number>;
+    };
+  };
 }
 
 // The 8 fixed day-periods (controller context.ts getTimeContext) — only each
@@ -151,6 +175,11 @@ function WeatherMoodSelect({
 
 export default function MoodsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
+  const queryClient = useQueryClient();
+  const settingsQuery = useSettingsQuery<MoodSettingsData>({
+    adminFetch,
+    enabled: hydrated && !needsAuth,
+  });
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState<string | null>(null); // which card is saving
@@ -177,6 +206,8 @@ export default function MoodsPanel() {
   // mood name, pass client validation, and be rejected server-side. Advanced
   // only at load and on a successful moods-card save.
   const [savedMoodNames, setSavedMoodNames] = useState<string[]>([]);
+  const appliedRevisionRef = useRef(0);
+  const pendingSettingsRef = useRef<{ revision: number; data: MoodSettingsData } | null>(null);
   const moodOptions: Option[] = useMemo(
     () => savedMoodNames.map(m => ({ value: m, label: m })),
     [savedMoodNames],
@@ -217,6 +248,8 @@ export default function MoodsPanel() {
   // sample without a save round trip first.
   const liveCorrections = useWatch({ control: arrayControl, name: 'corrections' }) ?? [];
 
+  const saveMutation = useSettingsMutation<MoodSettingsData>({ adminFetch });
+
   // Swapping the resolver doesn't re-run it against already-computed error
   // state, so re-validate whenever the schema is rebuilt from a fresh
   // `savedMoodNames`.
@@ -224,77 +257,73 @@ export default function MoodsPanel() {
     void form.trigger();
   }, [schema, form]);
 
-  const load = useCallback(async () => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) throw new Error(`failed (${r.status})`);
-      const j = (await r.json()) as {
-        values?: {
-          moods?: unknown;
-          moodSchedule?: unknown;
-          weatherMoods?: unknown;
-          tts?: {
-            corrections?: unknown;
-            defaultEngine?: string;
-            kokoro?: { voice?: string; lang?: string };
-            chatterbox?: { referenceVoice?: string };
-            pocketTts?: { voice?: string };
-            cloud?: { provider?: string; model?: string; voice?: string };
-            speed?: Record<string, number>;
-          };
-        };
-      } | null;
-      const v = j?.values || {};
-      const loadedMoods = Array.isArray(v.moods) ? (v.moods as MoodEntry[]) : [];
-      const rawSchedule = (v.moodSchedule && typeof v.moodSchedule === 'object'
-        ? v.moodSchedule : {}) as Record<string, string>;
-      const rawWeather = (v.weatherMoods && typeof v.weatherMoods === 'object'
-        ? v.weatherMoods : {}) as Record<string, string>;
-      const loadedCorr = Array.isArray(v.tts?.corrections)
-        ? (v.tts!.corrections as Correction[]) : [];
-      // A period with no stored value falls back to the first vocab entry.
-      const firstMood = loadedMoods[0]?.name ?? '';
-      const loadedSchedule = Object.fromEntries(
-        PERIODS.map(p => [p.id, rawSchedule[p.id] || firstMood]),
-      );
-      // Weather gets no such fallback — '' means "no mood steer".
-      const loadedWeather = Object.fromEntries(
-        CONDITIONS.map(c => [c.id, rawWeather[c.id] || '']),
-      );
-      const next: MoodsFormValues = {
-        moods: loadedMoods,
-        schedule: loadedSchedule,
-        weather: loadedWeather,
-        corrections: loadedCorr,
-      };
-      form.reset(next);
-      setSavedMoodNames(loadedMoods.map(m => m.name));
-      setLoaded(true);
+  const hydrateSettings = useCallback((j: MoodSettingsData | null | undefined) => {
+    if (!j) return;
+    const v = j?.values || {};
+    const loadedMoods = Array.isArray(v.moods) ? (v.moods as MoodEntry[]) : [];
+    const rawSchedule = (v.moodSchedule && typeof v.moodSchedule === 'object'
+      ? v.moodSchedule : {}) as Record<string, string>;
+    const rawWeather = (v.weatherMoods && typeof v.weatherMoods === 'object'
+      ? v.weatherMoods : {}) as Record<string, string>;
+    const loadedCorr = Array.isArray(v.tts?.corrections)
+      ? (v.tts!.corrections as Correction[]) : [];
+    // A period with no stored value falls back to the first vocab entry.
+    const firstMood = loadedMoods[0]?.name ?? '';
+    const loadedSchedule = Object.fromEntries(
+      PERIODS.map(p => [p.id, rawSchedule[p.id] || firstMood]),
+    );
+    // Weather gets no such fallback — '' means "no mood steer".
+    const loadedWeather = Object.fromEntries(
+      CONDITIONS.map(c => [c.id, rawWeather[c.id] || '']),
+    );
+    const next: MoodsFormValues = {
+      moods: loadedMoods,
+      schedule: loadedSchedule,
+      weather: loadedWeather,
+      corrections: loadedCorr,
+    };
+    form.reset(next);
+    setSavedMoodNames(loadedMoods.map(m => m.name));
+    setLoaded(true);
 
-      // Which voice the "Test corrections" sample uses — the station's
-      // configured default engine, resolved through the one shared ladder
-      // (admin/tts/defaultVoice.ts) the Settings → TTS preview also walks.
-      const rawTts = v.tts || {};
-      const previewEngine = rawTts.defaultEngine || 'piper';
-      setPreviewVoice({
-        engine: previewEngine,
-        voice: defaultEngineVoice(previewEngine, rawTts),
-        cloudProvider: rawTts.cloud?.provider,
-        cloudModel: previewEngine === 'cloud' ? rawTts.cloud?.model : undefined,
-        speed: rawTts.speed?.[previewEngine],
-        lang: rawTts.kokoro?.lang || undefined,
-      });
-      setErr(null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
+    // Which voice the "Test corrections" sample uses — the station's
+    // configured default engine, resolved through the one shared ladder
+    // (admin/tts/defaultVoice.ts) the Settings → TTS preview also walks.
+    const rawTts = v.tts || {};
+    const previewEngine = rawTts.defaultEngine || 'piper';
+    setPreviewVoice({
+      engine: previewEngine,
+      voice: defaultEngineVoice(previewEngine, rawTts),
+      cloudProvider: rawTts.cloud?.provider,
+      cloudModel: previewEngine === 'cloud' ? rawTts.cloud?.model : undefined,
+      speed: rawTts.speed?.[previewEngine],
+      lang: rawTts.kokoro?.lang || undefined,
+    });
+    setErr(null);
+    // `form` is stable and this callback only maps one accepted server revision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminFetch]);
+  }, []);
 
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    void load();
-  }, [hydrated, needsAuth, load]);
+    if (settingsQuery.error) {
+      setErr(errorMessage(settingsQuery.error));
+      return;
+    }
+    const revision = settingsQuery.dataUpdatedAt;
+    if (settingsQuery.data && revision && appliedRevisionRef.current !== revision) {
+      pendingSettingsRef.current = { revision, data: settingsQuery.data };
+    }
+    const pending = pendingSettingsRef.current;
+    if (!pending || (loaded && form.formState.isDirty)) return;
+    hydrateSettings(pending.data);
+    appliedRevisionRef.current = pending.revision;
+    pendingSettingsRef.current = null;
+  }, [
+    settingsQuery.data, settingsQuery.dataUpdatedAt, settingsQuery.error,
+    loaded, form.formState.isDirty, hydrateSettings,
+  ]);
+
+  const load = useCallback(async () => { await settingsQuery.refetch(); }, [settingsQuery]);
 
   // Routed through the Next router so a soft nav re-derives `tab`.
   const selectTab = useCallback(
@@ -306,15 +335,9 @@ export default function MoodsPanel() {
     [router, pathname, searchParams],
   );
 
-  // POST one settings slice, then re-baseline the WHOLE form with a plain
-  // `form.reset(values)`. `reset(next, {keepDirtyValues: true})` looks like the
-  // right tool but does NOT recompute dirtyFields/isValid against the new
-  // defaults, so the just-saved card's Save button stayed wrongly enabled.
-  //
-  // Tradeoff: adopting the live value for every key also clears the dirty flag
-  // of an unsaved edit on another card. The VALUE is untouched — only the
-  // "unsaved changes" signal resets — which is the safer failure direction, and
-  // RHF offers no option that recomputes one key's dirtiness alone.
+  // POST one settings slice, then advance only that top-level field's default.
+  // Other cards keep both their live values and dirty/default comparison while
+  // the safe server revision stays queued behind them.
   const persistPatch = useCallback(
     async (
       card: string,
@@ -327,35 +350,23 @@ export default function MoodsPanel() {
     ) => {
       setBusy(card);
       try {
-        const r = await adminFetch('/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(patch),
-        });
-        const j = (await r.json().catch(() => ({}))) as {
-          error?: string;
-          fieldErrors?: Record<string, string>;
-          saved?: Record<string, unknown>;
-        };
-        if (!r.ok) {
-          // Only carries field paths for a SHAPE-level failure (duplicate or
-          // over-long name), which the route catches with moodNames: null. A
-          // membership failure is judged inside update() and throws a plain
-          // Error with no path, so it surfaces via notify.err below instead.
-          applyServerFieldErrors(form, j.fieldErrors);
-          throw new Error(j.error || `failed (${r.status})`);
-        }
-        const current = form.getValues() as unknown as MoodsFormValues;
-        form.reset({ ...current, [key]: nextValue });
-        onSuccess?.(j.saved);
-        notify.ok(okMsg);
+        const receipt = await saveMutation.mutateAsync(patch);
+        form.resetField(key as never, { defaultValue: nextValue as never });
+        onSuccess?.(receipt.refreshError
+          ? patch
+          : queryClient.getQueryData<MoodSettingsData>(settingsKeys.detail())?.values);
+        if (receipt.refreshError) notify.err(`${okMsg}, but refresh failed: ${receipt.refreshError}`);
+        else notify.ok(okMsg);
       } catch (e) {
+        if (e instanceof AdminResponseError) {
+          applyServerFieldErrors(form, (e.body as { fieldErrors?: Record<string, string> }).fieldErrors);
+        }
         notify.err(`Save failed: ${errorMessage(e)}`);
       } finally {
         setBusy(null);
       }
     },
-    [adminFetch, form],
+    [form, queryClient, saveMutation],
   );
 
   const saveMoods = async () => {

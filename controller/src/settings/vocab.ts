@@ -316,13 +316,13 @@ export function clampRepeatPenalty(raw: unknown, def: number): number {
   return Math.min(2.0, Math.max(1.0, raw));
 }
 
-// Coerce a stored agent-deadline value (ms). Clamped to [5s, 180s] and floored
+// Coerce a stored agent-deadline value (ms). Clamped to [5s, 300s] and floored
 // to an integer; non-numeric/NaN falls back to `def`. The lower bound keeps a
 // fat-fingered save from making every agent pick fail instantly; the upper
 // bound keeps a stalling model from tying up an inference slot for minutes.
 export function clampAgentTimeout(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
-  return Math.min(180_000, Math.max(5_000, Math.floor(raw)));
+  return Math.min(300_000, Math.max(5_000, Math.floor(raw)));
 }
 
 // Daily LLM token cap. 0 disables (the default — never cap a free local box);
@@ -387,6 +387,21 @@ export function clampDiscoverySteps(raw: unknown, def: number): number {
 export function clampNoRepeatWindow(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(1000, Math.max(0, Math.floor(raw)));
+}
+
+// Artist spacing window, in SLOTS (issue #1406). Floored to an integer in
+// [0, 25]: 0 turns spacing off and leaves only the back-to-back guard, which is
+// not operator-disableable — an artist following itself is a fault, not a taste.
+//
+// The ceiling is low on purpose and is not the same kind of number as
+// noRepeatWindow's 1000. This one is consulted at the POINT OF CHOICE against
+// the run's own candidates, and neighbourArtistRoots(n) excludes up to 2n+1
+// artists, so a large window on a show-filtered run mostly buys re-pick calls
+// that end in a waived window — cost without spacing. 25 is already ~2 hours of
+// air. Non-numeric/NaN falls back to `def`.
+export function clampArtistVarietyWindow(raw: unknown, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.min(25, Math.max(0, Math.floor(raw)));
 }
 
 // Validate + apply the connection fields shared by the primary LLM leg and its
@@ -889,10 +904,11 @@ export const DJ_PROMPT_LIMIT = DJ_PROMPT_LIMIT_VALUE;
 export const DJ_PROMPT_NAME_MAX = DJ_PROMPT_NAME_MAX_VALUE;
 export const DJ_PROMPT_TEXT_MIN = DJ_PROMPT_TEXT_MIN_VALUE;
 export const DJ_PROMPT_TEXT_MAX = DJ_PROMPT_TEXT_MAX_VALUE;
-// Station house rules (djHouseRules) — operator rules appended to BOTH prompt
-// paths (renderDjPrompt and agentPersonaPreamble), unlike the djPrompt
-// template which only the scripted-talk path renders (issue #1182). No
-// minimum: empty means off. Keep in lockstep with HOUSE_RULES_MAX in
+// Station house rules (djHouseRules) — operator rules appended to ALL THREE
+// prompt paths (renderDjPrompt, agentPersonaPreamble and castHouseRulesBlock
+// for the multi-voice exchanges), unlike the djPrompt template which only the
+// scripted-talk path renders (issues #1182, #1420). No minimum: empty means
+// off. Keep in lockstep with HOUSE_RULES_MAX in
 // web/components/admin/personas/constants.ts.
 export const DJ_HOUSE_RULES_MAX = 2000;
 
@@ -973,6 +989,9 @@ export interface NormalizedShow {
   playlistIds: string[];
   playlistStrict: boolean;
   excludedPlaylistIds: string[];
+  /** Operator organisation tags. Filters the admin list; steers nothing on
+   *  air, which is why resolveShow() does not carry them through. */
+  tags: string[];
 }
 
 // Dedup + cap over one already-plural list. Legacy singular fields (`mood`,
@@ -1132,4 +1151,3 @@ export const AAC_BITRATES = SETTINGS_AAC_BITRATES;
 // the analyzer's measured LUFS, or tag-with-measured-fallback (the default).
 export const LOUDNESS_SOURCES = SETTINGS_LOUDNESS_SOURCES;
 export type LoudnessSource = (typeof LOUDNESS_SOURCES)[number];
-

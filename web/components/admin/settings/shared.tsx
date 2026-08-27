@@ -2,13 +2,16 @@
 
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { m } from 'motion/react';
 import { notify, errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { cn } from '../../../lib/cn';
 import type { StationLocale } from '../../../lib/format';
 import type { EngineAvailability } from '../tts/engineMeta';
 import { Play } from 'lucide-react';
 import { Btn, Eyebrow, Metric } from '../ui';
+import { useSectionChrome, useReportDirty } from './section-chrome';
 import { Button } from '../../ui/button';
 import { FieldError } from '../../ui/field';
 
@@ -129,6 +132,7 @@ export interface LlmForm {
   toolChoice: string;
   pickerAgent: boolean;
   noRepeatWindow: string;
+  artistVarietyWindow: string;
   requestWebResolve: boolean;
   agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
@@ -210,9 +214,11 @@ export interface StreamForm {
   aacEnabled: boolean;
   aacBitrate: string;
   bitrate: string;
+  bufferSeconds: string;
   oggIcyMetadata: boolean;
   idleWhenEmpty: boolean;
   idleAfterMinutes: string;
+  maxListeners: string;
 }
 
 export type LoudnessSource = 'replaygain-then-measured' | 'replaygain' | 'measured';
@@ -254,9 +260,15 @@ export interface RequestsForm {
   onePendingPerIp: boolean;
 }
 
+export interface SilenceTrimForm {
+  enabled: boolean;
+  minGapMs: string;
+}
+
 export interface FormState {
   crossfadeDuration: string;
   maxTrackSeconds: string;
+  silenceTrim: SilenceTrimForm;
   transitions: TransitionsForm;
   archive: ArchiveForm;
   stream: StreamForm;
@@ -302,11 +314,14 @@ export interface SettingsData {
       aacEnabled?: boolean;
       aacBitrate?: number;
       bitrate?: number;
+      bufferSeconds?: number;
       oggIcyMetadata?: boolean;
       idleWhenEmpty?: boolean;
       idleAfterMinutes?: number;
+      maxListeners?: number;
     };
     loudness?: { targetLufs?: number; maxBoostDb?: number; source?: LoudnessSource };
+    silenceTrim?: { enabled?: boolean; minGapMs?: number };
     station?: string;
     stationDescription?: string;
     timezone?: string;
@@ -352,7 +367,7 @@ export interface SettingsData {
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };
     sfx?: { enabled?: boolean };
-    beds?: { enabled?: boolean; thresholdSec?: number; crossSec?: number };
+    beds?: { enabled?: boolean; requestIntros?: boolean; thresholdSec?: number; crossSec?: number };
     ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
     privacy?: {
       privatePlayer?: boolean;
@@ -573,11 +588,16 @@ interface SaveBarProps {
   busy: boolean;
   onSave: () => void;
   saveLabel: ReactNode;
-  extra?: ReactNode;
   /** Server errors from the last save, keyed by dotted path. */
   errors?: SettingsFieldErrors;
   /** The top-level settings keys this bar's save owns, e.g. ['search']. */
   ownedKeys?: readonly string[];
+  /**
+   * Whether this save has anything to commit — ONLY for a section whose
+   * editable state does not live in FormState (see `SectionSpec.formKeys`).
+   * Everyone else leaves it undefined and the panel diffs the form itself.
+   */
+  dirty?: boolean;
 }
 
 /**
@@ -601,12 +621,28 @@ export function ownedFieldErrors(
  * lands here, beside the button that caused it. These sections save a whole
  * block at once, so several fields can fail one click — and each message
  * already names its own dotted field, so grouping them loses nothing.
+ *
+ * The bar is authored HERE, at the end of the section it saves, but renders in
+ * SettingsPanel's one sticky bar via a portal. Keeping the component in the
+ * section's tree is what lets each save keep its own closure, note and error
+ * scoping — nothing had to be lifted, and a section with two independent saves
+ * (Scrobbling: Last.fm and ListenBrainz are separate services) simply portals
+ * two rows.
+ *
+ * No portal target means nothing is unsaved, and the bar renders nothing —
+ * which is also why the bar carries NOTHING but the save. A "Test" button next
+ * to it would disappear the moment the section went clean, i.e. exactly when a
+ * saved connection is worth testing. Non-save actions belong in the card.
  */
-export function SaveBar({ note, busy, onSave, saveLabel, extra, errors, ownedKeys }: SaveBarProps) {
+export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirty }: SaveBarProps) {
+  const { saveSlot } = useSectionChrome();
+  // Only a section whose state does not ride FormState passes `dirty`; for the
+  // rest the panel already diffs the form against its saved baseline.
+  useReportDirty(dirty);
   const owned = ownedFieldErrors(errors, ownedKeys);
-  return (
-    <div className="flex flex-wrap items-center gap-3 border border-ink bg-[var(--ink-softer)] p-3">
-      <span className="size-1.5 shrink-0 rounded-full bg-vermilion" />
+  if (!saveSlot) return null;
+  return createPortal(
+    <div className="flex flex-wrap items-center gap-3 border-t border-[var(--separator-soft)] pt-2.5 first:border-0 first:pt-0">
       {owned.length > 0 && (
         // Full width so it sits on its own row above the note/button cluster,
         // which is where a wrapped flex child lands anyway.
@@ -619,17 +655,17 @@ export function SaveBar({ note, busy, onSave, saveLabel, extra, errors, ownedKey
       {/* min-w-0 + break-words: notes carry unbroken values (an
           `openai-compatible:Qwen3…gguf` model id) that would otherwise set the
           flex item's min-content and push the bar past a phone viewport. */}
-      <span className="min-w-0 text-[12px] leading-[1.5] break-words text-muted">{note}</span>
+      <span className="min-w-0 flex-1 text-[12px] leading-[1.5] break-words text-muted">{note}</span>
       {/* Full-width action row on a phone; `sm:` restores the inline cluster. */}
       <span className="ml-auto flex w-full gap-2 sm:w-auto">
-        {extra}
         {/* whileTap fires before the network call, so the commit is felt before
             the save toast lands. */}
         <m.span whileTap={{ scale: 0.97 }} className="inline-flex flex-1 sm:flex-none">
           <Btn tone="accent" onClick={onSave} disabled={busy} className="w-full sm:w-auto">{saveLabel}</Btn>
         </m.span>
       </span>
-    </div>
+    </div>,
+    saveSlot,
   );
 }
 
@@ -729,8 +765,8 @@ export function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButto
     if (state === 'loading') return;
     setState('loading');
     try {
-      const r = await adminFetch(path);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // admin-query-imperative: protected-audio-preview
+      const r = await adminResponse(adminFetch, path);
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);

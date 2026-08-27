@@ -329,7 +329,7 @@ stack → edit `.env` and **Pull & Up**.
 
 ### ⚠️ The one gotcha: don't buffer the audio stream
 
-> ⚠️ **Turn response buffering OFF for `/stream.mp3`.** The bundled Caddy serves
+> ⚠️ **Turn response buffering OFF for `/stream*`.** The bundled Caddy serves
 > the stream unbuffered (`flush_interval -1`). A front proxy that buffers — and
 > **NPM buffers by default** — holds the live audio back, adding latency and
 > stutter or stalling playback outright. Exempt the stream path; leave everything
@@ -340,7 +340,7 @@ location block for the stream (the rest of the site keeps NPM's normal proxying
 from the main tab):
 
 ```nginx
-location /stream.mp3 {
+location ^~ /stream {
     proxy_pass http://YOUR-UNRAID-IP:7700;
     proxy_buffering off;
     proxy_cache off;
@@ -350,9 +350,9 @@ location /stream.mp3 {
 
 The same one knob in the other proxies:
 
-| Proxy | What to set on `/stream.mp3` |
+| Proxy | What to set on `/stream*` |
 |---|---|
-| **raw nginx** | `proxy_buffering off;` (+ a long `proxy_read_timeout`) in a `location /stream.mp3` block |
+| **raw nginx** | `proxy_buffering off;` (+ a long `proxy_read_timeout`) in a `location ^~ /stream` block |
 | **Caddy** | `reverse_proxy … { flush_interval -1 }` on the stream path |
 | **Traefik** | nothing — Traefik doesn't buffer responses by default |
 
@@ -364,10 +364,11 @@ AIO's internal Caddy, run the split-container stack (Option 2) with
 There `web` / `controller` / `broadcast` bind host ports themselves
 (`7700` / `7701` / `7702`) — but the web image is still baked for same-origin
 `/api` + `/stream.mp3`, so **your proxy then has to replicate the route table**
-(`/` → web, `/api/*` → controller, `/stream.mp3` → broadcast, unbuffered) on one
-hostname. That's more proxy config, not less — only worth it if you specifically
-want the bundled Caddy out of the path. For most people the single-upstream setup
-above is the easier win.
+(`/` → web, stripped `/api/*` plus `/listen.*` → controller, `/stream*` →
+broadcast unbuffered, and `/api/listener-auth` blocked) on one hostname. Use the
+complete [reverse-proxy recipes](reverse-proxy.md). That's more proxy config,
+not less — only worth it if you specifically want the bundled Caddy out of the
+path. For most people the single-upstream setup above is the easier win.
 
 ## Notes
 
@@ -377,7 +378,16 @@ above is the easier win.
   proxy](#putting-it-behind-your-own-reverse-proxy) above — one upstream, plus
   the one stream-buffering gotcha.
 - **Updates:** one-click → Unraid's normal **Check for Updates** / **Apply
-  Update**. Compose stack → stack menu → **Pull & Up**.
+  Update**. Compose stack → stack menu → **Pull & Up**. To pin or roll back to
+  a specific release, point the container's **Repository** field at a tag
+  (`ghcr.io/perminder-klair/subwave-aio:1.4.2`) instead of `:latest`.
+- **Max concurrent listeners:** **admin → Settings → Danger zone → Max
+  listeners**, then restart the container so Icecast re-renders its config.
+  This used to be reachable only through `ICECAST_MAX_CLIENTS`, which the
+  one-click template does not expose and the AIO image has no `.env` for —
+  so on Unraid it was unsettable. It is a station setting now. (Adding
+  `ICECAST_MAX_CLIENTS` as a custom container variable still overrides the
+  field; the broadcast log names which source it used on every boot.)
 - **Backups:** everything lives under the appdata path
   (`/mnt/user/appdata/subwave`) — settings, library cache, archives, voices.
   Back that path up (it's already on your pool/array).

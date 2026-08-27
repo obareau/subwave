@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { notify, errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { useVoiceDiscovery } from '@/hooks/useVoiceDiscovery';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../../lib/cloudVoices';
@@ -17,6 +18,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../../ui/select';
 import { Card, Btn, Pill, Seg } from '../ui';
+import { Advanced } from './section-chrome';
 import { EngineSelector } from '../tts/EngineSelector';
 import { CloudProviderSelector } from '../tts/CloudProviderSelector';
 import { cloudProviderLabel, resolveKeyPresence } from '../tts/cloudProviderMeta';
@@ -520,7 +522,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
-      const r = await adminFetch('/settings/secrets', {
+      const r = await adminResponse(adminFetch, '/settings/secrets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ [envVar]: value.trim() }),
@@ -543,7 +545,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     setCloudKeyTesting(true);
     setCloudKeyTest(null);
     try {
-      const r = await adminFetch('/settings/secrets/test', {
+      const r = await adminResponse(adminFetch, '/settings/secrets/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: cloudKeyVar, value: cloudKeyInput.trim() }),
@@ -1281,29 +1283,32 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                   return (
                     <div className="field">
                       <Label>Default voice</Label>
-                      <VoicePicker
-                        value={isPreset ? voice : CUSTOM_VOICE_ID}
-                        onChange={val => {
-                          // Clearing the preset flips isPreset false, revealing the
-                          // free-text input below.
-                          setVoice(val === CUSTOM_VOICE_ID ? '' : val);
-                        }}
-                        groups={buildCloudVoiceGroups(provider, discoveredVoices)}
-                        title="Default cloud voice"
-                        preview={{
-                          engine: 'cloud',
-                          cloudProvider: provider,
-                          cloudModel: form.tts.cloud.model,
-                          fishSettings: provider === 'fish-audio'
-                            ? {
-                              temperature: form.tts.cloud.temperature,
-                              topP: form.tts.cloud.topP,
-                              latency: form.tts.cloud.latency,
-                            }
-                            : undefined,
-                          adminFetch,
-                        }}
-                      />
+                      <div className="flex items-stretch gap-2">
+                        <VoicePicker
+                          value={isPreset ? voice : CUSTOM_VOICE_ID}
+                          onChange={val => {
+                            // Clearing the preset flips isPreset false, revealing the
+                            // free-text input below.
+                            setVoice(val === CUSTOM_VOICE_ID ? '' : val);
+                          }}
+                          groups={buildCloudVoiceGroups(provider, discoveredVoices)}
+                          title="Default cloud voice"
+                          preview={{
+                            engine: 'cloud',
+                            cloudProvider: provider,
+                            cloudModel: form.tts.cloud.model,
+                            fishSettings: provider === 'fish-audio'
+                              ? {
+                                temperature: form.tts.cloud.temperature,
+                                topP: form.tts.cloud.topP,
+                                latency: form.tts.cloud.latency,
+                              }
+                              : undefined,
+                            adminFetch,
+                          }}
+                        />
+                        <Btn onClick={voiceDiscovery.refresh} title="Refresh voice list">↻</Btn>
+                      </div>
                       {!isPreset && (
                         <Input
                           // A blank compat voice is legitimate — the server picks
@@ -1425,6 +1430,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
 
       {/* The operator's explicit rescue, ahead of the hardcoded
           default-engine → Piper → Kokoro floor. */}
+      <Advanced note="the rescue voice for a persona whose own engine fails">
       <Card
         title="Fallback voice"
         sub="what speaks when a persona's engine fails"
@@ -1485,6 +1491,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           </div>
         )}
       </Card>
+      </Advanced>
 
       <SaveBar
         note={ttsDirty
@@ -1493,6 +1500,10 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         busy={busy}
         onSave={save}
         saveLabel="Save TTS settings"
+        // Both key boxes are component-local — the panel diffs FormState and
+        // cannot see them, so a pasted key alone would leave the section
+        // "clean" and unmount the very button that saves it.
+        dirty={!!(cloudKeyInput.trim() || compatKeyInput.trim())}
       />
     </>
   );
