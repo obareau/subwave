@@ -33,8 +33,18 @@ docker compose -f docker-compose.dev.yml up -d     # Broadcast (icecast2+liquids
 cd web && npm install && npm run dev               # web UI on :7700, separate process
 
 docker compose logs -f controller        # prod default
-curl http://localhost:7700/api/health    # liveness via Caddy edge (prod)
+curl http://localhost:7710/api/health    # liveness via Caddy edge (prod) — voir la note ci-dessous
 ```
+
+> ⚠️ **DIVERGENCE LOCALE (2026-08-27) — le port n'est pas 7700 sur cet hôte.**
+> Caddy publie `${CADDY_PORT:-7700}:80` et le `.env` d'ici fixe **`CADDY_PORT=7710`**
+> (7700 y est déjà pris par **Meilisearch**, dont c'est le port par défaut).
+> Une sonde sur 7700 renvoie **404, pas une erreur de connexion** : Caddy n'écoute
+> pas là, c'est Meilisearch qui répond, et son 404 se lit comme un routage Caddy
+> cassé alors que l'antenne émet normalement. Son `/` renvoie même un 200 en HTML,
+> ce qui achève de tromper. Diagnostic erroné fait une fois, le soir du merge 1.10.0.
+> `/api/health` et `/api/state` sont corrects et répondent bien : `{"status":"on-air"}`.
+> Uptime-Kuma sonde déjà `:7710/api/state`, c'est la référence.
 
 The CLI resolves its install location via `SUBWAVE_HOME` (priority: `--home` → `SUBWAVE_HOME` env → `~/.config/subwave/config.json` → cwd if it has a `docker-compose.yml` → `~/subwave` if it exists → error). The cwd fallback is what makes `cd subwave-repo && npm start` work with zero config.
 
