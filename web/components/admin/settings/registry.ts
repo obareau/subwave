@@ -1,26 +1,16 @@
 'use client';
 
-// The settings surface described once, so three things can read it instead of
-// re-deriving it: the grouped nav rail, the per-section dirty dot + sticky save
-// bar, and the search box that jumps to a field.
-//
-// Only the SHAPE lives here — labels, which section owns which slice of the
-// form, which paths cost a mixer restart. The controls themselves stay in their
-// section components; this file never renders anything.
+// The settings surface described once, read by the nav rail, the per-section
+// dirty dot + save bar, and the search box. Shape only: labels, section
+// ownership, restart-costing paths. Renders nothing; controls live in sections.
 
 import {
   Radio, Palette, Cpu, Mic, Library, Search,
-  Activity, Archive, Save, AlertTriangle, Heart, Music2,
+  Activity, Archive, Save, AlertTriangle, Heart, Music2, BrainCircuit,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
-/**
- * The four rail clusters, in rail order.
- *
- * Grouping is editorial, not structural: "the station" is what the operator
- * sets up once, "the dj" is what talks, "listeners" is what the audience
- * touches, "operations" is what can interrupt the broadcast.
- */
+/** The four rail clusters, in rail order. Grouping is editorial, not structural. */
 export const SECTION_GROUPS = ['the station', 'the dj', 'listeners', 'operations'] as const;
 
 export type SectionGroup = (typeof SECTION_GROUPS)[number];
@@ -32,20 +22,16 @@ export interface SectionSpec {
   hint: string;
   icon: LucideIcon;
   /**
-   * Top-level FormState keys this section owns. The sticky save bar and the
-   * rail's unsaved dot both diff these against the saved baseline, so a section
-   * whose state does NOT ride FormState (music: Navidrome creds live in
-   * setup-config.json; theme: every control saves on click) lists none and
-   * reports its own dirtiness through SaveBar's `dirty` prop instead.
+   * Top-level FormState keys this section owns; the save bar and unsaved dot
+   * diff them against the saved baseline. A section whose state does not ride
+   * FormState lists none and passes SaveBar's `dirty` prop instead.
    */
   formKeys: readonly string[];
 }
 
 // `satisfies`, never a `readonly SectionSpec[]` annotation: the annotation
-// widens every `id` back to `string` and takes `SectionId` — and with it every
-// typo guard on SETTINGS_INDEX, ADVANCED_CARDS and `activeSection` — down with
-// it. A bad id then compiles clean and dies quietly at runtime (`sectionById`
-// → undefined → no formKeys → no dirty tracking, no save bar).
+// widens every `id` to `string` and takes `SectionId` — and every typo guard on
+// SETTINGS_INDEX, ADVANCED_CARDS and `activeSection` — with it.
 export const SECTIONS = [
   {
     id: 'station', group: 'the station', label: 'Station',
@@ -63,14 +49,23 @@ export const SECTIONS = [
     formKeys: [],
   },
   {
+    // Writes both `llm` and `tts.cloud` in one save but owns neither slice, so
+    // it lists no formKeys; those sections keep the dirty tracking.
+    id: 'brain', group: 'the dj', label: 'DJ Brain',
+    hint: 'one field · brain + voice', icon: BrainCircuit,
+    formKeys: [],
+  },
+  {
     id: 'llm', group: 'the dj', label: 'LLM provider',
     hint: 'model routing', icon: Cpu,
-    formKeys: ['llm'],
+    // `picker` rides this section: album cooldown and minimum track length are
+    // edited on this card and saved by the same PATCH.
+    formKeys: ['llm', 'picker'],
   },
   {
     id: 'tts', group: 'the dj', label: 'TTS voice',
     hint: 'default engine', icon: Mic,
-    formKeys: ['tts', 'kokoroLang'],
+    formKeys: ['tts', 'kokoroLang', 'djTalkOnlyBetweenTracks', 'handoverOffsetMinutes'],
   },
   {
     id: 'library', group: 'the dj', label: 'Library tagger',
@@ -89,7 +84,7 @@ export const SECTIONS = [
   },
   {
     id: 'scrobble', group: 'listeners', label: 'Scrobbling',
-    hint: 'last.fm · listenbrainz', icon: Activity,
+    hint: 'last.fm · listenbrainz · navidrome', icon: Activity,
     formKeys: ['scrobble'],
   },
   {
@@ -105,7 +100,7 @@ export const SECTIONS = [
   {
     id: 'danger', group: 'operations', label: 'Danger zone',
     hint: 'mixer · broadcast', icon: AlertTriangle,
-    formKeys: ['crossfadeDuration', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'stream', 'loudness'],
+    formKeys: ['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'stream', 'loudness'],
   },
 ] as const satisfies readonly SectionSpec[];
 
@@ -114,18 +109,16 @@ export type SectionId = (typeof SECTIONS)[number]['id'];
 export const sectionById = (id: string) => SECTIONS.find(s => s.id === id);
 
 /**
- * Dotted FormState paths whose change costs a mixer restart.
- *
- * Mirrors the `restart = true` branches in `controller/src/settings.ts` — the
- * controller stays the authority (it answers `requiresRestart` on the save and
- * the existing banner reacts to that). This list only decides whether the save
- * bar warns BEFORE the operator commits, so a stale entry costs a missing or
- * spurious warning, never a wrong save.
+ * Dotted FormState paths whose change costs a mixer restart. Mirrors the
+ * `restart = true` branches in `controller/src/settings.ts`, which stays the
+ * authority; this only decides whether the save bar warns before committing.
  */
 export const RESTART_PATHS: readonly string[] = [
   'station',
   'privacy.listenerAuth',
   'crossfadeDuration',
+  'ducking.voice',
+  'ducking.intro',
   'archive.enabled',
   'archive.bitrate',
   'stream.opusEnabled',
@@ -140,11 +133,8 @@ export const RESTART_PATHS: readonly string[] = [
 ];
 
 /**
- * Card titles that sit behind each section's Advanced disclosure.
- *
- * Keyed by section id → the anchors (see `cardAnchor`) of the cards to defer.
- * A section renders its own <Advanced> wrapper; this table exists so the search
- * index can say "adv" on a result and open the disclosure when it jumps there.
+ * Cards behind each section's Advanced disclosure, keyed by section id → card
+ * anchors. Sections render their own <Advanced>; this lets search open it.
  */
 export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
   station: ['listener-requests', 'public-api'],
@@ -153,9 +143,10 @@ export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
   library: ['seed-phase', 'propagation', 'enrichment'],
   likes: ['ai-dj-influence'],
   danger: [
-    'crossfade', 'stem-transitions', 'max-track-length', 'dead-air-trim',
+    'crossfade', 'duck-depth', 'stem-transitions', 'dj-transition-effects', 'max-track-length', 'dead-air-trim',
     'loudness-levelling', 'opus-stream', 'flac-stream', 'ogg-metadata',
     'aac-stream', 'stream-mp3-bitrate', 'listener-buffer', 'max-listeners',
+    'listener-country',
   ],
 };
 
@@ -163,7 +154,7 @@ export const isAdvancedCard = (section: SectionId, anchor: string) =>
   (ADVANCED_CARDS[section] || []).includes(anchor);
 
 export interface IndexEntry {
-  /** The control's own label, as the operator reads it on screen. */
+  /** The control's label as it reads on screen. */
   label: string;
   section: SectionId;
   /** Card title, shown as the result's trail and used as the scroll anchor. */
@@ -174,7 +165,7 @@ export interface IndexEntry {
 
 /** Every setting the operator can search for, in rail order. */
 export const SETTINGS_INDEX: readonly IndexEntry[] = [
-  // ── station ────────────────────────────────────────────────────────────────
+  // station
   { label: 'Station name', section: 'station', card: 'Station identity', keywords: 'call sign title dj prompt' },
   { label: 'Share description', section: 'station', card: 'Station identity', keywords: 'blurb og meta social' },
   { label: 'Location', section: 'station', card: 'Station location', keywords: 'weather forecast open-meteo latitude longitude' },
@@ -194,18 +185,18 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'One request per listener at a time', section: 'station', card: 'Listener requests', keywords: 'ip pending single' },
   { label: 'Publish persona souls', section: 'station', card: 'Public API', keywords: 'system prompt schedule personas public json' },
 
-  // ── music source ───────────────────────────────────────────────────────────
+  // music source
   { label: 'Server URL', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic host url' },
   { label: 'Username', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic login user' },
   { label: 'Password', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic secret salt token' },
 
-  // ── skin & themes ──────────────────────────────────────────────────────────
+  // skin & themes
   { label: 'Station skin', section: 'theme', card: 'Player skin', keywords: 'classic unit platter drift subamp tty listen face' },
   { label: 'Active theme', section: 'theme', card: 'Themes', keywords: 'palette colours colors newsprint nightshift dark light' },
   { label: 'Show the tune-in overlay', section: 'theme', card: 'Tune-in overlay', keywords: 'gate tap to listen splash' },
   { label: 'Show the Booth Sprite', section: 'theme', card: 'Booth Buddy', keywords: 'mascot sprite request box' },
 
-  // ── llm provider ───────────────────────────────────────────────────────────
+  // llm provider
   { label: 'Provider', section: 'llm', card: 'Provider', keywords: 'ollama anthropic openai google deepseek openrouter requesty gateway compatible' },
   { label: 'Ollama server URL', section: 'llm', card: 'Provider', keywords: 'host docker internal 11434 local' },
   { label: 'API key', section: 'llm', card: 'Provider', keywords: 'token secret credential sk-' },
@@ -225,8 +216,10 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Soft threshold', section: 'llm', card: 'Daily token budget', keywords: 'warning percent budget dash' },
   { label: 'Pause the DJ when nobody is listening', section: 'llm', card: 'Idle behaviour', keywords: 'idle empty room quiet' },
 
-  // ── tts voice ──────────────────────────────────────────────────────────────
+  // tts voice
   { label: 'DJ speech', section: 'tts', card: 'Station voice', keywords: 'on air music only mute silent' },
+  { label: 'Talk placement', section: 'tts', card: 'Station voice', keywords: 'between tracks boundary interrupt over song duck mid-song' },
+  { label: 'Show handover', section: 'tts', card: 'Station voice', keywords: 'sign-off outro handover changeover boundary closing track programme' },
   { label: 'Engine', section: 'tts', card: 'Voice engine', keywords: 'piper kokoro chatterbox pocket-tts cloud remote' },
   { label: 'Voice', section: 'tts', card: 'Voice engine', keywords: 'speaker accent alba amy' },
   { label: 'Voice level (dB)', section: 'tts', card: 'Voice engine', keywords: 'gain trim loudness decibel' },
@@ -237,7 +230,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Server URL', section: 'tts', card: 'Voice engine', keywords: 'remote http endpoint' },
   { label: 'Fallback engine', section: 'tts', card: 'Fallback voice', keywords: 'rescue voice slot backup' },
 
-  // ── library tagger ─────────────────────────────────────────────────────────
+  // library tagger
   { label: 'Tagger', section: 'library', card: 'Tagger', keywords: 'enabled tagging runs moods genres' },
   { label: 'LLM batch size', section: 'library', card: 'Tagger', keywords: 'batch tracks per call seed' },
   { label: 'Provider', section: 'library', card: 'Embedding server', keywords: 'embedding ollama openai google inherit' },
@@ -253,19 +246,20 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Last.fm tags', section: 'library', card: 'Enrichment', keywords: 'crowd tags embed text' },
   { label: 'Lyrics', section: 'library', card: 'Enrichment', keywords: 'lyrics embed text' },
 
-  // ── web search ─────────────────────────────────────────────────────────────
+  // web search
   { label: 'Provider', section: 'search', card: 'Provider', keywords: 'duckduckgo tavily brave searxng live facts' },
   { label: 'API key', section: 'search', card: 'Provider', keywords: 'tavily brave token search_api_key' },
   { label: 'SearXNG URL', section: 'search', card: 'Provider', keywords: 'self hosted meta search json' },
+  { label: 'Engines', section: 'search', card: 'Provider', keywords: 'searxng engines pin restrict google duckduckgo wikipedia' },
 
-  // ── likes ──────────────────────────────────────────────────────────────────
+  // likes
   { label: 'Enabled', section: 'likes', card: 'Heart button', keywords: 'heart like listener tap' },
   { label: 'Star in Navidrome', section: 'likes', card: 'Heart button', keywords: 'subsonic starred favourites' },
   { label: 'Use likes to influence picks', section: 'likes', card: 'AI DJ influence', keywords: 'taste preference signal picker' },
   { label: 'Tracks included', section: 'likes', card: 'AI DJ influence', keywords: 'top liked count' },
   { label: 'Time window (days)', section: 'likes', card: 'AI DJ influence', keywords: 'window days all time' },
 
-  // ── scrobbling ─────────────────────────────────────────────────────────────
+  // scrobbling
   { label: 'Enabled', section: 'scrobble', card: 'Last.fm', keywords: 'lastfm scrobble spins' },
   { label: 'API key', section: 'scrobble', card: 'Last.fm', keywords: 'lastfm credential' },
   { label: 'API secret', section: 'scrobble', card: 'Last.fm', keywords: 'lastfm shared secret handshake' },
@@ -275,20 +269,29 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'User token', section: 'scrobble', card: 'ListenBrainz', keywords: 'listenbrainz profile token' },
   { label: 'API base URL', section: 'scrobble', card: 'ListenBrainz', keywords: 'self hosted instance endpoint' },
   { label: 'Username (display)', section: 'scrobble', card: 'ListenBrainz', keywords: 'listenbrainz user dash' },
+  { label: 'Enabled', section: 'scrobble', card: 'Navidrome', keywords: 'navidrome play count last played smart playlist nsp rotation subsonic' },
 
-  // ── archives ───────────────────────────────────────────────────────────────
+  // archives
   { label: 'Record the broadcast to disk', section: 'archives', card: 'Hourly archive', keywords: 'archive recording mp3 tapes restart' },
   { label: 'Archive bitrate', section: 'archives', card: 'Hourly archive', keywords: 'kbps encoder cpu restart' },
   { label: 'Keep recordings for', section: 'archives', card: 'Hourly archive', keywords: 'retention days disk cleanup' },
 
-  // ── danger zone ────────────────────────────────────────────────────────────
+  // danger zone
   { label: 'Stop stream', section: 'danger', card: 'Broadcast', keywords: 'off air disconnect icecast mount' },
   { label: 'Pause when the room is empty', section: 'danger', card: 'Idle pause', keywords: 'idle empty listeners resume' },
   { label: 'Crossfade duration', section: 'danger', card: 'Crossfade', keywords: 'overlap seams transition restart' },
+  { label: 'DJ over silence duck depth', section: 'danger', card: 'Duck depth', keywords: 'ducking voice smooth_add say idents heavy restart' },
+  { label: 'DJ over a track duck depth', section: 'danger', card: 'Duck depth', keywords: 'ducking intro talk over link light smooth_add restart' },
   { label: 'Pair-aware transitions', section: 'danger', card: 'Stem transitions', keywords: 'pair drain successor crossfade' },
   { label: 'Stem cache', section: 'danger', card: 'Stem transitions', keywords: 'demucs drums bass vocals disk' },
   { label: 'Stem cache budget', section: 'danger', card: 'Stem transitions', keywords: 'gb evict oldest' },
   { label: 'Stem-blend seams', section: 'danger', card: 'Stem transitions', keywords: 'drums carry under intro blend' },
+  { label: 'Sweep', section: 'danger', card: 'DJ transition effects', keywords: 'transition effect filter gear change clash dj mode' },
+  { label: 'Washout', section: 'danger', card: 'DJ transition effects', keywords: 'transition effect echo tail dub exit length cap dj mode' },
+  { label: 'Blend', section: 'danger', card: 'DJ transition effects', keywords: 'transition effect spectral handover locked pair dj mode' },
+  { label: 'Dissolve', section: 'danger', card: 'DJ transition effects', keywords: 'transition effect reverb wash ambient cpu latency catchup stutter dj mode' },
+  { label: 'Chop', section: 'danger', card: 'DJ transition effects', keywords: 'transition effect crossfader cut beat stabs dj mode' },
+  { label: 'Exit loop', section: 'danger', card: 'DJ transition effects', keywords: 'transition effect final bar repeat groove tempo dj mode' },
   { label: 'Maximum track length', section: 'danger', card: 'Max track length', keywords: 'cap cut long tracks seconds' },
   { label: 'Trim silent edges', section: 'danger', card: 'Dead-air trim', keywords: 'silence cue in cue out dead air' },
   { label: 'Shortest gap worth cutting', section: 'danger', card: 'Dead-air trim', keywords: 'min gap ms silence' },
@@ -304,5 +307,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Bitrate', section: 'danger', card: 'Stream MP3 bitrate', keywords: 'mp3 kbps stream restart' },
   { label: 'Listener buffer', section: 'danger', card: 'Listener buffer', keywords: 'burst size seconds behind live edge restart' },
   { label: 'Max listeners', section: 'danger', card: 'Max listeners', keywords: 'icecast max clients concurrent connections capacity limit licensing fees restart' },
+  { label: 'Country header', section: 'danger', card: 'Listener country', keywords: 'geoip cf-ipcountry cloudflare proxy header stats audience country rollup' },
+  { label: 'GeoIP database', section: 'danger', card: 'Listener country', keywords: 'mmdb maxmind geolite2 db-ip ip2location offline lookup stats audience country' },
   { label: 'Restart mixer', section: 'danger', card: 'Mixer', keywords: 'restart liquidsoap apply pending' },
 ];

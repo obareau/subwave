@@ -1,14 +1,13 @@
-// `subwave update` — refresh the running stack. Two shapes behind one command:
-// a standalone install pulls fresh GHCR images and never builds (its compose
-// files came in with the binary), while a clone git-pulls and rebuilds locally,
-// mirroring scripts/update.sh. Replacing the CLI binary itself is a separate
-// command, `subwave self-update`.
+// `subwave update` — refresh the running stack. A standalone install pulls fresh
+// GHCR images and never builds; a clone git-pulls and rebuilds locally, mirroring
+// scripts/update.sh. Replacing the binary is `subwave self-update`.
 
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { detectCompose } from '../compose.ts';
+import { composeFileArgs } from '../docker.ts';
 import { resolveInstallMode, detectDrift, hasDrift } from '../compose-sync.ts';
 import { getSubwaveHome } from '../util.ts';
 import { isCloneMode } from '../home.ts';
@@ -42,14 +41,13 @@ export async function runUpdateCommand(): Promise<void> {
     }
   }
 
-  // Must happen BEFORE the pull: a binary that was just self-updated has to
-  // fetch the images matching its frozen compose files, not whatever the old
-  // pin named. Clone installs track git, not image tags — leave their .env be.
+  // Before the pull: a just-self-updated binary must fetch images matching its
+  // frozen compose files. Clone installs track git, so leave their .env be.
   if (!cloneMode) moveVersionPin(home);
 
   // --ignore-buildable skips services that carry only a `build:` block.
   header('docker compose pull');
-  const pullArgs = ['compose', '-f', compose.file.file, 'pull'];
+  const pullArgs = ['compose', ...composeFileArgs(compose.file), 'pull'];
   if (cloneMode) pullArgs.push('--ignore-buildable');
   const pullCode = await run('docker', pullArgs, home);
   if (pullCode !== 0) {
@@ -60,7 +58,7 @@ export async function runUpdateCommand(): Promise<void> {
     header('docker compose build');
     const buildCode = await run(
       'docker',
-      ['compose', '-f', compose.file.file, 'build', '--pull'],
+      ['compose', ...composeFileArgs(compose.file), 'build', '--pull'],
       home,
     );
     if (buildCode !== 0) {
@@ -70,12 +68,12 @@ export async function runUpdateCommand(): Promise<void> {
     }
   }
 
-  // Recreates only what actually changed, so listeners hiccup only when the
-  // broadcast container itself restarts — rare on a pure image bump.
+  // Recreates only what changed, so listeners hiccup only when broadcast itself
+  // restarts.
   header('docker compose up -d');
   const upCode = await run(
     'docker',
-    ['compose', '-f', compose.file.file, 'up', '-d', '--remove-orphans'],
+    ['compose', ...composeFileArgs(compose.file), 'up', '-d', '--remove-orphans'],
     home,
   );
   if (upCode !== 0) {
@@ -92,9 +90,8 @@ export async function runUpdateCommand(): Promise<void> {
     muted('  `subwave self-update` to refresh the CLI binary itself.');
   }
 
-  // New services and changed env wiring don't ride an image bump — only
-  // `subwave sync` re-materialises the compose files, so an install scaffolded
-  // before the analyzer sidecar existed would silently stay behind (#1043).
+  // New services and changed env wiring don't ride an image bump; only
+  // `subwave sync` re-materialises the compose files (#1043).
   if (!cloneMode) {
     const mode = resolveInstallMode(home);
     if (mode && hasDrift(detectDrift(home, mode))) {
@@ -107,9 +104,8 @@ export async function runUpdateCommand(): Promise<void> {
   await pauseForEnter();
 }
 
-// Silently a no-op on a dev build (no published tag), with no .env, or with no
-// concrete pin to move — a pre-pin install stays on :latest rather than being
-// surprised into a fixed version.
+// No-op on a dev build (no published tag), with no .env, or with no concrete
+// pin to move: a pre-pin install stays on :latest.
 function moveVersionPin(home: string): void {
   const target = cliImageTag();
   if (!target) return;

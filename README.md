@@ -21,6 +21,14 @@ https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
 </tr>
 </table>
 
+## Hosted, or bring your own station
+
+Don't want to run a language model? **[SUB/WAVE DJ Brain](https://my.getsubwave.com/brain)**
+is a metered brain (and optional cloud voice) for the station you already self-host: one
+key, pasted once, from £5/month. **[SUB/WAVE Hosted](https://my.getsubwave.com/)** runs the
+whole station for you at `yourname.getsubwave.com`. Both fund the project; the software
+here stays complete and free either way.
+
 ## Live demo
 
 - **Project site** — [getsubwave.com](https://www.getsubwave.com/)
@@ -182,14 +190,27 @@ That repoints the `analyzer` service at `subwave-analyzer-heavy` (CLAP + Demucs,
 also offers it, and Unraid one-click users pull the `subwave-aio-heavy` image
 instead. Only the expressive *voices* above need the separate `tts-heavy` sidecar.
 
-Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead — layer the
-`docker-compose.analyzer-gpu.yml` overlay, which swaps the service to the
-`subwave-analyzer-cuda` image and reserves the GPU (needs the NVIDIA driver +
-Container Toolkit, nothing else):
+If analysis already runs somewhere else — a GPU box you point `ANALYZE_URL` at —
+you can drop the redundant local container entirely with one more line:
+
+```bash
+# in your root .env — 0 or 1 only; unset means 1 (the default-on station)
+ANALYZER_REPLICAS=0
+```
+
+The next `docker compose up -d` removes it and it stays gone. This is a Compose
+setting, so it does nothing on the all-in-one image, which runs the analyzer
+in-process. See [`docs/tts-heavy.md`](docs/tts-heavy.md#turning-the-analyzer-off).
+
+Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. For a one-off
+run, layer the `docker-compose.analyzer-gpu.yml` overlay:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
 ```
+
+To keep the overlay across normal rebuilds and restarts, set `COMPOSE_FILE` in
+`.env` to `docker-compose.yml:docker-compose.analyzer-gpu.yml`.
 
 All-in-one installs have no `analyzer` service to swap, so they take the GPU on
 the image instead: pull `subwave-aio-cuda` and hand the container the card

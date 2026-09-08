@@ -12,6 +12,7 @@ const persona: Persona = {
   frequency: 'moderate',
   scriptLength: 'concise',
   djMode: false,
+  linkStyle: 'natural',
   humour: 5,
   localColour: 5,
   warmth: 5,
@@ -51,6 +52,8 @@ test('the persona cap uses the unfiltered total, not the visible matches', () =>
     onSelect: () => {},
     communityCount: 0,
     onCommunity: () => {},
+    importing: false,
+    onImportBundle: () => {},
   }));
 
   const labelAt = html.indexOf('+ Add persona');

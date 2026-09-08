@@ -47,6 +47,15 @@ interface PersonaEditorProps {
   onClearAvatar: (id: string) => void;
   onSetActive: () => void;
   onRemove: () => void;
+  // Persona bundle (#1620) — downloads the zip. Distinct from the community
+  // share above it: that one opens a GitHub form carrying only the portable
+  // knobs, this one hands the operator a file with the audio in it.
+  exporting: boolean;
+  // Unsaved edits are still local; the export reads the SAVED persona, so
+  // offering it here would hand out a zip that quietly disagrees with what is
+  // on screen.
+  exportStale: boolean;
+  onExportBundle: () => void;
   canSave: boolean;
   focusedOk: boolean;
   allPersonasOk: boolean;
@@ -61,6 +70,7 @@ export function PersonaEditor({
   defaultEngine, cloudIssueText, skillCatalog, tagSuggestions, editorRef, open, isNew, onClose,
   onUpdate,
   onUploadAvatar, onGenerateAvatar, onClearAvatar, onSetActive, onRemove,
+  exporting, exportStale, onExportBundle,
   canSave, focusedOk, allPersonasOk, promptOk, busy, onSave, onDiscard,
 }: PersonaEditorProps) {
   const update = (patch: Partial<Persona>) => onUpdate(index, patch);
@@ -80,6 +90,7 @@ export function PersonaEditor({
       frequency: persona.frequency,
       'script-length': persona.scriptLength,
       'dj-mode': persona.djMode ? 'on' : '',
+      'link-style': persona.linkStyle,
       humour: persona.humour !== DIAL_NEUTRAL ? String(persona.humour) : '',
       'local-colour': persona.localColour !== DIAL_NEUTRAL ? String(persona.localColour) : '',
       warmth: persona.warmth !== DIAL_NEUTRAL ? String(persona.warmth) : '',
@@ -142,6 +153,15 @@ export function PersonaEditor({
               onClick: onRemove,
               disabled: personaCount <= 1,
               title: personaCount > 1 ? 'Remove this persona' : 'At least one persona is required',
+            },
+            {
+              id: 'export',
+              label: exporting ? 'Preparing…' : 'Export bundle',
+              onClick: onExportBundle,
+              disabled: exporting || isNew || exportStale,
+              title: isNew || exportStale
+                ? 'Save this persona first — the export is built from what the station has stored'
+                : 'Download a zip of this persona — its cloned voice sample and any jingles that name it travel with it',
             },
             {
               id: 'share',

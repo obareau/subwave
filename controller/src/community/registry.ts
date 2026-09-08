@@ -23,6 +23,7 @@ import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { queue } from '../broadcast/queue.js';
 import {
   FREQUENCIES,
+  LINK_STYLES,
   SCRIPT_LENGTHS,
   SHOW_MOODS,
   SHOW_ENERGY,
@@ -56,6 +57,7 @@ export interface CommunitySkill {
   // than dropped from the listing.
   cron?: string;
   cronOnly?: boolean;
+  cohosts?: boolean;
   window?: 'any' | 'commute';
   context?: string;
   submittedBy?: string;
@@ -71,6 +73,7 @@ export interface CommunityPersona {
   frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
   scriptLength: 'one-liner' | 'concise' | 'extended' | 'storyteller';
   djMode: boolean;
+  linkStyle?: 'natural' | 'announce';
   humour?: number;
   localColour?: number;
   warmth?: number;
@@ -99,6 +102,8 @@ export interface CommunityShow {
   programme: boolean;
   segmentSkill: string;
   maxTrackSeconds: number | null;
+  /** Minimum track length in seconds (#1573). null = inherit the station. */
+  minTrackLengthSeconds: number | null;
   submittedBy?: string;
   dateAdded?: string;
   dateModified?: string;
@@ -181,6 +186,7 @@ function normalizeSkill(raw: any): CommunitySkill | null {
     cooldown: optStr(raw?.cooldown, 16),
     cron: optStr(raw?.cron, 64),
     cronOnly: raw?.cronOnly === true ? true : undefined,
+    cohosts: raw?.cohosts === true ? true : undefined,
     window: raw?.window === 'commute' ? 'commute' : undefined,
     context: optStr(raw?.context, 200),
     submittedBy: optStr(raw?.submittedBy, 80),
@@ -205,6 +211,7 @@ function normalizePersona(raw: any): CommunityPersona | null {
     frequency: (FREQUENCIES as string[]).includes(raw?.frequency) ? raw.frequency : 'moderate',
     scriptLength: (SCRIPT_LENGTHS as string[]).includes(raw?.scriptLength) ? raw.scriptLength : 'concise',
     djMode: raw?.djMode === true,
+    linkStyle: (LINK_STYLES as string[]).includes(raw?.linkStyle) ? raw.linkStyle : 'natural',
     humour: dial(raw?.humour),
     localColour: dial(raw?.localColour),
     warmth: dial(raw?.warmth),
@@ -235,6 +242,7 @@ function normalizeShow(raw: any): CommunityShow | null {
   const name = (str(raw?.name) || str(raw?.displayName)).slice(0, SHOW_NAME_MAX);
   if (!name) return null;
   const seconds = Number(raw?.maxTrackSeconds);
+  const floorSeconds = Number(raw?.minTrackLengthSeconds);
   return {
     slug,
     name,
@@ -254,6 +262,9 @@ function normalizeShow(raw: any): CommunityShow | null {
     programme: raw?.programme === true,
     segmentSkill: str(raw?.segmentSkill).slice(0, SHOW_SEGMENT_SKILL_MAX),
     maxTrackSeconds: Number.isInteger(seconds) && seconds >= 0 ? seconds : null,
+    // Bounds are the show validator's, applied on install — a catalog value out
+    // of range is clamped there rather than dropped here, same as the cap.
+    minTrackLengthSeconds: Number.isInteger(floorSeconds) && floorSeconds >= 0 ? floorSeconds : null,
     submittedBy: optStr(raw?.submittedBy, 80),
     dateAdded: optStr(raw?.dateAdded, 10),
     dateModified: optStr(raw?.dateModified, 10),

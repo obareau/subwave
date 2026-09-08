@@ -1,24 +1,7 @@
-// Durable settings — overrides for values that have static defaults in code.
-// Stored at <stateDir>/settings.json. Some apply live (weather location,
-// DJ personas, shows); others require a Liquidsoap restart (jingle frequency,
-// crossfade duration).
-//
-// This module is the public barrel for the settings layer. It owns the two
-// operations that touch the settings file — load() (lenient, never throws, so a
-// hand-edited settings.json can't wedge boot) and update() (strict, throws so
-// the admin UI can show a real error) — and re-exports everything else from
-// ./settings/:
-//
-//   vocab.ts       fixed value sets, bounds, seed data, pure coercers
-//   defaults.ts    DEFAULTS + BOUNDS
-//   store.ts       the loaded-settings cache and its accessors
-//   normalize.ts   lenient load-path normalizers
-//   validate.ts    strict update() validators
-//   persona.ts     persona / show resolution and the prompt fragments
-//   liquidsoap.ts  the liquidsoap_*.txt writers
-//
-// Import from './settings.js' — never from './settings/*' directly outside
-// this directory, so the public surface stays one file.
+// Durable settings — overrides for values with static defaults in code, stored
+// at <stateDir>/settings.json. Some apply live; others need a Liquidsoap restart.
+// Public barrel for ./settings/*: owns load() (lenient, never throws) and
+// update() (strict, throws for the admin UI). Import from './settings.js' only.
 
 import { readFile, unlink, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -26,9 +9,6 @@ import { STATE_DIR } from './config.js';
 import { writeFileAtomic } from './util/atomic-file.js';
 import { DEFAULT_THEME_ID, isValidThemeId, listThemes } from './themes.js';
 import { isValidTimezone, setStationTimezone } from './time.js';
-// The bitrate vocabularies are no longer read here — the archive/stream
-// schemas own them (#1348). They stay in the re-export block below, which
-// forwards straight from vocab.js, so the public surface is unchanged.
 import {
   CHATTERBOX_VOICE_RE,
   DEFAULT_DJ_PROMPT_TEMPLATE,
@@ -66,7 +46,9 @@ import {
   clampTtsGain,
   clampTtsSpeed,
   coerceGuestPersonaIds,
+  isDefaultTakeover,
   mintId,
+  normalizeLlmHeaders,
   normalizeLlmKeys,
   normalizeLlmProviderBaseUrls,
   normalizeMoodMap,
@@ -74,6 +56,8 @@ import {
   normalizeTtsCorrections,
   normalizeTtsGainMap,
   normalizeTtsSpeedMap,
+  takeoverShowId,
+  TRANSITION_EFFECTS,
   validateTtsCorrectionsStrict,
 } from './settings/vocab.js';
 import {
@@ -83,16 +67,30 @@ import {
   MP3_BITRATE_SET,
   OPUS_BITRATE_SET,
   coerceMaxTrackSeconds,
+  coerceMinTrackLengthSeconds,
   rawMaxTrackSec,
 } from './settings/defaults.js';
 import { validateCompatParams } from './settings/compat-params.js';
 import { parseSettingsPatchKey } from './settings/patch-registry.js';
-import { STREAM_BUFFER_SECONDS_BOUNDS, STREAM_MAX_LISTENERS_BOUNDS, maxTrackSecondsValueSchema } from './schemas/settings.js';
+import {
+  PICKER_ALBUM_HOURS_BOUNDS,
+  STREAM_BUFFER_SECONDS_BOUNDS,
+  STREAM_COUNTRY_HEADER_RE,
+  STREAM_GEOIP_DB_PATH_MAX,
+  STREAM_MAX_LISTENERS_BOUNDS,
+  maxTrackSecondsValueSchema,
+  type ScheduledBackupSettings,
+  type JingleRotateOwner,
+} from './schemas/settings.js';
+import { jingleRotateOwner, setJingleRotateOwner } from './broadcast/jingle-rotate.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
   normalizeArchiveRetentionDays,
+  normalizeBackups,
   normalizeDjPrompts,
+  normalizeDuckDepth,
+  normalizeHandoverOffsetMinutes,
   normalizePersonaArray,
   normalizeTtsFallback,
   normalizeSchedule,
@@ -122,7 +120,6 @@ import {
   writeLiquidsoapSettings,
 } from './settings/liquidsoap.js';
 
-// ── public surface ─────────────────────────────────────────────────────────
 // Re-exported so every existing `from './settings.js'` import keeps working.
 export {
   AAC_BITRATES,
@@ -136,6 +133,7 @@ export {
   KOKORO_LANGS,
   KOKORO_VOICES,
   KOKORO_VOICE_LANGUAGES,
+  LINK_STYLES,
   LLM_PROVIDERS,
   LOUDNESS_SOURCES,
   MAX_OUTPUT_TOKENS_MAX,
@@ -160,6 +158,7 @@ export {
   SHOW_TOPIC_MAX,
   SOUL_MAX,
   TONE_DIALS,
+  TRANSITION_EFFECTS,
   TTS_CLOUD_PROVIDERS,
   TTS_CORRECTIONS_LIMIT,
   TTS_ENGINES,
@@ -195,10 +194,6 @@ export {
 export {
   assertNoOrphanMoods,
   validateDjPromptsStrict,
-  // The mood family delegates to schemas/settings.ts now (#1348); update() calls
-  // the registry directly, so these are re-exported straight from the source
-  // module for the callers that still take the validator API — backup import,
-  // onboarding, and scripts/moods.test.ts.
   validateFestivalsStrict,
   validateMoodScheduleStrict,
   validateMoodsStrict,
@@ -209,9 +204,13 @@ export {
 export {
   agentLanguageReminder,
   agentPersonaPreamble,
+  announceLinks,
   castHouseRulesBlock,
+  castSpeakerIdRule,
+  effectiveFadeAtShowEnd,
   effectiveFrequency,
   effectiveMaxTrackSec,
+  effectiveMinTrackSec,
   effectsActive,
   getActivePersona,
   getEffectivePersona,
@@ -227,6 +226,7 @@ export {
   spokenProperNounDirective,
 } from './settings/persona.js';
 export { writeLiquidsoapSettings } from './settings/liquidsoap.js';
+export { effectEnabled, enabledEffects } from './settings/transition-effects.js';
 export type {
   DjPromptEntry,
   EraWindow,
@@ -236,32 +236,20 @@ export type {
   Webhook,
 } from './settings/vocab.js';
 
-// Where uploaded persona avatars live. One file per persona, basename =
-// `<personaId>.<ext>`. The dedicated upload route is the only writer; the
-// post-update orphan sweep below is the only place that deletes by id.
+// One file per persona, basename `<personaId>.<ext>`. The upload route is the
+// only writer; the post-update orphan sweep is the only deleter.
 export const PERSONA_AVATAR_DIR = `${STATE_DIR}/persona-avatars`;
 
 const SETTINGS_PATH = `${STATE_DIR}/settings.json`;
-// `shows` (reusable show definitions) and `schedule` (the 7×24 grid) live in
-// their own file so settings.json stays readable — a fresh schedule is 168
-// null cells. They're conceptually one feature (the show planner) and are
-// always loaded/saved together, so they share one file. On first load after
-// upgrade, load() migrates them out of settings.json into here.
+// `shows` + the 7x24 `schedule` share one file, always loaded/saved together.
+// load() migrates them out of settings.json on first load after upgrade.
 const SCHEDULE_PATH = `${STATE_DIR}/schedule.json`;
 
-// Integer clamp shared by the settings.requests load()/update() coercions
-// below — round, then clamp into [min, max]; a non-finite input (missing,
-// non-numeric, hand-edited junk) falls back to `def` rather than NaN.
+// Round then clamp into [min, max] for the settings.requests coercions.
+// A CLEARED field is absent, not zero: `Number` maps ''/null/false/[] to 0, so
+// only a real number or a numeric string counts as a value; anything else
+// falls back to `def` rather than committing the field's floor.
 const intIn = (v: unknown, def: number, min: number, max: number) => {
-  // A CLEARED field is absent, not zero. `Number(null)`, `Number('')`,
-  // `Number('  ')`, `Number(false)` and `Number([])` are ALL 0 — finite — so
-  // without this guard an emptied admin input (parseInt('') → NaN → JSON null
-  // on the wire) clamped to `min` and silently committed that field's FLOOR:
-  // clearing the station hourly cap set it to 5/hour and closed the request
-  // line for everyone, with the form redisplaying 5 as though the operator had
-  // typed it. Only a string that actually contains a number, or a real number,
-  // is a value — anything else (including the CLI/API patch surface's own
-  // spellings of "unset") falls back to `def`.
   if (typeof v === 'string') {
     if (!v.trim()) return def;
   } else if (typeof v !== 'number' && typeof v !== 'bigint') {
@@ -281,13 +269,9 @@ export async function load() {
     } catch {}
   }
 
-  // shows + schedule live in schedule.json. Migration: if schedule.json
-  // exists, its contents win (and any leftover keys on settings.json are
-  // ignored, to be stripped on the next write). If it doesn't exist, fall
-  // back to whatever's on `stored` (legacy in-line copy from a pre-split
-  // install) so normalizers below can promote it forward. update() always
-  // writes settings.json without these keys, so the next save completes the
-  // migration on disk.
+  // shows + schedule live in schedule.json; if it exists its contents win,
+  // else fall back to the legacy in-line copy on settings.json. update() never
+  // writes these keys back, so the next save completes the migration.
   if (existsSync(SCHEDULE_PATH)) {
     try {
       const sched = JSON.parse(await readFile(SCHEDULE_PATH, 'utf8'));
@@ -299,9 +283,7 @@ export async function load() {
     } catch {}
   }
 
-  // ── personas ──────────────────────────────────────────────────────────────
-  // No valid persona roster in settings.json (fresh install) → ship the seed
-  // roster of three distinct DJs.
+  // Fresh install (no valid roster) ships the seed DJs.
   const personas =
     normalizePersonaArray(stored.personas) ||
     DEFAULTS.personas.map(p => ({ ...p, tts: { ...p.tts } }));
@@ -320,9 +302,8 @@ export async function load() {
         : '';
   if (djPrompt.trim() === DEFAULT_DJ_PROMPT_TEMPLATE.trim()) djPrompt = '';
 
-  // Prompt-template library. A pre-library settings.json (single custom
-  // djPrompt, no djPrompts array) migrates that custom text into a lone
-  // library entry so the operator finds their prompt where the UI now lives.
+  // A pre-library settings.json (custom djPrompt, no djPrompts array) migrates
+  // that text into a lone library entry.
   let djPrompts = normalizeDjPrompts(stored.djPrompts);
   let activeDjPromptId =
     typeof stored.activeDjPromptId === 'string' ? stored.activeDjPromptId : '';
@@ -352,9 +333,8 @@ export async function load() {
       ? stored.archive.bitrate
       : DEFAULTS.archive.bitrate;
 
-  // Per-provider base-URL maps (issue #1082) — computed once per leg. The flat
-  // legacy `baseUrl` on each leg is derived from its map; the stored flat value
-  // only survives as a fallback for blobs that predate the map.
+  // Per-provider base-URL maps (#1082), one per leg. The flat legacy `baseUrl`
+  // is derived from the map; the stored flat value is only a pre-map fallback.
   const llmProvider = LLM_PROVIDERS.includes(stored.llm?.provider)
     ? stored.llm.provider
     : DEFAULTS.llm.provider;
@@ -368,8 +348,7 @@ export async function load() {
     LLM_PROVIDERS,
   );
   // The embedding leg inherits the chat provider when its own is empty, so the
-  // legacy dedicated embedding URL (issue #405) must migrate under the
-  // EFFECTIVE provider — that's the key the admin UI reads and writes.
+  // legacy dedicated embedding URL (#405) migrates under the EFFECTIVE provider.
   const embedProvider =
     (typeof stored.embedding?.provider === 'string' && stored.embedding.provider.trim()) ||
     llmProvider;
@@ -380,18 +359,39 @@ export async function load() {
 
   const loaded: any = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
+    // Repaired, never trusted: a hand-edited settings.json is load()'s input
+    // and an unrecognised owner here would decide whether TWO rotates run.
+    // Anything but the explicit opt-in reads as the mixer (#1619).
+    jingleRotate: jingleRotateOwner(stored),
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
+    // Bounded here as well as at the save path (load repairs, never throws):
+    // an out-of-range `p` reaches radio.liq as a music BOOST under the DJ.
+    // Bounds come from the shared schema constant, never a copy.
+    ducking: {
+      voice: normalizeDuckDepth(stored.ducking?.voice, DEFAULTS.ducking.voice),
+      intro: normalizeDuckDepth(stored.ducking?.intro, DEFAULTS.ducking.intro),
+    },
     maxTrackSeconds: coerceMaxTrackSeconds(rawMaxTrackSec(stored), false) ?? DEFAULTS.maxTrackSeconds,
+    // Show-boundary fade (#1574). Anything but an explicit boolean = off.
+    fadeAtShowEnd:
+      typeof stored.fadeAtShowEnd === 'boolean'
+        ? stored.fadeAtShowEnd
+        : DEFAULTS.fadeAtShowEnd,
     archive: {
       enabled:
         typeof stored.archive?.enabled === 'boolean'
           ? stored.archive.enabled
           : DEFAULTS.archive.enabled,
       bitrate: archiveBitrate,
-      // Bounded default with the keep-forever upgrade guard — a pre-existing
-      // enabled archive without a stored value stays at 0, never pruned.
+      // Keep-forever guard: a pre-existing enabled archive with no stored
+      // value stays at 0, never pruned.
       retentionDays: normalizeArchiveRetentionDays(stored.archive),
     },
+    // Scheduled backups (#1570). Absent block = `{ cadence: 'off' }`.
+    // Like every section here it composes field by field and does NOT spread
+    // DEFAULTS: a field missing from this block saves, then vanishes on the
+    // next cold load (controller/CLAUDE.md's THREE edits).
+    backups: normalizeBackups(stored.backups),
     stream: {
       opusEnabled:
         typeof stored.stream?.opusEnabled === 'boolean'
@@ -424,11 +424,7 @@ export async function load() {
           ? stored.stream.oggIcyMetadata
           : DEFAULTS.stream.oggIcyMetadata,
       // Bounded against the SAME constant the save path checks
-      // (schemas/settings.ts streamSchema), so a value update() accepted always
-      // survives a restart. Omitting this line is what made the setting revert
-      // to 22 on every cold load — the mixer handoff file got the string
-      // "undefined" and the entrypoint fell back, while /now-playing advertised
-      // the default to every player.
+      // (schemas/settings.ts streamSchema), so a saved value survives a restart.
       bufferSeconds:
         typeof stored.stream?.bufferSeconds === 'number' &&
         Number.isFinite(stored.stream.bufferSeconds) &&
@@ -446,16 +442,27 @@ export async function load() {
         stored.stream.idleAfterMinutes <= 1440
           ? stored.stream.idleAfterMinutes
           : DEFAULTS.stream.idleAfterMinutes,
-      // Same shape and the same shared constant as bufferSeconds above: the
-      // load path must bound against exactly what streamSchema accepts, or a
-      // saved value silently reverts on the next cold start and the handoff
-      // file hands the entrypoint a figure the operator never chose.
+      // Same shared constant as bufferSeconds above, for the same reason.
       maxListeners:
         Number.isInteger(stored.stream?.maxListeners) &&
         stored.stream.maxListeners >= STREAM_MAX_LISTENERS_BOUNDS.min &&
         stored.stream.maxListeners <= STREAM_MAX_LISTENERS_BOUNDS.max
           ? stored.stream.maxListeners
           : DEFAULTS.stream.maxListeners,
+      // Listener-country fallbacks (#1485), bounded against exactly what
+      // streamPatchSchema accepts. Repaired, never refused: a bad header name
+      // costs the header link, never a boot.
+      countryHeader:
+        typeof stored.stream?.countryHeader === 'string' &&
+        (stored.stream.countryHeader.trim() === '' ||
+          STREAM_COUNTRY_HEADER_RE.test(stored.stream.countryHeader.trim()))
+          ? stored.stream.countryHeader.trim()
+          : DEFAULTS.stream.countryHeader,
+      geoipDbPath:
+        typeof stored.stream?.geoipDbPath === 'string' &&
+        stored.stream.geoipDbPath.trim().length <= STREAM_GEOIP_DB_PATH_MAX
+          ? stored.stream.geoipDbPath.trim()
+          : DEFAULTS.stream.geoipDbPath,
     },
     loudness: {
       targetLufs:
@@ -478,8 +485,7 @@ export async function load() {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
       lng: stored.weather?.lng ?? DEFAULTS.weather.lng,
       locationName: stored.weather?.locationName ?? DEFAULTS.weather.locationName,
-      // Absent key → '' → falls back to locationName at read time, so an
-      // install predating this field behaves exactly as it did before.
+      // Absent key -> '' -> falls back to locationName at read time.
       onAirLocation: stored.weather?.onAirLocation ?? DEFAULTS.weather.onAirLocation,
       units:
         stored.weather?.units === 'imperial' || stored.weather?.units === 'metric'
@@ -489,19 +495,29 @@ export async function load() {
     djPrompt,
     djPrompts,
     activeDjPromptId,
-    // House rules — trimmed + capped on load so a hand-edited settings.json
-    // can't bloat every prompt. '' (or a pre-#1182 file with no key) = off.
+    // Trimmed + capped on load so a hand-edited file can't bloat every prompt.
+    // '' (or a pre-#1182 file with no key) = off.
     djHouseRules:
       typeof stored.djHouseRules === 'string'
         ? stored.djHouseRules.trim().slice(0, DJ_HOUSE_RULES_MAX)
         : '',
-    // Station clock switch. Coerce missing/non-boolean (every settings.json
-    // written before this key existed) to the default `true`, so an upgrade is
-    // byte-identical. See DEFAULTS.djSpeakClock.
+    // Missing/non-boolean coerces to the default `true`.
     djSpeakClock:
       typeof stored.djSpeakClock === 'boolean'
         ? stored.djSpeakClock
         : DEFAULTS.djSpeakClock,
+    // Missing/non-boolean coerces to the default `false`.
+    djTalkOnlyBetweenTracks:
+      typeof stored.djTalkOnlyBetweenTracks === 'boolean'
+        ? stored.djTalkOnlyBetweenTracks
+        : DEFAULTS.djTalkOnlyBetweenTracks,
+    // Repaired, not refused: an offset the talk table's programme row cannot
+    // sample is a sign-off that never airs.
+    handover: {
+      offsetMinutes: normalizeHandoverOffsetMinutes(
+        stored.handover?.offsetMinutes, DEFAULTS.handover.offsetMinutes,
+      ),
+    },
     station:
       typeof stored.station === 'string' && stored.station.trim()
         ? stored.station.trim().slice(0, 80)
@@ -510,8 +526,7 @@ export async function load() {
       typeof stored.stationDescription === 'string'
         ? stored.stationDescription.trim().slice(0, 200)
         : DEFAULTS.stationDescription,
-    // Invalid stored zone (hand-edited file) falls back to Auto — the
-    // station must never crash on a bad zone.
+    // Invalid stored zone falls back to Auto; never crash on a bad zone.
     timezone:
       typeof stored.timezone === 'string' && isValidTimezone(stored.timezone.trim())
         ? stored.timezone.trim()
@@ -521,22 +536,18 @@ export async function load() {
         ? stored.locale
         : DEFAULTS.locale,
     theme: {
-      // We only validate the *shape* here. The active id might reference a
-      // theme file that's since been removed; the public /themes endpoint
-      // falls back to the default id when that happens, so a stale id doesn't
-      // break the UI.
+      // Shape only. A stale id pointing at a removed theme is resolved by
+      // /themes falling back to the default.
       active:
         typeof stored.theme?.active === 'string' && stored.theme.active.trim()
           ? stored.theme.active.trim()
           : DEFAULTS.theme.active,
     },
-    // Festivals loaded from settings.json. Seeded from FESTIVAL_DEFAULTS only
-    // when the key is absent/invalid — a persisted empty array means the
-    // operator deleted every entry and must stay empty (calendar off).
+    // Seeded from FESTIVAL_DEFAULTS only when the key is absent/invalid: a
+    // persisted empty array means the operator cleared the calendar.
     festivals: Array.isArray(stored.festivals) ? stored.festivals : FESTIVAL_DEFAULTS,
-    // Mood system loaded from settings.json (lenient normalise — never wedges
-    // boot). An empty/absent vocabulary reseeds MOOD_DEFAULTS (unusable when
-    // empty); the two maps fill missing keys from their seed defaults.
+    // Lenient normalise. An empty/absent vocabulary reseeds MOOD_DEFAULTS;
+    // the two maps fill missing keys from their seed defaults.
     moods: normalizeMoods(stored.moods),
     moodSchedule: normalizeMoodMap(stored.moodSchedule, MOOD_PERIODS, PERIOD_MOOD_DEFAULTS),
     weatherMoods: normalizeMoodMap(stored.weatherMoods, WEATHER_CONDITIONS, WEATHER_MOOD_DEFAULTS),
@@ -567,16 +578,14 @@ export async function load() {
         typeof stored.privacy?.password === 'string'
           ? stored.privacy.password
           : DEFAULTS.privacy.password,
-      // Absent/non-boolean coerces to the default (false), so every settings.json
-      // written before this key existed keeps its public reads byte-identical.
+      // Absent/non-boolean coerces to the default (false).
       publishPersonaSouls:
         typeof stored.privacy?.publishPersonaSouls === 'boolean'
           ? stored.privacy.publishPersonaSouls
           : DEFAULTS.privacy.publishPersonaSouls,
     },
-    // Listener-request pipeline gates. Absent/malformed settings.json (every
-    // install predating this key) coerces field-by-field to DEFAULTS.requests,
-    // never undefined/NaN — later tasks gate on settings.get()?.requests.
+    // Absent/malformed coerces field-by-field to DEFAULTS.requests, never
+    // undefined/NaN — callers gate on settings.get()?.requests.
     requests: {
       enabled:
         typeof stored.requests?.enabled === 'boolean'
@@ -613,9 +622,7 @@ export async function load() {
     schedule,
     scheduleOverride,
     tts: {
-      // Station-wide voice switch. Coerce missing/non-boolean (every settings.json
-      // written before this key existed) to the default `true`, so an upgrade is
-      // byte-identical. See DEFAULTS.tts.enabled.
+      // Missing/non-boolean coerces to the default `true`.
       enabled:
         typeof stored.tts?.enabled === 'boolean'
           ? stored.tts.enabled
@@ -623,14 +630,10 @@ export async function load() {
       defaultEngine: TTS_ENGINES.includes(stored.tts?.defaultEngine)
         ? stored.tts.defaultEngine
         : DEFAULTS.tts.defaultEngine,
-      // Operator-chosen rescue slot. Reuses the persona voice-slot normaliser
-      // so the per-engine voice rules can't drift between the two; only the
-      // `enabled` flag is extra. Absent/non-boolean coerces to the default
-      // (off), so an upgrade from a settings.json written before this key
-      // existed keeps today's chain byte-for-byte.
+      // Rescue slot. Reuses the persona voice-slot normaliser so the per-engine
+      // voice rules can't drift; only `enabled` is extra, defaulting off.
       fallback: normalizeTtsFallback(stored.tts?.fallback),
-      // Stored as a plain boolean; coerce missing/non-boolean (older saves) to
-      // the default. See DEFAULTS.tts.heavyEnabled for the semantics.
+      // Missing/non-boolean coerces to DEFAULTS.tts.heavyEnabled.
       heavyEnabled:
         typeof stored.tts?.heavyEnabled === 'boolean'
           ? stored.tts.heavyEnabled
@@ -641,9 +644,7 @@ export async function load() {
           KOKORO_VOICE_RE.test(stored.tts.kokoro.voice)
             ? stored.tts.kokoro.voice
             : DEFAULTS.tts.kokoro.voice,
-        // Legacy codes are canonicalised first (`fr` → `fr-fr`, #1213), so an
-        // operator who chose French before the fix keeps French rather than
-        // dropping back to the auto-detect default.
+        // Legacy codes canonicalised first (`fr` -> `fr-fr`, #1213).
         lang:
           typeof stored.tts?.kokoro?.lang === 'string' &&
           KOKORO_LANG_RE.test(canonicalKokoroLang(stored.tts.kokoro.lang))
@@ -667,8 +668,7 @@ export async function load() {
             : DEFAULTS.tts.pocketTts.voice,
       },
       cloud: {
-        // Explicit boolean wins; otherwise an install that already had a saved
-        // cloud key keeps cloud on so the upgrade doesn't silently disable it.
+        // Explicit boolean wins; otherwise a saved cloud key keeps cloud on.
         enabled:
           typeof stored.tts?.cloud?.enabled === 'boolean'
             ? stored.tts.cloud.enabled
@@ -684,9 +684,8 @@ export async function load() {
           typeof stored.tts?.cloud?.voice === 'string' && stored.tts.cloud.voice.trim()
             ? stored.tts.cloud.voice.trim()
             : DEFAULTS.tts.cloud.voice,
-        // Migrate the old shared slot into the dedicated compatibility slot
-        // only when it was saved under the compatibility provider. Managed
-        // provider keys remain legacy-readable but can no longer cross over.
+        // Migrate the old shared slot into the compatibility slot only when it
+        // was saved under the compatibility provider.
         apiKey:
           stored.tts?.cloud?.provider !== 'openai-compatible'
           && typeof stored.tts?.cloud?.apiKey === 'string'
@@ -703,9 +702,8 @@ export async function load() {
           typeof stored.tts?.cloud?.baseUrl === 'string'
             ? stored.tts.cloud.baseUrl.trim()
             : DEFAULTS.tts.cloud.baseUrl,
-        // ElevenLabs voice_settings — clamped to [0,1] on load so a hand-edited
-        // settings.json can't ship an out-of-range value to the provider (which
-        // would 400 the whole speak call, silently dropping the voice).
+        // ElevenLabs voice_settings, clamped to [0,1]: an out-of-range value
+        // 400s the whole speak call.
         voiceStability:
           typeof stored.tts?.cloud?.voiceStability === 'number'
             ? clamp01(stored.tts.cloud.voiceStability)
@@ -722,8 +720,11 @@ export async function load() {
           typeof stored.tts?.cloud?.voiceUseSpeakerBoost === 'boolean'
             ? stored.tts.cloud.voiceUseSpeakerBoost
             : DEFAULTS.tts.cloud.voiceUseSpeakerBoost,
-        // Fish Audio controls — lenient load for hand-edited/older settings.
-        // Only the Fish provider sends these fields on the wire.
+        sendSpeed:
+          typeof stored.tts?.cloud?.sendSpeed === 'boolean'
+            ? stored.tts.cloud.sendSpeed
+            : DEFAULTS.tts.cloud.sendSpeed,
+        // Fish Audio controls; only the Fish provider sends these on the wire.
         temperature:
           typeof stored.tts?.cloud?.temperature === 'number' && Number.isFinite(stored.tts.cloud.temperature)
             ? clamp01(stored.tts.cloud.temperature)
@@ -736,13 +737,8 @@ export async function load() {
           ['low', 'normal', 'balanced'].includes(stored.tts?.cloud?.latency)
             ? stored.tts.cloud.latency
             : DEFAULTS.tts.cloud.latency,
-        // Extra openai-compatible body fields. This block composes tts.cloud
-        // field by field rather than spreading DEFAULTS, so a key missing here
-        // is a key that survives a save but vanishes on the next restart —
-        // params would quietly stop applying and nothing would say why.
-        // Lenient like the Fish knobs above: an invalid hand-edited list drops
-        // to none rather than throwing, because settings.load() failing means
-        // the controller doesn't boot at all.
+        // Extra openai-compatible body fields. Lenient: an invalid list drops
+        // to none rather than throwing.
         compatParams: (() => {
           try {
             return validateCompatParams(stored.tts?.cloud?.compatParams);
@@ -757,14 +753,11 @@ export async function load() {
             ? stored.tts.remote.url.trim()
             : DEFAULTS.tts.remote.url,
       },
-      // Per-engine gain map — one clean gain per known engine, missing keys → 0,
-      // unknown keys dropped. So an older save (no gainDb) loads at unity.
+      // One gain per known engine; missing keys -> 0, unknown keys dropped.
       gainDb: normalizeTtsGainMap(stored.tts?.gainDb),
-      // Per-engine speed map — one clean multiplier per known engine, missing
-      // keys → 1.0, unknown keys dropped. An older save (no speed) loads at unity.
+      // One multiplier per known engine; missing -> 1.0, unknown dropped.
       speed: normalizeTtsSpeedMap(stored.tts?.speed),
-      // Operator speech corrections — malformed entries dropped, list capped.
-      // An older save (no corrections) loads as [].
+      // Malformed entries dropped, list capped; absent loads as [].
       corrections: normalizeTtsCorrections(stored.tts?.corrections),
     },
     llm: {
@@ -772,8 +765,8 @@ export async function load() {
         ? stored.llm.provider
         : DEFAULTS.llm.provider,
       model: typeof stored.llm?.model === 'string' ? stored.llm.model.trim() : DEFAULTS.llm.model,
-      // Legacy single slot is migrated into `keys` below, then cleared — there
-      // is exactly one source of truth for inline keys (issue #657).
+      // Legacy single slot migrates into `keys` below then clears: one source
+      // of truth for inline keys (#657).
       apiKey: '',
       keys: normalizeLlmKeys(stored.llm),
       ollamaUrl:
@@ -783,31 +776,24 @@ export async function load() {
       providerBaseUrls: llmBaseUrls,
       baseUrl: llmBaseUrls[llmProvider]
         ?? (typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl),
+      // Extra openai-compatible request headers (#1618). Malformed entries
+      // dropped rather than thrown; absent loads as {} (no extra headers).
+      headers: normalizeLlmHeaders(stored.llm?.headers),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
-      // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
-      // pre-field settings.json) lands on the 'required' default. See issue #570.
+      // Only 'auto' downgrades the forced tool_choice; else 'required' (#570).
       toolChoice: stored.llm?.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.toolChoice,
-      // Clamp to a sane band: 0 disables (Ollama default), else [2048, 131072].
-      // Non-numeric/NaN falls back to the default. Floored to an integer.
+      // 0 disables (Ollama default), else clamped to [2048, 131072], floored.
       numCtx: clampNumCtx(stored.llm?.numCtx, DEFAULTS.llm.numCtx),
-      // Clamped to [1.0, 2.0]; 1.0 = off. This block does NOT spread DEFAULTS,
-      // so a field missing HERE is written to settings.json by update() and then
-      // silently dropped on the next cold load — which is exactly what happened
-      // to repeat_penalty between #918 and #1327: the operator's configured
-      // value survived in memory for that process, vanished on restart, and
-      // llama.cpp fell back to its own 1.0 default with nothing in the logs.
+      // Clamped to [1.0, 2.0]; 1.0 = off.
       repeatPenalty: clampRepeatPenalty(stored.llm?.repeatPenalty, DEFAULTS.llm.repeatPenalty),
       pickerAgent:
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
           : DEFAULTS.llm.pickerAgent,
-      // Clamped to [0, 1000] (≤ the 2500-entry sidecar cap); pre-field
-      // settings.json picks up the config/env-seeded default.
+      // Clamped to [0, 1000] (<= the 2500-entry sidecar cap).
       noRepeatWindow: clampNoRepeatWindow(stored.llm?.noRepeatWindow, DEFAULTS.llm.noRepeatWindow),
-      // Clamped to [0, 25]; a settings.json written before the field existed
-      // picks up the shipped default, so an upgrade turns spacing on rather
-      // than silently keeping the on-air-only guard it was filed against.
+      // Clamped to [0, 25].
       artistVarietyWindow: clampArtistVarietyWindow(
         stored.llm?.artistVarietyWindow,
         DEFAULTS.llm.artistVarietyWindow,
@@ -816,23 +802,18 @@ export async function load() {
         typeof stored.llm?.requestWebResolve === 'boolean'
           ? stored.llm.requestWebResolve
           : DEFAULTS.llm.requestWebResolve,
-      // Clamped to [5s, 300s]; settings.json files from before the field
-      // existed pick up the default.
+      // Clamped to [5s, 300s].
       agentTimeoutMs: clampAgentTimeout(stored.llm?.agentTimeoutMs, DEFAULTS.llm.agentTimeoutMs),
       pauseWhenEmpty:
         typeof stored.llm?.pauseWhenEmpty === 'boolean'
           ? stored.llm.pauseWhenEmpty
           : DEFAULTS.llm.pauseWhenEmpty,
-      // Budget cap — settings.json files from before these fields existed pick
-      // up the defaults (0 = disabled, so they behave exactly as before).
+      // Budget cap; 0 = disabled.
       dailyTokenCap: clampDailyTokenCap(stored.llm?.dailyTokenCap, DEFAULTS.llm.dailyTokenCap),
       budgetSoftPct: clampBudgetSoftPct(stored.llm?.budgetSoftPct, DEFAULTS.llm.budgetSoftPct),
-      // Per-call output cap (issue #712) — pre-existing settings.json lacks the
-      // field and picks up the 0 default (= built-in per-strategy defaults).
+      // Per-call output cap (#712); 0 = built-in per-strategy defaults.
       maxOutputTokens: clampMaxOutputTokens(stored.llm?.maxOutputTokens, DEFAULTS.llm.maxOutputTokens),
-      // Discovery-round override — pre-existing settings.json lacks the field
-      // and picks up the 0 default (= follow the provider capability table), so
-      // an upgraded install behaves exactly as it did before the setting existed.
+      // Discovery-round override; 0 = follow the provider capability table.
       discoverySteps: clampDiscoverySteps(stored.llm?.discoverySteps, DEFAULTS.llm.discoverySteps),
       exemptRequests:
         typeof stored.llm?.exemptRequests === 'boolean'
@@ -842,7 +823,6 @@ export async function load() {
         typeof stored.llm?.debugRawRequests === 'boolean'
           ? stored.llm.debugRawRequests
           : DEFAULTS.llm.debugRawRequests,
-      // Backup leg — same connection fields as the primary, coerced identically.
       fallback: (() => {
         const fb = stored.llm?.fallback || {};
         return {
@@ -851,14 +831,14 @@ export async function load() {
             ? fb.provider
             : DEFAULTS.llm.fallback.provider,
           model: typeof fb.model === 'string' ? fb.model.trim() : DEFAULTS.llm.fallback.model,
-          // Legacy fallback slot migrated into settings.llm.keys above, then
-          // cleared. The fallback resolves its key from `keys[fb.provider]`.
+          // Legacy slot migrated into settings.llm.keys above, then cleared.
           apiKey: '',
           ollamaUrl:
             typeof fb.ollamaUrl === 'string' ? fb.ollamaUrl.trim() : DEFAULTS.llm.fallback.ollamaUrl,
           providerBaseUrls: fbBaseUrls,
           baseUrl: fbBaseUrls[fbProvider]
             ?? (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl),
+          headers: normalizeLlmHeaders(fb.headers),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
@@ -874,6 +854,10 @@ export async function load() {
         : DEFAULTS.search.provider,
       apiKey: typeof stored.search?.apiKey === 'string' ? stored.search.apiKey : '',
       baseUrl: typeof stored.search?.baseUrl === 'string' ? stored.search.baseUrl : DEFAULTS.search.baseUrl,
+      searxngEngines:
+        typeof stored.search?.searxngEngines === 'string'
+          ? stored.search.searxngEngines
+          : DEFAULTS.search.searxngEngines,
     },
     embedding: {
       enabled:
@@ -889,8 +873,7 @@ export async function load() {
           ? stored.embedding.model.trim()
           : DEFAULTS.embedding.model,
       providerBaseUrls: embedBaseUrls,
-      // Derived with the effective provider (own, else the chat provider) so a
-      // dedicated embedding URL keeps working when the provider is inherited.
+      // Effective provider = own, else the chat provider.
       baseUrl: embedBaseUrls[embedProvider]
         ?? (typeof stored.embedding?.baseUrl === 'string' ? stored.embedding.baseUrl.trim() : DEFAULTS.embedding.baseUrl),
       ollamaUrl:
@@ -949,8 +932,7 @@ export async function load() {
       enabled: Object.fromEntries(
         Object.entries(stored.skills?.enabled || {})
           .filter(([, v]) => typeof v === 'boolean')
-          // Same rename applied to the operator's enable toggle map so an
-          // existing `random-facts: false` carries forward as `curiosity: false`.
+          // Same rename on the enable toggle map.
           .map(([k, v]) => [SKILL_RENAMES[k] || k, v]),
       ),
     },
@@ -972,6 +954,13 @@ export async function load() {
     transitions: {
       pairDrain: typeof stored.transitions?.pairDrain === 'boolean' ? stored.transitions.pairDrain : DEFAULTS.transitions.pairDrain,
       stemBlends: typeof stored.transitions?.stemBlends === 'boolean' ? stored.transitions.stemBlends : DEFAULTS.transitions.stemBlends,
+      // Per-effect kill switches (#1565); absent means the default `true`.
+      effects: Object.fromEntries(TRANSITION_EFFECTS.map(k => [
+        k,
+        typeof stored.transitions?.effects?.[k] === 'boolean'
+          ? stored.transitions.effects[k]
+          : DEFAULTS.transitions.effects[k],
+      ])) as typeof DEFAULTS.transitions.effects,
     },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
@@ -1042,6 +1031,28 @@ export async function load() {
             ? stored.scrobble.listenbrainz.baseUrl.trim().slice(0, 500)
             : '',
       },
+      navidrome: {
+        enabled:
+          typeof stored.scrobble?.navidrome?.enabled === 'boolean'
+            ? stored.scrobble.navidrome.enabled
+            : DEFAULTS.scrobble.navidrome.enabled,
+      },
+    },
+    // Album cooldown (#1485 FR 3). Bounds-clamped, not validated: load is
+    // lenient by contract.
+    picker: {
+      albumHours: Number.isFinite(Number(stored.picker?.albumHours))
+        ? Math.min(
+            PICKER_ALBUM_HOURS_BOUNDS.max,
+            Math.max(PICKER_ALBUM_HOURS_BOUNDS.min, Number(stored.picker.albumHours)),
+          )
+        : DEFAULTS.picker.albumHours,
+      // Minimum-track-length floor (#1573). The crossfade floor is NOT
+      // re-applied on load: a crossfade lowered later must not delete a floor
+      // the operator set deliberately.
+      minTrackLengthSeconds:
+        coerceMinTrackLengthSeconds(stored.picker?.minTrackLengthSeconds, false)
+        ?? DEFAULTS.picker.minTrackLengthSeconds,
     },
     likes: {
       enabled:
@@ -1069,24 +1080,39 @@ export async function load() {
     console.warn(`[settings] ignoring invalid timezone "${stored.timezone.trim()}" — using Auto (container TZ)`);
   }
   setStationTimezone(loaded.timezone);
+  // Same shape, same reason (#1619): the queue subscribes to a real ownership
+  // change so it can restart the rotate's boundary count, and it cannot be
+  // called from here directly without closing a settings ↔ queue cycle.
+  setJingleRotateOwner(loaded.jingleRotate);
   return loaded;
 }
 
-// Lenient normalizer — used by load(). Drops invalid entries silently rather
-// than failing the whole boot.
+// Lenient: drops invalid entries rather than failing boot.
 
 export async function update(patch) {
   const cur = await load();
   const next = JSON.parse(JSON.stringify(cur));
   let restart = false;
 
-  // On the shared schema (#1348) — see settings/patch-registry.ts. The schema
-  // says what the value may BE; whether applying it costs a mixer restart stays
-  // here, because that is a property of the transition, not of the value.
+  // On the shared schema (#1348, settings/patch-registry.ts). The schema says
+  // what a value may BE; whether it costs a mixer restart stays here.
   if ('jingleRatio' in patch) {
     const v = parseSettingsPatchKey<number>('jingleRatio', patch.jingleRatio);
     if (v !== cur.jingleRatio) {
       next.jingleRatio = v;
+      restart = true;
+    }
+  }
+  // Who counts the tracks (#1619). Same restart flag as the ratio itself and
+  // for the same reason: this key's whole effect on the mixer is the value
+  // written into liquidsoap_jingle_ratio.txt, which is read once at startup.
+  // Until that restart the mixer is still rotating on its old ratio, so an
+  // operator who flips this and walks away hears both — which is what the
+  // control's "needs restart" wording is for.
+  if ('jingleRotate' in patch) {
+    const v = parseSettingsPatchKey<JingleRotateOwner>('jingleRotate', patch.jingleRotate);
+    if (v !== cur.jingleRotate) {
+      next.jingleRotate = v;
       restart = true;
     }
   }
@@ -1097,27 +1123,37 @@ export async function update(patch) {
       restart = true;
     }
   }
+  if ('ducking' in patch) {
+    const dk = parseSettingsPatchKey<{ voice?: number; intro?: number }>('ducking', patch.ducking);
+    // Per-field change gating: the panel posts the whole block, so only a real
+    // change may set the restart flag.
+    if (dk.voice !== undefined && dk.voice !== cur.ducking.voice) {
+      next.ducking.voice = dk.voice;
+      restart = true;
+    }
+    if (dk.intro !== undefined && dk.intro !== cur.ducking.intro) {
+      next.ducking.intro = dk.intro;
+      restart = true;
+    }
+  }
   if ('maxTrackSeconds' in patch || 'maxTrackMinutes' in patch) {
-    // The bound lives once, in the shared schema — this applies it to the
-    // RESOLVED value (seconds, or the legacy minutes alias × 60), which is the
-    // figure the precedence rule actually selected.
+    // Applies the shared schema's bound to the RESOLVED value (seconds, or the
+    // legacy minutes alias x 60).
     const parsedCap = maxTrackSecondsValueSchema(BOUNDS.maxTrackSeconds).safeParse(
       rawMaxTrackSec(patch),
     );
     if (!parsedCap.success) throw new Error(parsedCap.error.issues[0].message);
     const v = parsedCap.data;
-    // Non-zero caps must clear the crossfade-relative floor (0 = unlimited stays
-    // allowed): the track crossfades out starting crossfadeDuration before the
-    // cap, so a shorter cap is degenerate / leaves no solo airtime. Uses next's
-    // crossfade, already applied above if this same patch changed it.
+    // Non-zero caps must clear the crossfade-relative floor (0 = unlimited
+    // stays allowed). Uses next's crossfade, applied above if this patch
+    // changed it.
     const floor = minTrackSeconds(next);
     if (v !== 0 && v < floor) {
       throw new Error(
         `maxTrackSeconds must be 0 (no limit) or at least ${floor}s`,
       );
     }
-    // Read live by queue.drainToLiquidsoap + the auto-playlist refresh to stamp
-    // liq_cue_out; no Liquidsoap file is written, so no restart.
+    // Read live by the drain + auto-playlist refresh; no restart.
     next.maxTrackSeconds = v;
   }
   if ('archive' in patch) {
@@ -1135,18 +1171,25 @@ export async function update(patch) {
       restart = true;
     }
     if (a.retentionDays !== undefined) {
-      // Enforced controller-side (scheduler cleanup), no Liquidsoap file or
-      // restart involved.
+      // Enforced controller-side (scheduler cleanup); no restart.
       next.archive.retentionDays = a.retentionDays;
     }
+  }
+  if ('backups' in patch) {
+    const b = parseSettingsPatchKey<Partial<ScheduledBackupSettings>>(
+      'backups',
+      patch.backups,
+    );
+    // Read live by the scheduler's hourly tick; no restart.
+    if (b.cadence !== undefined) next.backups.cadence = b.cadence;
+    if (b.keep !== undefined) next.backups.keep = b.keep;
   }
   if ('stream' in patch) {
     const st = parseSettingsPatchKey<Record<string, number | boolean | undefined>>(
       'stream',
       patch.stream,
     );
-    // Every encoder field restarts the mixer, and only on a real change against
-    // `cur` — the schema validated the value, this decides the transition cost.
+    // Every encoder field restarts the mixer, and only on a real change.
     for (const k of [
       'opusEnabled',
       'opusBitrate',
@@ -1161,51 +1204,37 @@ export async function update(patch) {
         restart = true;
       }
     }
-    // Listener-side buffer depth (Icecast <burst-size>, seconds). Deep survives
-    // a dead zone but sits further behind the live edge; shallow syncs tighter
-    // and stalls more. 0 disables burst-on-connect. Capped at 60s: past that a
-    // listener is a full minute behind and <queue-size> (which must comfortably
-    // exceed the burst) gets unreasonable.
-    //
-    // restart=true is not just a mixer concern — burst lives in icecast.xml,
-    // rendered once by the broadcast entrypoint at container boot. It applies
-    // anyway because liquidsoap and icecast share a container the entrypoint
-    // `wait -n`s on: the telnet restart shuts liquidsoap down, the container
-    // bounces, and the template re-renders on the way back up.
-    //
-    // Change-gated against `cur` like the encoder fields above, which needs
-    // load() to actually compose bufferSeconds — while it didn't, `cur` read
-    // `undefined` on every cold-loaded process, so this fired unconditionally
-    // AND the operator's value was lost on restart. Kept out of the loop above
-    // because it is not an encoder field and restarts for a different reason.
+    // Listener-side buffer depth (Icecast <burst-size>, seconds); 0 disables
+    // burst-on-connect, capped at 60s. restart=true because burst lives in
+    // icecast.xml, re-rendered when the telnet restart bounces the container.
+    // Change-gated against `cur`, which requires load() to compose it.
     if (st.bufferSeconds !== undefined && st.bufferSeconds !== cur.stream.bufferSeconds) {
       next.stream.bufferSeconds = st.bufferSeconds as number;
       restart = true;
     }
     // Concurrent-listener ceiling (Icecast <limits><clients>). Same lifecycle
-    // as bufferSeconds above — icecast.xml, rendered once at container boot —
-    // so the same change-gate and the same restart=true. What differs is that
-    // an ICECAST_MAX_CLIENTS in the broadcast container's environment WINS at
-    // render time, so this save can legitimately be a no-op on air; the
-    // entrypoint logs which source it took and the admin hint says so.
+    // as bufferSeconds. ICECAST_MAX_CLIENTS in the broadcast container's env
+    // WINS at render time, so this save can be a no-op on air.
     if (st.maxListeners !== undefined && st.maxListeners !== cur.stream.maxListeners) {
       next.stream.maxListeners = st.maxListeners as number;
       restart = true;
     }
-    // Idle pause is enforced controller-side over telnet (broadcast/
-    // stream-idle.ts) — no Liquidsoap boot file, no mixer restart. Turning it
-    // off mid-idle is handled by the monitor's next tick, which resumes the
-    // programme.
+    // Enforced controller-side over telnet (broadcast/stream-idle.ts); no
+    // restart, and the monitor's next tick resumes the programme.
     if (st.idleWhenEmpty !== undefined) {
       next.stream.idleWhenEmpty = st.idleWhenEmpty as boolean;
     }
     if (st.idleAfterMinutes !== undefined) {
       next.stream.idleAfterMinutes = st.idleAfterMinutes as number;
     }
+    // Listener-country fallbacks, read live per beacon; no restart. Clearing
+    // either to '' is a legitimate save, hence no truthiness guard.
+    for (const k of ['countryHeader', 'geoipDbPath'] as const) {
+      if (st[k] !== undefined) (next.stream as Record<string, unknown>)[k] = st[k];
+    }
   }
   if ('loudness' in patch) {
-    // Read live by queue.applyLoudnessGain when each track is annotated — no
-    // Liquidsoap file, no restart. Applies from the next queued track.
+    // Read live by queue.applyLoudnessGain; applies from the next queued track.
     const lo = parseSettingsPatchKey<Record<string, unknown>>('loudness', patch.loudness);
     for (const k of ['targetLufs', 'maxBoostDb', 'source'] as const) {
       if (lo[k] !== undefined) (next.loudness as Record<string, unknown>)[k] = lo[k];
@@ -1213,16 +1242,15 @@ export async function update(patch) {
   }
   if ('weather' in patch) {
     const w = parseSettingsPatchKey<Record<string, unknown>>('weather', patch.weather);
-    // locationName / onAirLocation come back `undefined` when the schema
-    // decided to IGNORE the value (non-string, or blank for locationName) —
-    // the same silent drop the typeof guards did here.
+    // `undefined` means the schema chose to IGNORE the value (non-string, or
+    // blank for locationName).
     for (const k of ['lat', 'lng', 'locationName', 'onAirLocation', 'units'] as const) {
       if (w[k] !== undefined) (next.weather as Record<string, unknown>)[k] = w[k];
     }
   }
   if ('station' in patch) {
-    // The schema resolves '' to the product default; the restart decision is
-    // still a comparison against `cur` and stays here.
+    // The schema resolves '' to the product default; the restart decision is a
+    // comparison against `cur`.
     const resolved = parseSettingsPatchKey<string>('station', patch.station);
     if (resolved !== cur.station) {
       restart = true;
@@ -1230,16 +1258,15 @@ export async function update(patch) {
     next.station = resolved;
   }
   if ('stationDescription' in patch) {
-    // No `restart` — this never reaches the DJ prompt or a liquidsoap_*.txt
-    // file; it is read per-request by the web app's generateMetadata().
+    // No restart: read per-request by the web app's generateMetadata().
     next.stationDescription = parseSettingsPatchKey<string>(
       'stationDescription',
       patch.stationDescription,
     );
   }
   if ('timezone' in patch) {
-    // '' = back to Auto (container TZ). setStationTimezone() below pushes the
-    // accepted value into time.ts's module state — that stays here.
+    // '' = back to Auto (container TZ); setStationTimezone() below pushes the
+    // accepted value into time.ts's module state.
     next.timezone = parseSettingsPatchKey<string>('timezone', patch.timezone);
   }
   if ('locale' in patch) {
@@ -1249,31 +1276,24 @@ export async function update(patch) {
     const t = parseSettingsPatchKey<{ active?: string }>('theme', patch.theme);
     if (t.active !== undefined) {
       const v = t.active;
-      // A stale active theme (a retired built-in renamed in 58c3782b, or a
-      // custom theme that isn't on disk) falls back to the built-in default
-      // rather than failing the save — same tolerance as shows[].themeId above
-      // and the serve-time fallback in GET /themes, and the same precedent as the
-      // activeDjPromptId reset. Throwing here aborted the whole restore for any
-      // install whose active theme id had since been retired (issue #917).
+      // A stale active theme falls back to the built-in default rather than
+      // failing the save, which would abort a whole restore (#917).
       next.theme.active = (await isValidThemeId(v)) ? v : DEFAULT_THEME_ID;
       if (next.theme.active !== v) {
         console.warn(`[theme] active theme "${v}" is not a known theme id — falling back to "${DEFAULT_THEME_ID}"`);
       }
     }
   }
-  // Mood system (context-only — no Liquidsoap restart). Validate the vocabulary
-  // first so the maps + festivals in the same patch can reference a newly-added
-  // mood. The in-use removal guard (assertNoOrphanMoods) runs after shows are
-  // validated below, so a same-patch show edit is seen.
+  // Context-only, no restart. Validate the vocabulary FIRST so same-patch maps
+  // and festivals can reference a new mood; assertNoOrphanMoods runs after
+  // shows are validated below.
   if ('moods' in patch) {
     next.moods = parseSettingsPatchKey('moods', patch.moods);
   }
-  // The EFFECTIVE vocabulary — the same-patch one when `moods` rides along.
-  // Captured ONCE so the maps, festivals and shows below all judge against the
-  // same list; re-deriving per branch is a latent divergence.
+  // The EFFECTIVE vocabulary, captured ONCE so maps, festivals and shows all
+  // judge against the same list.
   const moodNames = (next.moods || []).map((m: any) => m.name);
-  // The mood family needs only the vocabulary; `showIds: null` says this branch
-  // is not in a position to check roster membership — shows are validated below.
+  // `showIds: null` = this branch cannot check roster membership.
   const moodCtx = { moodNames, showIds: null };
   if ('moodSchedule' in patch) {
     next.moodSchedule = parseSettingsPatchKey('moodSchedule', patch.moodSchedule, moodCtx);
@@ -1284,11 +1304,9 @@ export async function update(patch) {
   if ('festivals' in patch) {
     next.festivals = parseSettingsPatchKey('festivals', patch.festivals, moodCtx);
   }
-  // Prompt-template library. `djPrompts` replaces the whole library;
-  // `activeDjPromptId` switches which entry renders ('' = built-in default).
-  // The legacy single-field `djPrompt` (onboarding wizard, older clients)
-  // still works by mapping onto the library: '' selects the default, custom
-  // text reuses the entry with identical text or appends a "Custom prompt".
+  // `djPrompts` replaces the whole library; `activeDjPromptId` picks the entry
+  // ('' = built-in default). Legacy single-field `djPrompt` maps onto the
+  // library: '' selects the default, custom text reuses or appends an entry.
   if ('djPrompts' in patch) {
     next.djPrompts = validateDjPromptsStrict(patch.djPrompts);
   }
@@ -1299,8 +1317,8 @@ export async function update(patch) {
     );
   }
   if ('djPrompt' in patch) {
-    // The length + placeholder rules come from the shared schema; what stays
-    // here is the MAPPING onto the library, which reads and writes next.djPrompts.
+    // Length + placeholder rules are the schema's; the MAPPING onto the
+    // library stays here.
     const v = parseSettingsPatchKey<string>('djPrompt', patch.djPrompt);
     if (v === '') {
       next.activeDjPromptId = '';
@@ -1324,32 +1342,41 @@ export async function update(patch) {
       if ('activeDjPromptId' in patch || 'djPrompt' in patch) {
         throw new Error('activeDjPromptId must be "" or the id of a djPrompts entry');
       }
-      // A library-only patch removed the entry that was active — fall back to
-      // the built-in default rather than failing the save.
+      // A library-only patch removed the active entry; fall back to default.
       next.activeDjPromptId = '';
     }
-    // djPrompt stays the resolved active text — the single field readers use.
+    // djPrompt stays the resolved active text.
     next.djPrompt =
       next.djPrompts.find((p: DjPromptEntry) => p.id === next.activeDjPromptId)?.text ?? '';
   }
-  // Station house rules — appended to BOTH prompt paths (scripted talk AND the
-  // pick/request/segment agents), which the djPrompt template never reaches
-  // (issue #1182). Empty = off, so there's no minimum length.
+  // Appended to BOTH prompt paths, which the djPrompt template never reaches
+  // (#1182). Empty = off.
   if ('djHouseRules' in patch) {
     next.djHouseRules = parseSettingsPatchKey<string>('djHouseRules', patch.djHouseRules);
   }
-  // Station clock switch. Applies live — the policy module reads it on every
-  // call, so there is no restart and nothing to re-render.
+  // Applies live; the policy module reads it on every call.
   if ('djSpeakClock' in patch) {
     next.djSpeakClock = parseSettingsPatchKey<boolean>('djSpeakClock', patch.djSpeakClock);
+  }
+  // Applies live; broadcast/talk-air.ts reads it on every talk tick.
+  if ('djTalkOnlyBetweenTracks' in patch) {
+    next.djTalkOnlyBetweenTracks =
+      parseSettingsPatchKey<boolean>('djTalkOnlyBetweenTracks', patch.djTalkOnlyBetweenTracks);
+  }
+  if ('handover' in patch) {
+    // Read live by broadcast/handover-policy.ts each programme tick.
+    const hv = parseSettingsPatchKey<{ offsetMinutes?: number }>('handover', patch.handover);
+    if (hv.offsetMinutes !== undefined) next.handover.offsetMinutes = hv.offsetMinutes;
+  }
+  // Show-boundary fade (#1574), read live by the drain; no restart.
+  if ('fadeAtShowEnd' in patch) {
+    next.fadeAtShowEnd = parseSettingsPatchKey<boolean>('fadeAtShowEnd', patch.fadeAtShowEnd);
   }
   if ('personas' in patch) {
     next.personas = validatePersonasStrict(patch.personas);
   }
   if ('shows' in patch) {
     // Snapshot the theme registry once so the validator can stay sync.
-    // listThemes() returns built-ins + cached user themes (30 s TTL) — same
-    // source the picker reads.
     const allowedThemeIds = new Set((await listThemes()).map(t => t.id));
     next.shows = validateShowsStrict(patch.shows, next.personas, allowedThemeIds, moodNames);
   }
@@ -1359,9 +1386,7 @@ export async function update(patch) {
   if ('scheduleOverride' in patch) {
     next.scheduleOverride = validateScheduleOverrideStrict(patch.scheduleOverride, next.shows);
   }
-  // In-use removal guard: run once the vocabulary AND any same-patch shows are
-  // validated, so a mood dropped from the vocab is rejected only if something
-  // still references it.
+  // Runs once the vocabulary AND any same-patch shows are validated.
   if ('moods' in patch) {
     assertNoOrphanMoods(next);
   }
@@ -1390,13 +1415,10 @@ export async function update(patch) {
       if (fb.enabled !== undefined && typeof fb.enabled !== 'boolean') {
         throw new Error('tts.fallback.enabled must be a boolean');
       }
-      // Same strict validator every persona voice slot goes through, so the
-      // per-engine voice rules are enforced identically — `where` names the
-      // full path, so a bad value reads `tts.fallback.voice must ...`.
-      // Deliberately NO cross-field rule of the llm.fallback
-      // "openai-compatible needs baseUrl" kind: a cloud fallback whose provider
-      // has no key simply fails engineUsable() and is skipped at rescue time,
-      // which degrades to the local floor rather than blocking the save.
+      // Same strict validator every persona voice slot uses; `where` names the
+      // full path. Deliberately NO "openai-compatible needs baseUrl" rule: an
+      // unusable cloud fallback is skipped at rescue time rather than blocking
+      // the save.
       const slot = validateTtsBlock(
         { ...next.tts.fallback, ...fb },
         'tts.fallback',
@@ -1424,8 +1446,7 @@ export async function update(patch) {
         next.tts.kokoro.voice = v;
       }
       if (k.lang !== undefined) {
-        // Canonicalise before validating so a pre-#1213 client still posting
-        // `fr` lands on `fr-fr` rather than being rejected outright.
+        // Canonicalise before validating so a pre-#1213 `fr` lands on `fr-fr`.
         const v = canonicalKokoroLang(String(k.lang).trim());
         if (v && !KOKORO_LANG_RE.test(v)) {
           throw new Error(`tts.kokoro.lang must be one of: ${KOKORO_LANGS.join(', ')}`);
@@ -1449,7 +1470,7 @@ export async function update(patch) {
       const pt = t.pocketTts || {};
       if (pt.voice !== undefined) {
         const v = String(pt.voice).trim();
-        // Built-in id OR shared-folder .wav filename (issue #213).
+        // Built-in id OR shared-folder .wav filename (#213).
         if (!POCKET_TTS_VOICE_RE.test(v) && !CHATTERBOX_VOICE_RE.test(v)) {
           throw new Error(
             'tts.pocketTts.voice must be a built-in voice id (e.g. alba) or a .wav filename',
@@ -1479,9 +1500,8 @@ export async function update(patch) {
       }
       if (c.voice !== undefined) {
         const v = String(c.voice).trim();
-        // openai-compatible voices are server-specific (often arbitrary
-        // cloning ref names) and may legitimately be blank — let the server
-        // pick its own default. openai/elevenlabs require a voice id.
+        // openai-compatible voices may legitimately be blank (server picks its
+        // own); openai/elevenlabs require a voice id.
         const provider = c.provider !== undefined ? c.provider : next.tts.cloud.provider;
         const allowEmpty = provider === 'openai-compatible';
         if (v.length > 100 || (!allowEmpty && v.length < 1)) {
@@ -1493,19 +1513,17 @@ export async function update(patch) {
         }
         next.tts.cloud.voice = v;
       }
-      // 'set' is the redaction sentinel from getRedacted() — ignore it so a
-      // round-tripped settings form doesn't overwrite the real key.
+      // 'set' is getRedacted()'s sentinel: keep the stored key.
       if (c.apiKey !== undefined && c.apiKey !== 'set') {
         next.tts.cloud.apiKey = String(c.apiKey);
       } else if (c.provider !== undefined && c.provider !== savedCloudProvider) {
-        // The shared inline slot belongs to the provider that created it. A
-        // provider transition without an explicit replacement must clear it,
-        // otherwise a managed key can be forwarded to an arbitrary compatible
-        // URL (or a compatibility bearer can be reinterpreted as managed).
+        // The shared inline slot belongs to the provider that created it: a
+        // provider change without a replacement key must clear it, or a managed
+        // key gets forwarded to an arbitrary compatible URL.
         next.tts.cloud.apiKey = '';
       }
-      // Dedicated compatibility bearer. Unlike the legacy shared slot, this
-      // may safely persist while another managed provider is selected globally.
+      // Dedicated compatibility bearer; may persist while another managed
+      // provider is selected globally.
       if (c.compatApiKey !== undefined && c.compatApiKey !== 'set') {
         next.tts.cloud.compatApiKey = String(c.compatApiKey);
       }
@@ -1517,12 +1535,9 @@ export async function update(patch) {
         }
         next.tts.cloud.baseUrl = v.replace(/\/+$/, ''); // strip trailing slashes
       }
-      // ElevenLabs voice_settings — clamped, not rejected. The UI sliders can't
-      // produce out-of-range values, so a strict throw would only fire for a
-      // hand-crafted payload; clamp so the DJ never goes silent on a typo.
-      // Applied for every provider on save so switching provider later
-      // preserves the operator's tuning, but only spread into providerOptions
-      // in cloud-speech.ts when provider === 'elevenlabs' (see there).
+      // Clamped, not rejected, so the DJ never goes silent on a typo. Saved for
+      // every provider (so a provider switch preserves the tuning) but only sent
+      // when provider === 'elevenlabs'.
       if (c.voiceStability !== undefined) {
         const n = Number(c.voiceStability);
         next.tts.cloud.voiceStability = Number.isFinite(n) ? clamp01(n) : DEFAULTS.tts.cloud.voiceStability;
@@ -1538,9 +1553,12 @@ export async function update(patch) {
       if (c.voiceUseSpeakerBoost !== undefined) {
         next.tts.cloud.voiceUseSpeakerBoost = !!c.voiceUseSpeakerBoost;
       }
-      // Fish Audio synthesis controls. Clamp numeric knobs like the existing
-      // ElevenLabs sliders; reject an unknown enum so a typo cannot silently
-      // turn into a provider-side 422 and a different fallback voice.
+      // Send `speed` upstream vs. stretch locally (#942); compat path only.
+      if (c.sendSpeed !== undefined) {
+        next.tts.cloud.sendSpeed = !!c.sendSpeed;
+      }
+      // Clamp numeric knobs; REJECT an unknown enum, which would otherwise
+      // become a provider-side 422 and a different fallback voice.
       if (c.temperature !== undefined) {
         const n = Number(c.temperature);
         next.tts.cloud.temperature = Number.isFinite(n) ? clamp01(n) : DEFAULTS.tts.cloud.temperature;
@@ -1555,22 +1573,18 @@ export async function update(patch) {
         }
         next.tts.cloud.latency = c.latency;
       }
-      // Extra openai-compatible body fields (issue #1317). Rejected rather than
-      // clamped: unlike a slider, a bad param name or type is a request the
-      // server 4xxs, which mid-show means a silent drop to a local fallback
-      // voice. The rule is shared with the send path — see
-      // settings/compat-params.ts.
+      // Extra openai-compatible body fields (#1317). Rejected rather than
+      // clamped: a bad param name/type 4xxs the request mid-show. Rule shared
+      // with the send path (settings/compat-params.ts).
       if (c.compatParams !== undefined) {
         next.tts.cloud.compatParams = validateCompatParams(c.compatParams);
       }
-      // Fish credentials live only in process env/state/secrets.env. Clear the
-      // legacy inline compatibility slot on every Fish save so a later provider
-      // switch cannot reinterpret a stale bearer as OpenAI/ElevenLabs.
+      // Fish credentials live only in env/state/secrets.env; clear the legacy
+      // inline slot so a later provider switch can't reinterpret a stale bearer.
       if (next.tts.cloud.provider === 'fish-audio') {
         next.tts.cloud.apiKey = '';
       }
-      // An OpenAI-compatible TTS server has no canonical endpoint — refuse to
-      // save the provider without one. Mirrors the LLM-side check below.
+      // No canonical endpoint, so refuse the provider without one.
       if (next.tts.cloud.provider === 'openai-compatible' && !next.tts.cloud.baseUrl) {
         throw new Error('tts.cloud.baseUrl is required when provider is "openai-compatible"');
       }
@@ -1581,9 +1595,8 @@ export async function update(patch) {
         const v = String(r.url).trim();
         if (v.length > 200) throw new Error('tts.remote.url must be 0-200 chars');
         if (v) {
-          // Full parse (not just a prefix test) so a malformed host/port —
-          // e.g. http://host:notaport or http://host:99999 — is rejected at
-          // save time instead of silently failing the /health probe later.
+          // Full parse, not a prefix test, so a malformed host/port is refused
+          // at save time rather than failing the /health probe later.
           let parsed: URL;
           try {
             parsed = new URL(v);
@@ -1619,8 +1632,7 @@ export async function update(patch) {
         next.tts.speed[key] = clampTtsSpeed(t.speed[key]);
       }
     }
-    // Whole-array replace, like festivals — the admin UI always sends the
-    // full edited list. No restart: read live on every speak() call.
+    // Whole-array replace; read live on every speak() call, so no restart.
     if (t.corrections !== undefined) {
       next.tts.corrections = validateTtsCorrectionsStrict(t.corrections);
     }
@@ -1628,8 +1640,8 @@ export async function update(patch) {
   if ('llm' in patch) {
     const l = patch.llm || {};
     applyLlmLegPatch(next.llm, l, 'llm');
-    // Route the primary inline key into keys[provider] AFTER the provider is
-    // resolved, so it's stored under the identity it belongs to (issue #657).
+    // Route the inline key into keys[provider] AFTER the provider is resolved
+    // (#657).
     applyInlineKey(next.llm, next.llm.provider, l.apiKey);
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
@@ -1666,22 +1678,19 @@ export async function update(patch) {
     if (l.debugRawRequests !== undefined) {
       next.llm.debugRawRequests = !!l.debugRawRequests;
     }
-    // An OpenAI-compatible provider is useless without a server to talk to.
+    // openai-compatible needs a baseUrl.
     if (next.llm.provider === 'openai-compatible' && !next.llm.baseUrl) {
       throw new Error('llm.baseUrl is required when provider is "openai-compatible"');
     }
-    // Backup leg — same connection fields, validated identically. The
-    // openai-compatible-needs-baseUrl rule is enforced only when the fallback
-    // is enabled, so a half-filled, disabled backup never blocks a save.
+    // The needs-baseUrl rule applies only when the fallback is ENABLED, so a
+    // half-filled disabled backup never blocks a save.
     if (l.fallback !== undefined) {
       const fb = l.fallback || {};
       if (fb.enabled !== undefined) {
         next.llm.fallback.enabled = !!fb.enabled;
       }
       applyLlmLegPatch(next.llm.fallback, fb, 'llm.fallback');
-      // Fallback inline key shares the same per-provider map (keys live at
-      // next.llm.keys, not under the fallback) — routed by the fallback's
-      // resolved provider.
+      // Keys live at next.llm.keys, routed by the fallback's provider.
       applyInlineKey(next.llm, next.llm.fallback.provider, fb.apiKey);
       if (
         next.llm.fallback.enabled &&
@@ -1694,15 +1703,33 @@ export async function update(patch) {
       }
     }
   }
+  if ('picker' in patch) {
+    const pk = parseSettingsPatchKey<Record<string, unknown>>('picker', patch.picker);
+    if (pk.albumHours !== undefined) next.picker.albumHours = pk.albumHours as number;
+    if (pk.minTrackLengthSeconds !== undefined) {
+      // Whole seconds; the shared bounds helper is number-like (albumHours
+      // takes fractions), so the rounding lands here.
+      const v = Math.round(pk.minTrackLengthSeconds as number);
+      // A positive FLOOR must clear the crossfade-derived minimum (a track
+      // under 2x the crossfade gets no solo airtime); 0 = off stays allowed.
+      // Uses next's crossfade, applied above if this patch changed it.
+      const floor = minTrackSeconds(next);
+      if (v !== 0 && v < floor) {
+        throw new Error(
+          `picker.minTrackLengthSeconds must be 0 (no floor) or at least ${floor}s`,
+        );
+      }
+      // Read live by both pick paths and the auto-playlist refresh; no restart.
+      next.picker.minTrackLengthSeconds = v;
+    }
+  }
   if ('search' in patch) {
     const sr = parseSettingsPatchKey<Record<string, unknown>>('search', patch.search);
     if (sr.provider !== undefined) next.search.provider = sr.provider as string;
     if (sr.baseUrl !== undefined) next.search.baseUrl = sr.baseUrl as string;
-    // 'set' is the redaction sentinel from getRedacted() — ignore it so a
-    // round-tripped form doesn't overwrite the real key. Tested against the RAW
-    // patch value, not the parsed one: the sentinel means "leave the stored
-    // value alone", which is an instruction to the applier rather than a value
-    // a schema could return.
+    if (sr.searxngEngines !== undefined) next.search.searxngEngines = sr.searxngEngines as string;
+    // 'set' is getRedacted()'s sentinel, tested against the RAW patch value:
+    // it is an instruction to the applier, not a value a schema could return.
     if (sr.apiKey !== undefined && (patch.search as Record<string, unknown>)?.apiKey !== 'set') {
       next.search.apiKey = sr.apiKey as string;
     }
@@ -1712,7 +1739,7 @@ export async function update(patch) {
     if (e.enabled !== undefined) next.embedding.enabled = !!e.enabled;
     if (e.provider !== undefined) {
       const v = String(e.provider).trim();
-      // Empty string is meaningful — it means "follow settings.llm.provider".
+      // '' means "follow settings.llm.provider".
       if (v && !LLM_PROVIDERS.includes(v)) {
         throw new Error(
           `embedding.provider must be empty or one of: ${LLM_PROVIDERS.join(', ')}`,
@@ -1725,8 +1752,8 @@ export async function update(patch) {
       if (v.length > 100) throw new Error('embedding.model must be 0-100 chars');
       next.embedding.model = v;
     }
-    // Dedicated embedding endpoint (issue #405). Empty → inherit settings.llm.
-    // New path: providerBaseUrls map keyed by provider id (issue #1082).
+    // Dedicated embedding endpoint (#405); '' inherits settings.llm.
+    // providerBaseUrls is keyed by provider id (#1082).
     if (e.providerBaseUrls !== undefined) {
       if (!e.providerBaseUrls || typeof e.providerBaseUrls !== 'object' || Array.isArray(e.providerBaseUrls)) {
         throw new Error('embedding.providerBaseUrls must be an object map of provider → URL');
@@ -1746,9 +1773,8 @@ export async function update(patch) {
       }
       next.embedding.providerBaseUrls = merged;
     }
-    // Legacy single baseUrl — seed the map under the EFFECTIVE provider (own,
-    // else the chat provider) — the same key the admin UI reads and writes.
-    // The flat field itself is re-derived after the patch blocks below.
+    // Legacy flat baseUrl seeds the map under the EFFECTIVE provider (own,
+    // else the chat provider); the flat field is re-derived below.
     if (e.baseUrl !== undefined) {
       const v = String(e.baseUrl).trim();
       if (v.length > 200) throw new Error('embedding.baseUrl must be 0-200 chars');
@@ -1818,9 +1844,8 @@ export async function update(patch) {
       }
       next.embedding.audioFusionWeight = v;
     }
-    // LLM tag batch size — how many tracks per tagging call. Weaker models
-    // truncate/error on large batches, so operators can drop this. Clamp kept in
-    // sync with the CLI --batch flag + load() normalisation (music/tag-library.ts).
+    // Tracks per tagging call. Clamp kept in sync with the CLI --batch flag
+    // and load()'s normalisation (music/tag-library.ts).
     if (e.batchSize !== undefined) {
       const v = parseInt(e.batchSize, 10);
       if (!Number.isFinite(v) || v < 1 || v > 50) {
@@ -1841,10 +1866,9 @@ export async function update(patch) {
       }
     }
   }
-  // Re-derive the embedding leg's flat baseUrl on EVERY update, not just when
-  // the embedding block was patched: the leg inherits the chat provider when
-  // its own is empty, so an llm.provider-only change also moves which map slot
-  // is live. Runtime (embeddingCfg) reads the flat field — issues #405/#1082.
+  // Re-derived on EVERY update, not just when `embedding` was patched: the leg
+  // inherits the chat provider, so an llm.provider-only change moves which map
+  // slot is live. Runtime reads the flat field (#405/#1082).
   {
     const embedProv = (next.embedding.provider || next.llm.provider || '') as string;
     const embedUrls = (next.embedding.providerBaseUrls as Record<string, string> | undefined) ?? {};
@@ -1861,11 +1885,8 @@ export async function update(patch) {
           throw new Error(`skills.enabled.${name} must be a boolean`);
         }
         next.skills.enabled[name] = on;
-        // Disabling a skill station-wide also revokes it from every persona
-        // that explicitly carries it, so a later re-enable is a fresh
-        // per-persona opt-in rather than a silent return. The `null` "all
-        // skills" sentinel stays untouched — it means "whatever the station
-        // enables", not a list to edit.
+        // Disabling a skill station-wide revokes it from every persona that
+        // explicitly carries it. The `null` "all skills" sentinel is untouched.
         if (!on) {
           for (const p of next.personas) {
             if (Array.isArray(p.skills) && p.skills.includes(name)) {
@@ -1877,11 +1898,8 @@ export async function update(patch) {
     }
   }
   if ('audio' in patch) {
-    // stemCacheGb throws rather than silently ignoring, matching
-    // analyzeQuietMinutes: swallowing an out-of-range value meant the admin UI
-    // showed a saved budget the sweep was never using. Ceiling raised
-    // 500 → 1000 (#1257) — at the measured ~13 MB/track a 500 GB budget stops
-    // short of a ~50k-track library.
+    // Throws rather than silently ignoring: a swallowed out-of-range value
+    // showed the admin UI a budget the sweep never used.
     const au = parseSettingsPatchKey<Record<string, unknown>>('audio', patch.audio);
     for (const k of [
       'embeddings',
@@ -1899,10 +1917,18 @@ export async function update(patch) {
     for (const k of ['pairDrain', 'stemBlends'] as const) {
       if (tr[k] !== undefined) (next.transitions as Record<string, unknown>)[k] = tr[k];
     }
+    // Nested block needs its own per-field loop: a flat copy would replace the
+    // whole `effects` object, resetting the fields the patch did not send.
+    const fx = tr.effects as Record<string, unknown> | undefined;
+    if (fx !== undefined) {
+      for (const k of TRANSITION_EFFECTS) {
+        if (fx[k] !== undefined) (next.transitions.effects as Record<string, unknown>)[k] = fx[k];
+      }
+    }
   }
   // On the shared schema (#1348). The block schemas keep the branches' own
-  // leniency — a non-object block is an empty patch, an absent field is left
-  // alone — so this stays a plain "apply what was sent".
+  // leniency: a non-object block is an empty patch, an absent field is left
+  // alone.
   if ('sfx' in patch) {
     const sx = parseSettingsPatchKey<{ enabled?: boolean }>('sfx', patch.sfx);
     if (sx.enabled !== undefined) {
@@ -1946,50 +1972,44 @@ export async function update(patch) {
     }
   }
   if ('ui' in patch) {
-    // `skin` is slug-only — the web registry resolves it and falls back on
-    // unknowns, so an invalid value is DROPPED rather than erroring the whole
-    // patch. The schema returns undefined for that case, which this skips.
+    // `skin` is slug-only: an invalid value is DROPPED (schema returns
+    // undefined) rather than erroring the whole patch.
     const ui = parseSettingsPatchKey<Record<string, unknown>>('ui', patch.ui);
     for (const k of ['boothBuddy', 'skin', 'tuneInOverlay'] as const) {
       if (ui[k] !== undefined) (next.ui as Record<string, unknown>)[k] = ui[k];
     }
   }
   if ('privacy' in patch) {
-    // Field rules on the shared schema; the lock-needs-a-password invariant
-    // below is NOT one of them — it reads the MERGED state, so a lock turned on
-    // by this patch can be satisfied by a password that was already stored.
+    // The lock-needs-a-password invariant below is NOT a schema rule: it reads
+    // MERGED state, so a lock turned on here can be satisfied by a stored
+    // password.
     const pv = parseSettingsPatchKey<Record<string, unknown>>('privacy', patch.privacy);
     const rawPv = (patch.privacy || {}) as Record<string, unknown>;
     if (pv.privatePlayer !== undefined) {
       next.privacy.privatePlayer = pv.privatePlayer as boolean;
     }
-    // Disclosure toggle, not a lock: it is deliberately outside the
-    // "a lock needs a password" invariant below, needs no mixer restart, and
-    // applies live on the next public read.
+    // Disclosure toggle, not a lock: outside the lock-needs-a-password
+    // invariant below, no restart, applies on the next public read.
     if (pv.publishPersonaSouls !== undefined) {
       next.privacy.publishPersonaSouls = pv.publishPersonaSouls as boolean;
     }
-    // 'set' is the redaction sentinel from getRedacted() — ignore it so a
-    // round-tripped form doesn't overwrite the stored secret. Compared against
-    // the RAW value: ' set ' is NOT the sentinel and is stored as a password.
+    // 'set' is getRedacted()'s sentinel, compared against the RAW value:
+    // ' set ' is NOT the sentinel and is stored as a password.
     if (pv.password !== undefined && rawPv.password !== 'set') {
       next.privacy.password = pv.password as string;
     }
     if (pv.listenerAuth !== undefined) {
       const v = pv.listenerAuth as boolean;
       if (v !== cur.privacy.listenerAuth) {
-        // Flipping the toggle adds/removes the <mount> auth blocks in
-        // icecast.xml, which only re-render on a broadcast restart. Password
-        // changes don't need this — URL auth validates live.
+        // The toggle adds/removes <mount> auth blocks in icecast.xml, which
+        // only re-render on a restart. Password changes validate live.
         next.privacy.listenerAuth = v;
         restart = true;
       }
     }
-    // Whatever combination the patch produced, never persist a lock that is on
-    // with no password behind it. For the stream that would fail every
-    // listener closed at /listener-auth; for the player it would render a
-    // prompt nobody can satisfy, locking the operator out of their own station
-    // with no in-band way back in.
+    // Never persist a lock that is on with no password behind it: the stream
+    // would fail every listener closed at /listener-auth and the player would
+    // render a prompt nobody can satisfy.
     if (
       (next.privacy.privatePlayer || next.privacy.listenerAuth) &&
       !next.privacy.password
@@ -1999,11 +2019,9 @@ export async function update(patch) {
   }
   if ('requests' in patch) {
     // The schema decides "usable or absent" per field; the fallback to the
-    // CURRENT value is this spread. Same result as the old per-field ternaries,
-    // including the load-bearing part: an emptied admin input arrives as JSON
-    // null, which is UNUSABLE rather than 0, so it leaves the stored value
-    // alone instead of clamping to the field's floor and closing the request
-    // line. The rebuild keeps exactly the seven known keys.
+    // CURRENT value is this spread. An emptied admin input arrives as JSON null
+    // = UNUSABLE (not 0), so it leaves the stored value alone rather than
+    // clamping to the field's floor and closing the request line.
     const rq = parseSettingsPatchKey<Record<string, unknown>>('requests', patch.requests);
     const curReq = next.requests || DEFAULTS.requests;
     const pick = <K extends keyof typeof curReq>(k: K) =>
@@ -2034,13 +2052,12 @@ export async function update(patch) {
     const sb = parseSettingsPatchKey<{
       lastfm?: Record<string, unknown>;
       listenbrainz?: Record<string, unknown>;
+      navidrome?: Record<string, unknown>;
     }>('scrobble', patch.scrobble);
     const rawSb = (patch.scrobble || {}) as Record<string, Record<string, unknown> | undefined>;
-    // 'set' is the redaction sentinel from getRedacted() — ignore it so a
-    // round-tripped form doesn't overwrite the stored secret. Tested against
-    // the RAW patch value: "keep what is stored" is an instruction to the
-    // applier, not a value any schema could return. It guards ONLY the secret
-    // fields — a username of literally 'set' has always been stored as such.
+    // 'set' is getRedacted()'s sentinel, tested against the RAW patch value.
+    // It guards ONLY the secret fields: a username of literally 'set' is
+    // stored as such.
     const LASTFM_SECRETS = ['apiKey', 'apiSecret', 'sessionKey'];
     if (sb.lastfm !== undefined) {
       const lf = sb.lastfm;
@@ -2058,6 +2075,11 @@ export async function update(patch) {
         (next.scrobble.listenbrainz as Record<string, unknown>)[k] = lb[k];
       }
     }
+    // No sentinel: Navidrome reuses config.navidrome's credentials (#1298).
+    if (sb.navidrome !== undefined) {
+      const nd = sb.navidrome;
+      if (nd.enabled !== undefined) next.scrobble.navidrome.enabled = nd.enabled as boolean;
+    }
   }
   if ('likes' in patch) {
     const lk = parseSettingsPatchKey<Record<string, unknown>>('likes', patch.likes);
@@ -2072,13 +2094,12 @@ export async function update(patch) {
     }
   }
 
-  // Post-patch integrity sweep — a personas/shows change in this patch may
-  // have orphaned a show owner, a schedule slot, or the active persona.
+  // Post-patch integrity sweep: this patch may have orphaned a show owner, a
+  // schedule slot or the active persona.
   {
     const personaIds = next.personas.map(p => p.id);
     next.shows = next.shows.filter(s => personaIds.includes(s.personaId));
-    // A deleted persona also vanishes from every guest roster (the show itself
-    // survives — losing a guest is not losing the show).
+    // A deleted persona vanishes from every guest roster; the show survives.
     for (const s of next.shows) {
       s.guestPersonaIds = coerceGuestPersonaIds(s.guestPersonaIds, s.personaId, personaIds);
     }
@@ -2090,15 +2111,15 @@ export async function update(patch) {
         }
       }
     }
-    // A takeover pinning a show that no longer exists dies with the show.
-    if (next.scheduleOverride && !showIds.includes(next.scheduleOverride.showId)) {
-      next.scheduleOverride = null;
+    // A takeover pinning a dead show dies with it; a null target is Default
+    // programming, not an orphan, and survives.
+    if (next.scheduleOverride && !isDefaultTakeover(next.scheduleOverride)) {
+      const pinnedId = takeoverShowId(next.scheduleOverride);
+      if (!pinnedId || !showIds.includes(pinnedId)) next.scheduleOverride = null;
     }
     if (!personaIds.includes(next.activePersonaId)) next.activePersonaId = personaIds[0];
 
-    // Garbage-collect avatar files for personas that no longer exist. Best
-    // effort — a missing directory or a vanished file is fine, this just
-    // keeps the on-disk state from accumulating dead images.
+    // Best-effort GC of avatar files for personas that no longer exist.
     const removedIds = (cur.personas || [])
       .map((p: { id: string }) => p.id)
       .filter((id: string) => !personaIds.includes(id));
@@ -2111,23 +2132,25 @@ export async function update(patch) {
             .map(e => unlink(`${PERSONA_AVATAR_DIR}/${e}`).catch(() => {})),
         );
       } catch {
-        // Directory doesn't exist yet — nothing to clean.
+        // Directory doesn't exist yet.
       }
     }
   }
 
   setCache(next);
-  // Applied-on-save, same pattern as the liquidsoap_*.txt files below —
-  // minus the restart: the next zonedParts() call picks it up.
+  // Applied on save; the next zonedParts() call picks it up, no restart.
   setStationTimezone(next.timezone);
+  // Applied-on-save too, and unlike the zone this one DOES also need the mixer
+  // restart the flag above raises — the counter reset is only the controller's
+  // half (#1619).
+  setJingleRotateOwner(next.jingleRotate);
   // shows + schedule are persisted to their own file (schedule.json); strip
   // them from the settings.json payload so legacy installs migrate forward
   // on the first write. The in-memory `cache` keeps the full shape so
   // resolveActiveShow / getEffectivePersona / the integrity sweep all
   // continue to work against one merged view.
   const { shows: _shows, schedule: _schedule, scheduleOverride: _override, ...settingsPersist } = next;
-  // Atomic replace — a crash mid-write must not take the operator's whole
-  // config (or show schedule) with it.
+  // Atomic replace: a crash mid-write must not take the whole config.
   await writeFileAtomic(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));
   await writeFileAtomic(
     SCHEDULE_PATH,
@@ -2141,8 +2164,8 @@ export async function update(patch) {
   return { saved: next, requiresRestart: restart };
 }
 
-// Called from server.js startup so the files exist before Liquidsoap reads
-// them on its next start. Idempotent.
+// Called at startup so the files exist before Liquidsoap's next start.
+// Idempotent.
 export async function ensureLiquidsoapSettingsFile() {
   const s = await load();
   if (

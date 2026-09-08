@@ -15,8 +15,9 @@ skills the same way: from the admin UI, or by dropping a folder into
 > a name, a brief, and a cooldown, then **Create skill**. It writes
 > `state/skills/<slug>/SKILL.md` for you (and arrives **disabled** — enable it when
 > you're happy). Custom skills can also be **edited** and **deleted** from the same
-> page. The form is prompt-only; a `tool.mjs` data fetcher is still a disk-drop (see
-> [tool.mjs (optional)](#toolmjs-optional) below).
+> page. The form can also point the skill at an RSS/Atom feed (see
+> [Feeds without code](#feeds-without-code)); anything else it should fetch is a
+> `tool.mjs` disk-drop (see [tool.mjs (optional)](#toolmjs-optional) below).
 
 > **TL;DR — News reads UK/BBC and you want something local?** Open
 > **/admin/skills → News → Edit**, paste your own RSS feed URL and rewrite the
@@ -37,8 +38,8 @@ state/skills/
     tool.mjs      # OPTIONAL: a data fetcher, wrapped as a tool the DJ can call
 ```
 
-Two copy-ready examples live in [`docs/examples/skills`](./examples/skills) — copy
-a folder into `state/skills/` and hit **Rescan** in the admin Skills page:
+Three copy-ready examples live in [`docs/examples/skills`](./examples/skills) —
+copy a folder into `state/skills/` and hit **Rescan** in the admin Skills page:
 
 - [`moon-phase`](./examples/skills/moon-phase) — the small end. No settings, no
   network, no memory: it works out the lunar phase from the date and returns it.
@@ -46,6 +47,13 @@ a folder into `state/skills/` and hit **Rescan** in the admin Skills page:
   (`configFields`), a call out to a public API, and `state` so it marks the
   sunset once a day rather than every time it fires. Fill in its coordinates in
   the edit sheet before it will say anything.
+- [`todoist`](./examples/skills/todoist) — the same shape against an
+  **authenticated** API: the DJ picks one outstanding task off your Todoist list
+  and dares the room to go and do it before the next record ends. Put
+  `TODOIST_API_TOKEN` in the root `.env` — the whole file is passed into the
+  controller, so any key you add there reaches `process.env` — then set the
+  filter in the edit sheet. Each task is burned on read for the rest of the day,
+  so it nudges rather than nags.
 
 ## SKILL.md
 
@@ -56,10 +64,13 @@ label: Moon phase         # human label in /admin/skills (defaults to title-case
 cooldown: 6h              # hard min gap between autonomous firings — "90m" | "6h" | "2d" | "45" (bare = minutes)
 cron: 0 * * * *           # OPTIONAL: fire on a fixed schedule instead of/alongside the cooldown gate (see below)
 cronOnly: true            # OPTIONAL: with a cron: set, withhold this skill from random autonomous picks entirely
+cohosts: true             # OPTIONAL: host + every active guest each speak in their own voice (see below)
 window: any               # "any" (default) | "commute" — only offered during commute hours
 context: time, festival   # OPTIONAL: which "right now" fields this segment may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; if unset, the skill stays inert
-toolDescription: ...      # OPTIONAL: how the DJ-facing tool is described (only matters with tool.mjs)
+feed: https://…/rss.xml   # OPTIONAL: an RSS/Atom feed this skill reads before it speaks (see below)
+feedMaxItems: 10          # OPTIONAL: how much of that feed to read per fire (1-50, default 10)
+toolDescription: ...      # OPTIONAL: how the DJ-facing tool is described
 ---
 The markdown body is the DJ's brief for this segment. Keep it tight: what to
 say, in what tone, and — importantly — when to stay silent. The agent reads
@@ -90,6 +101,95 @@ Values are read as text whatever their YAML type, so `feedMaxItems: 6` and
 ignored. A block that isn't valid YAML — most often an unquoted colon in a
 value — still loads, read with the old line-by-line parser, and logs a warning
 naming the file.
+
+### `feed:` — feeds without code
+
+<a id="feeds-without-code"></a>
+
+A `feed:` line is a **fetch**, not a note to yourself. Any skill that declares
+one — with or without a `tool.mjs` — gets a `skill_<name>` tool the DJ calls
+before it writes the line, and the items land in the prompt as that segment's
+source data:
+
+```yaml
+---
+name: giveaway
+label: Giveaway watch
+cooldown: 30m
+feed: https://contest.example.com/state.rss
+feedMaxItems: 10
+---
+The feed is the current state of the contest — report on who is already in it
+rather than inventing a new name. Say nothing if it is empty.
+```
+
+The generated tool is the one the built-in News skill used to hand-roll, so
+every feed skill gets the same behaviour:
+
+- **RSS 2.0, Atom and RDF/RSS-1.0** all parse — namespaced tags
+  (`<dc:title>`, `<content:encoded>`) and CDATA included.
+- `feedMaxItems` (1–50, default 10) caps how much of the feed is read per fire.
+- Items are **burned on read**: at most 6 fresh items reach one segment, and the
+  next fire offers the ones after them rather than repeating. That memory is
+  per-skill and lives for as long as the controller runs.
+- A fetch that fails or times out stands the segment down instead of letting the
+  DJ invent one — the same grounding rule every data-backed skill follows. Set
+  `requiresData: false` if your skill would rather write from its brief.
+
+The knobs show up in the skill's **/admin/skills → Edit** sheet as *Feed URL* and
+*Max items*, so a feed can be added, changed or cleared without touching disk.
+
+> Only an `http:` or `https:` URL creates the tool. Anything else is logged as a
+> warning naming the skill and leaves it prompt-only — a `feed:` line must never
+> quietly do nothing.
+
+A skill that ships its own `tool.mjs` keeps it: the generic feed tool fills the
+gap, it never displaces a fetcher you wrote. If you want feed items *and*
+something else, read `config.feed` yourself via
+`services.fetchHeadlines` (see the table below).
+
+### `cohosts: true` — one contribution from every host
+
+`cohosts: true` turns the skill from one DJ line into a co-hosted discussion. It
+uses the **active scheduled show's roster**: the show's host followed by every
+resolved `guestPersonaIds` co-host. A skill cannot choose arbitrary personas, and
+the existing enable toggle and persona assignment remain keyed to the host.
+
+The discussion contains exactly one contribution per live roster member, in that
+order. The model is instructed to give each person **2–5 short sentences**, in
+that persona's own character, as one coherent conversation. Do not put labels
+such as `Mara:` in the brief or returned speech: speaker identity is structured
+metadata, and each contribution is rendered through that persona's own TTS
+configuration and fallback. The clips are pre-rendered as a complete exchange
+before any reaches air, then played back-to-back rather than mixed.
+
+A co-hosted skill only runs while an active show has a host and at least one
+resolved guest. Autonomous selection withholds it on a solo/off-show hour; its
+cron logs `requires a co-hosted show`; **Run now**, MCP and programme use stand
+down with that same reason before any model or TTS work — reported, not an
+error, exactly like a data-backed skill that found nothing to say. Ordinary
+skills, including ones with no `cohosts` field, keep the existing one-speaker
+path.
+
+If the skill has a `tool.mjs`, the co-hosted discussion gathers its data the same
+way every other segment does: the skill's own tool loop when `llm.pickerAgent`
+is on, and a code-driven fetch plus one structured call when it is off (pool
+mode, for models that aren't trusted with tool loops). Data-backed skills must
+obtain usable source data before anyone speaks; `{ available: false }` or a tool
+error stands the whole exchange down instead of letting several personas amplify
+an invented fact.
+
+Set it in the admin editor with **Co-hosted discussion**, or in frontmatter:
+
+```yaml
+---
+name: case-discussion
+label: Case discussion
+cohosts: true
+---
+Find one well-sourced historical case and have the hosts discuss the outcome and
+investigation. Give every host a distinct perspective; do not write name labels.
+```
 
 ### `context:` — what the segment is allowed to mention
 
@@ -182,12 +282,16 @@ morning bulletin, a sign-off, a running joke tied to a particular hour. It still
 suits a skill that speaks *only when something is notable* less well: it fires
 on the clock rather than on the news, so it will keep asking at 8am whether
 there is anything to say. It just no longer makes something up when the answer
-is no. Both example skills in
-[`docs/examples/skills`](examples/skills) are in that second group and
-deliberately carry no `cron:` — `moon-phase` is meant to skip an unremarkable
-gibbous, and `sunset` tracks a time that moves through the year, so pinning it to
-a fixed clock reading would be wrong in a different way. Leave those on
-`cooldown:` and let the director decide.
+is no. The example skills in
+[`docs/examples/skills`](examples/skills) ship without a `cron:` for that reason
+— `moon-phase` is meant to skip an unremarkable gibbous, and `sunset` tracks a
+time that moves through the year, so pinning it to a fixed clock reading would be
+wrong in a different way. Leave those on `cooldown:` and let the director decide.
+
+`todoist` is the one that goes either way, which is why its frontmatter carries
+the line commented out: on `cooldown:` it is a nudge that turns up when it turns
+up, and with `cron: 0 8 * * *` + `cronOnly: true` it becomes a fixed morning
+alarm that never fires at random. Pick the one you actually want to hear.
 
 **Daylight saving.** A normal daily cron survives a clock change: `cron: 0 8 * * *`
 fires once at 08:00 local on the spring-forward day, the autumn day, and every
@@ -282,10 +386,14 @@ export const inputs = { query: 'what to search for; null for the default dig' };
 // HERE (rather than in the controller) is what makes a copy of the skill keep
 // its settings: a duplicate copies tool.mjs verbatim, name and all.
 export const configFields = {
-  feed:         { type: 'url',    label: 'News feed · RSS 2.0', placeholder: 'https://…/rss.xml' },
-  feedMaxItems: { type: 'number', label: 'Max items', min: 1, max: 50, integer: true },
+  endpoint: { type: 'url',    label: 'Status API', placeholder: 'https://…/status.json' },
+  maxRows:  { type: 'number', label: 'Rows to read', min: 1, max: 50, integer: true },
 };
 ```
+
+> **You don't need a `tool.mjs` for a feed.** A `feed:` line in the frontmatter
+> is enough — see [Feeds without code](#feeds-without-code) below. Write a
+> `tool.mjs` when the skill needs something a feed can't give it.
 
 **`configFields` reference.** A flat `{ key: { … } }` map, up to 8 entries per
 skill. Each entry takes:
@@ -298,8 +406,9 @@ skill. Each entry takes:
 | `min` / `max` / `integer` | `number` only — bounds, and whether fractions are refused |
 
 Keys must be `letters, digits, _` starting with a letter, and can't shadow a key
-the editor already owns (`name`, `label`, `cooldown`, `context`, `window`,
-`requiresKey`, `tags`, `toolDescription`, `brief`). A malformed declaration is
+the editor already owns (`name`, `label`, `cooldown`, `cron`, `cronOnly`,
+`cohosts`, `context`, `window`, `requiresKey`, `tags`, `toolDescription`,
+`brief`). A malformed declaration is
 narrowed away rather than breaking the skill — the skill still loads and airs, it
 just shows no settings. A bad *value* is the opposite: the save fails loudly with
 a 400 rather than dropping the knob you just set.
@@ -322,7 +431,7 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 | `services.recentPlays(hours)` | play-log dedup sets `{ ids, keys }` over the last *hours* |
 | `services.library.getArtist(id)` / `.getAlbum(id)` / `.searchArtists(name, opts?)` | Navidrome/Subsonic reads |
 | `services.onThisDay()` | Wikipedia "on this day" events for today |
-| `services.fetchHeadlines({ feedUrl?, maxItems? })` | fetch + parse an RSS feed |
+| `services.fetchHeadlines({ feedUrl?, maxItems? })` | fetch + parse an RSS/Atom/RDF feed (what `feed:` uses) |
 | `services.recall.seen(key)` / `.remember(key)` | durable, cross-restart dedup ledger |
 | `services.log(msg)` | append a line to the station event log |
 
@@ -369,32 +478,33 @@ How a built-in still differs from a skill you add:
 
 ### News: swapping the feed
 
-The `news` skill's `tool.mjs` declares two knobs (`configFields`, above), so
-**/admin/skills → News → Edit** carries a feed field and a max-items field. They
-are stored as two extra frontmatter keys, editable on disk just as well:
+News is an ordinary feed skill (see [Feeds without code](#feeds-without-code)):
+**/admin/skills → News → Edit** carries a feed field and a max-items field,
+stored as two frontmatter keys and editable on disk just as well.
 
 ```yaml
 ---
 name: news
 label: News headlines
 cooldown: 45m
-feed: https://www.npr.org/rss/rss.php?id=1001   # any RSS 2.0 feed
+feed: https://www.npr.org/rss/rss.php?id=1001
 feedMaxItems: 10
 ---
 Read one fresh headline in a single sentence — keep it conversational, in the
 station's voice. Skip a headline that is dull or stale; silence is fine.
 ```
 
-> **Heads-up.** The parser handles **RSS 2.0** (`<item>`) feeds. **Atom** feeds
-> (`<entry>`) return zero items today — use an RSS URL.
-
 `NEWS_FEED_URL` / `NEWS_MAX_ITEMS` in `.env` only *seed* this file on the very first
 boot. Once `state/skills/news/SKILL.md` exists, **the file wins** — change the feed
 there (or in `/admin/skills`), not in `.env`.
 
-**Running a second news source** is just a copy: export the skill, rename it in
-both the `.md` and the `.zip`, re-import, and point its feed somewhere else. The
-knobs ride in `tool.mjs`, so the copy gets its own feed field under its own name.
+**Running a second news source** is just another skill with another `feed:` line
+— no export/rename dance, and nothing to copy.
+
+> Stations first booted before this was generic still have the old
+> `state/skills/news/tool.mjs` on disk, and keep running it — same behaviour,
+> its own copy of the same fetch. **↺ Reset to default** on the News skill
+> removes it and moves that install onto the shared path.
 
 ## Lifecycle
 
@@ -408,7 +518,8 @@ knobs ride in `tool.mjs`, so the copy gets its own feed field under its own name
 - **Persona ownership still applies.** Like built-in skills, a custom skill only
   fires autonomously when it's enabled *and* assigned to the persona on air
   (Personas page). **Run now** is an operator override that bypasses the toggle,
-  the persona assignment, the frequency gate, and the cooldown.
+  the persona assignment, the frequency gate, and the cooldown. A co-hosted skill's active host-plus-guest roster requirement is not
+  bypassed.
 
 ## Sharing skills
 
