@@ -2,7 +2,7 @@
 // auto-discovery, so they actually run with the rest of the suite instead of
 // only when someone remembers `python3 scripts/<file>.py`. Each suite is
 // lightweight and isolated from the analyzer runtime (no torch / demucs /
-// librosa / audio). Two numerical suites use NumPy; when it is unavailable,
+// librosa / audio). Three numerical suites use NumPy; when it is unavailable,
 // this shim installs the pinned test-only wheel into a temporary directory, so
 // a clean checkout's `npm test` is reproducible without modifying the user's
 // Python environment. A box without python3 still skips cleanly (exit 0).
@@ -18,12 +18,14 @@ const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const SUITES = [
   'analyzer_sidecar_contract_test.py', // typed missing-path response for URL fallback (#1331)
   'analyzer_embedding_test.py', // batched CLAP + embedding-only backfills (#1426)
+  'analyzer_decode_test.py', // incomplete FLAC prefix recovery (#1670)
   'idle_release_test.py', // idle model release + heavy clock (#1099/#1204)
   'vocal_gate_test.py', // vocal-stem gate thresholds (#1125)
   'test_chatterbox_chunk.py', // chatterbox chunk_text (#1130)
   'tts_heavy_idle_test.py', // tts-heavy idle unload + cold-engine health (#1579)
   'analyzer_noise_test.py', // decode-noise filter + capability loss (#1300)
   'analyzer_silence_test.py', // edge dead-air measurement (silence trim)
+  'analyzer_beat_test.py', // main beat tracking is best-effort (#1647)
 ];
 
 const probe = spawnSync('python3', ['--version'], { stdio: 'ignore' });

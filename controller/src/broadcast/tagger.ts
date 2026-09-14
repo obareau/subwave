@@ -3,7 +3,8 @@ import { spawn, ChildProcess } from 'node:child_process';
 import { queue } from './queue.js';
 import * as coverage from '../music/library-coverage.js';
 import { syncAllAfterTag } from '../music/playlist-sync.js';
-import { PROGRESS_PREFIX, EVENT_PREFIX, type TaggerProgress, type TaggerEvent } from '../music/tagger-progress.js';
+import { applyPendingRotation } from '../music/id-rotation.js';
+import { PROGRESS_PREFIX, EVENT_PREFIX, ROTATION_PREFIX, type TaggerProgress, type TaggerEvent, type TaggerRotation } from '../music/tagger-progress.js';
 import { writePidfile, clearPidfile, readPidfile, isPidAlive, MANAGED_ENV } from '../music/tagger-lock.js';
 
 type TaggerMode = 'tag' | 'analyze' | 'reconcile';
@@ -73,10 +74,24 @@ function lastErrorText(): string | null {
 // Live handle for stopTagger() — cleared on the exit handler.
 let activeChild: ChildProcess | null = null;
 
-// Caller must reject when `tagger.running` is already true.
-// re-* flags map to music/tag-library.ts: reseed (rebuild track_vectors + re-embed),
-// reEnrich (Last.fm tags + lyrics), reAnalyze (acoustic bpm/key), upgrade (re-LLM-tag
-// rows with a stale prompt/model).
+// applyPendingRotation serializes boot, sentinel and exit attempts itself.
+// Failed/deferred state writes must hold the post-tag playlist sync.
+async function applyRotationNow(): Promise<boolean> {
+  try {
+    return (await applyPendingRotation()).complete;
+  } catch (err: any) {
+    queue.log('error', `id-rotation state migration failed (will retry): ${err?.message || err}`);
+    return false;
+  }
+}
+
+// Spawn the tagger as a detached-from-our-event-loop child process. Caller is
+// responsible for rejecting the request if `tagger.running` is already true.
+// The re-* flags map straight to music/tag-library.ts: `reseed` drops + rebuilds
+// track_vectors and re-embeds from scratch (embedding-model-swap recovery),
+// `reEnrich` re-fetches Last.fm tags + lyrics, `reAnalyze` redoes acoustic
+// bpm/key, `upgrade` re-LLM-tags rows whose prompt/model is stale. A "full
+// re-scan" from the admin UI is reseed + reEnrich + reAnalyze together.
 export function startTagger(
   opts: {
     limit?: number;
@@ -209,6 +224,14 @@ function spawnChild(mode: TaggerMode, args: string[], detail: string) {
           } catch { /* malformed sentinel — drop */ }
           continue;
         }
+        if (line.startsWith(ROTATION_PREFIX)) {
+          try {
+            const rot = JSON.parse(line.slice(ROTATION_PREFIX.length)) as TaggerRotation;
+            queue.log('scheduler', `id-rotation: adopted ${rot.adopted} rotated Navidrome id(s) — migrating state files`);
+            void applyRotationNow();
+          } catch { /* malformed sentinel — drop; the exit handler retries */ }
+          continue;
+        }
         if (line.startsWith(EVENT_PREFIX)) {
           try {
             const ev = JSON.parse(line.slice(EVENT_PREFIX.length)) as TaggerEvent;
@@ -266,9 +289,17 @@ function spawnChild(mode: TaggerMode, args: string[], detail: string) {
     // The run just walked the catalogue, and nothing else recounts unattended
     // (#1570), so this is the one moment the total can refresh unasked.
     coverage.refresh().catch(() => {});
-    // Top up sync-enabled playlists (append-only). Fire-and-forget so a sync error
-    // never touches the tagger's path.
-    if (outcome === 'ok') syncAllAfterTag().catch(() => {});
+    // Apply even after Stop/failure: adoption may already have committed.
+    // Recipes must be migrated before sync can classify a playlist as missing.
+    applyRotationNow()
+      .then((settled) => {
+        if (!settled) {
+          queue.log('error', 'playlist sync skipped — id-rotation state migration is still pending');
+          return;
+        }
+        if (outcome === 'ok') return syncAllAfterTag();
+      })
+      .catch(() => { /* sync errors never touch the tagger's own path */ });
     queue.log('scheduler', `${label} finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
   });
   queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);

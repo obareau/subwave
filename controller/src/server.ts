@@ -23,6 +23,7 @@ import { startStreamIdleMonitor } from './broadcast/stream-idle.js';
 import { startAudienceMonitor } from './broadcast/audience.js';
 import * as likes from './broadcast/likes.js';
 import { cors } from './middleware/cors.js';
+import { createStartupGate } from './middleware/startup.js';
 import { assertAdminConfigured } from './middleware/auth.js';
 import { router as publicRoutes } from './routes/public.js';
 import { router as requestRoutes } from './routes/request.js';
@@ -120,6 +121,11 @@ app.use(
 app.use(express.json({ limit: '600kb' }));
 app.use(cors);
 
+// Keep health checks and every state consumer behind the same startup barrier.
+// CORS preflight stays available while the controller initializes.
+const startup = createStartupGate();
+app.use(startup.middleware);
+
 // Routes. `requireAdmin` is applied per-route inside the admin modules.
 app.use(publicRoutes);
 app.use(requestRoutes);
@@ -210,8 +216,19 @@ app.listen(config.server.port, async () => {
   // load() never throws (a corrupt file starts empty).
   await blocklist.load();
 
-  // Its URL lives in settings, not env, so it can't self-start at import time the
-  // way the tts-heavy probe does. Best-effort; never fatal.
+  // Recover journaled Navidrome ID adoption before the first queue build or
+  // playlist sync. Works before library.load(); a failed/deferred apply leaves
+  // its recovery map for the next tagger run or boot.
+  try {
+    const { applyPendingRotation } = await import('./music/id-rotation.js');
+    await applyPendingRotation();
+  } catch (err: any) {
+    console.error('[id-rotation] boot apply failed (will retry next boot):', err.message);
+  }
+
+  // Start the remote-TTS /health probe loop now that settings are loaded — its
+  // URL lives in settings (not env), so it can't self-start at import time the
+  // way the env-configured tts-heavy probe does. Best-effort; never fatal.
   try {
     remoteTts.start();
   } catch (err: any) {
@@ -296,7 +313,7 @@ app.listen(config.server.port, async () => {
   startStreamIdleMonitor();
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));
   // Up front so the sync readers see data from the first pick.
-  likes.load().catch(err => console.error('[likes] init failed:', err.message));
+  await likes.load().catch(err => console.error('[likes] init failed:', err.message));
   startScheduler();
   jingles
     .ensureDefaultIdent()
@@ -312,4 +329,6 @@ app.listen(config.server.port, async () => {
   } catch (err: any) {
     console.error('[map-projection] boot hook failed:', err.message);
   }
+  startup.markReady();
+  console.log('[startup] Controller ready');
 });

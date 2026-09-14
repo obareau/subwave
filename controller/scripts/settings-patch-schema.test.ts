@@ -601,10 +601,11 @@ test('the converted keys are exactly the ones with schemas', () => {
   // The remaining keys and why each resists a stateless schema are in CLAUDE.md.
   assert.deepEqual(Object.keys(SETTINGS_PATCH_SCHEMAS).sort(), [
     'activeDjPromptId', 'archive', 'audio', 'backups', 'beds', 'crossfadeDuration',
-    'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock',
+    'djBehaviour', 'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock',
     'djTalkOnlyBetweenTracks', 'ducking', 'fadeAtShowEnd', 'festivals',
     'handover', 'jingleRatio', 'jingleRotate', 'likes',
-    'locale', 'loudness', 'maxTrackSeconds', 'moodSchedule', 'moods', 'personas',
+    'locale', 'loudness', 'maxTrackSeconds', 'moodSchedule', 'moods',
+    'pauseTalkMinSeconds', 'personas',
     'picker',
     'privacy', 'requests', 'schedule', 'scheduleOverride', 'scrobble', 'search',
     'sfx', 'shows', 'silenceTrim', 'station', 'stationDescription', 'stream',
@@ -728,6 +729,45 @@ test('scheduleOverride validates SHAPE at the route, roster membership in update
     validateSettingsPatch({ scheduleOverride: { showId: 's_ghost', startedAt: 1, expiresAt: 2 } }),
     null,
   );
+});
+
+test('shows validate SHAPE at the route, then same-patch roster membership in update()', async () => {
+  // The route cannot know whether this patch also replaces personas. It must
+  // accept real-looking host and guest ids here; update() checks the assembled
+  // document against its resolved persona roster before saving.
+  const before = settings.get();
+  const priorPersonas = structuredClone(before.personas);
+  const priorShows = structuredClone(before.shows);
+  const seed = priorPersonas[0];
+  assert.ok(seed, 'the default settings must seed a persona');
+
+  const host = { ...seed, id: 'persona_patch_host', name: 'Patch Host' };
+  const guest = { ...seed, id: 'persona_patch_guest', name: 'Patch Guest' };
+  const patchedShow = {
+    id: 'show_patch_roster',
+    name: 'Night Shift',
+    personaId: host.id,
+    guestPersonaIds: [guest.id],
+  };
+  const patch = {
+    personas: [...priorPersonas, host, guest],
+    shows: [...priorShows, patchedShow],
+  };
+
+  assert.equal(validateSettingsPatch(patch), null);
+  try {
+    const result = await settings.update(patch);
+    const saved = result.saved.shows.find(show => show.id === patchedShow.id);
+    assert.equal(saved?.personaId, host.id);
+    assert.deepEqual(saved?.guestPersonaIds, [guest.id]);
+
+    await assert.rejects(
+      () => settings.update({ shows: [{ ...patchedShow, personaId: 'persona_missing' }] }),
+      /shows\.0\.personaId: must reference an existing persona/,
+    );
+  } finally {
+    await settings.update({ personas: priorPersonas, shows: priorShows });
+  }
 });
 
 test('an ARRAY key roots its flat message; a block key still reports verbatim', () => {

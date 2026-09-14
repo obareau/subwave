@@ -4,6 +4,7 @@
 // Part of the queue/ split - see ../queue.ts, which owns the Queue class.
 
 import type { TrackOutro, TrackKeyRange } from '../../music/library-db.js';
+import type { HostSpeechStamp } from '../session.js';
 
 // A persona as it flows through the queue's voice path — only `id`/`name`/
 // `djMode` are read here; the rest rides through to tts.speak()/voiceGainDb().
@@ -105,10 +106,16 @@ export interface QueueItem {
   // drainToLiquidsoap and aired in airIntro, both later than generation and
   // both of which used to re-resolve the speaker from the wall clock — so
   // across a show boundary a line written for the incoming DJ got spoken in the
-  // outgoing DJ's voice. Decided once, at push time. Not persisted: a restart
-  // drops unrendered intros anyway, and a stale persona blob is worse than the
-  // live fallback.
+  // outgoing DJ's voice. Decided once at generation and persisted in the
+  // wholesale queue snapshot, so recovery keeps the real author. Host-owned
+  // speech is separately freshness-stamped below and invalidated before redrain.
   introPersona?: Persona | null;
+  /** Explicit ownership of ordinary host speech, captured when its script was written. */
+  introHostSpeech?: HostSpeechStamp | null;
+  // Editorial session that wrote a DJ link. A link may be rendered and held
+  // beyond a show boundary, but it must never cross into the next show's
+  // session — even when the same persona hosts both shows.
+  introSessionKey?: string | null;
   aiPicked?: boolean;
   linkPrev?: { id: string | null; title: string | null; artist: string | null } | null;
   // Epoch ms of the air moment this item's link was WRITTEN against — stamped
@@ -137,6 +144,10 @@ export interface QueueItem {
   // `upcoming` entry, so nothing that forecasts an air time from the queue can
   // see it — this is how the show-boundary cut (#1574) accounts for it.
   bedDelaySec?: number;
+  // Seconds a pause-and-talk silence pushes this item back after subtracting
+  // the two crossfades it overlaps. Like bedDelaySec, the silent request goes
+  // straight to next.txt and is otherwise invisible to queue forecasts.
+  pauseDelaySec?: number;
   queuedAt?: string;
   sent?: boolean;
   confirmedInLiquidsoap?: boolean;

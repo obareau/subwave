@@ -54,8 +54,24 @@ export function reportEvent(e: Omit<TaggerEvent, 'at'>): void {
   console.log(EVENT_PREFIX + JSON.stringify({ ...e, at: new Date().toISOString() }));
 }
 
-// Emits both the terse `[tag] …` line (greppable in docker logs) and the event
-// sentinel, back-to-back, so the capture side can drop the plain echo.
+// Adoption is phase 0 of a potentially long run. Tell the controller as soon
+// as the recovery map is durable so track blocks/likes/pins follow the new IDs.
+// The exit and boot hooks also replay it if this notification is lost.
+export const ROTATION_PREFIX = '[rotation] ';
+
+export interface TaggerRotation {
+  adopted: number;
+  at: string;
+}
+
+export function reportRotation(r: Omit<TaggerRotation, 'at'>): void {
+  console.log(ROTATION_PREFIX + JSON.stringify({ ...r, at: new Date().toISOString() }));
+}
+
+// Bind an event logger to a module's console tag ('tag' / 'analyze'). Each call
+// emits BOTH the terse `[tag] …` line (docker logs stay greppable) AND the event
+// sentinel, so call sites stay one line. Both go to stdout back-to-back so the
+// capture side can drop the plain echo and keep only the structured entry.
 export function makeEventLogger(prefix: string) {
   return (kind: TaggerEventKind, text: string): void => {
     // Collapse newlines: a multi-line echo defeats the controller's de-dup.

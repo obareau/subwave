@@ -43,8 +43,10 @@ import {
   TTS_SPEED_MAX as TTS_SPEED_MAX_VALUE,
   TTS_SPEED_MIN as TTS_SPEED_MIN_VALUE,
   clampPersonaDial,
+  clampEffectiveTtsSpeed as clampEffectiveTtsSpeedFn,
   clampTtsGain as clampTtsGainFn,
   clampTtsSpeed as clampTtsSpeedFn,
+  composeTtsControlSpeeds as composeTtsControlSpeedsFn,
 } from '../schemas/persona.js';
 import {
   LLM_HEADER_NAME_RE,
@@ -158,8 +160,8 @@ export function normalizeTtsGainMap(raw: unknown): Record<string, number> {
 }
 
 // Speech-rate MULTIPLIER: 1.0 = no change, lower = slower. Per-engine and
-// per-persona speeds compose multiplicatively with daypart energy over the env
-// base. Only Piper/Kokoro/cloud honour it.
+// per-persona speeds compose multiplicatively with programme pacing. Piper,
+// Kokoro, Cloud and Remote honour it; Chatterbox/PocketTTS leave it inert.
 export const TTS_SPEED_MIN = TTS_SPEED_MIN_VALUE;
 export const TTS_SPEED_MAX = TTS_SPEED_MAX_VALUE;
 export const TTS_SPEED_DEFAULT = TTS_SPEED_DEFAULT_VALUE;
@@ -167,6 +169,8 @@ export const TTS_SPEED_DEFAULT = TTS_SPEED_DEFAULT_VALUE;
 // Finite number clamped to [TTS_SPEED_MIN, TTS_SPEED_MAX], rounded to 0.05;
 // garbage falls to 1.0.
 export const clampTtsSpeed = clampTtsSpeedFn;
+export const clampEffectiveTtsSpeed = clampEffectiveTtsSpeedFn;
+export const composeTtsControlSpeeds = composeTtsControlSpeedsFn;
 
 // One clean multiplier per known engine (default 1.0), mirroring the gain map.
 export function normalizeTtsSpeedMap(raw: unknown): Record<string, number> {
@@ -858,6 +862,7 @@ export interface NormalizedShow {
   personaId: string;
   guestPersonaIds: string[];
   banter: boolean;
+  pauseTalk: boolean;
   programme: boolean;
   segmentSkill: string;
   moods: string[];
@@ -872,6 +877,7 @@ export interface NormalizedShow {
   /** Minimum track length in seconds (#1573). null = inherit the station
    *  default, 0 = no floor. See settings/persona.effectiveMinTrackSec. */
   minTrackLengthSeconds: number | null;
+  fadeAtShowEnd: boolean | null;
   playlistIds: string[];
   playlistStrict: boolean;
   /** Full rotation (#1612): with playlistStrict on, every track in the anchor

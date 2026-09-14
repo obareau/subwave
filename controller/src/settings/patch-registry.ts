@@ -38,8 +38,10 @@ import {
   duckingPatchSchema,
   handoverPatchSchema,
   djHouseRulesSchema,
+  djBehaviourPatchSchema,
   djSpeakClockSchema,
   djTalkOnlyBetweenTracksSchema,
+  pauseTalkMinSecondsSchema,
   fadeAtShowEndSchema,
   festivalsSchema,
   jingleRatioSchema,
@@ -129,8 +131,10 @@ export const SETTINGS_PATCH_KEYS = [
   'activeDjPromptId',
   'djPrompt',
   'djHouseRules',
+  'djBehaviour',
   'djSpeakClock',
   'djTalkOnlyBetweenTracks',
+  'pauseTalkMinSeconds',
   'fadeAtShowEnd',
   'personas',
   'shows',
@@ -214,8 +218,10 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   stationDescription: stationDescriptionSchema,
   locale: localeSchema,
   djHouseRules: djHouseRulesSchema,
+  djBehaviour: djBehaviourPatchSchema,
   djSpeakClock: djSpeakClockSchema,
   djTalkOnlyBetweenTracks: djTalkOnlyBetweenTracksSchema,
+  pauseTalkMinSeconds: pauseTalkMinSecondsSchema,
   fadeAtShowEnd: fadeAtShowEndSchema,
   search: searchPatchSchema,
   audio: audioPatchSchema,
@@ -271,10 +277,10 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   // the same body may be changing. Shape and per-field rules still apply.
   shows: (ctx) =>
     showsSchema({
-      // personaIds is NOT nullable on ShowSchemaContext — a show with no owner
-      // has none on either path — so the route passes the empty roster, which
-      // makes host membership unresolvable and therefore unchecked here.
-      personaIds: [],
+      // The route cannot know the effective persona roster: personas may ride
+      // in this same patch. update() validates against its resolved roster
+      // after applying personas, so this pass checks shape and pure rules only.
+      personaIds: null,
       moodNames: ctx.moodNames,
       themeIds: null,
       minTrackSeconds: null,

@@ -22,8 +22,8 @@ behaves exactly as it did before (bpm/key/intro only) — never a hard failure.
 
 This deliberately lives OUTSIDE the controller image — librosa pulls in
 numba/scipy/soundfile, which the controller must stay lean of. It runs in the
-tts-heavy sidecar's analyzer venv, or in a standalone offline venv on the
-operator's machine. Audio is fetched from the Subsonic stream URL (auth baked
+analyzer sidecar (and the AIO's in-process venv), or in a standalone offline
+venv on the operator's machine. Audio is fetched from the Subsonic stream URL (auth baked
 into the query string) to a temp file, then only the first ANALYZE_SECONDS are
 decoded — enough for tempo/key and the intro estimate, a fraction of the bytes.
 (The CLAP embedding additionally decodes a mid-song and a late window from the
@@ -70,6 +70,21 @@ FETCH_TIMEOUT_S = float(os.environ.get("ANALYZE_FETCH_TIMEOUT_S", "").strip() or
 FFMPEG_DECODE_TIMEOUT_S = float(
     os.environ.get("ANALYZE_FFMPEG_TIMEOUT_S", "").strip() or "120"
 )
+# A compressed source can expand far past its on-disk size, and a capped FLAC
+# prefix can still represent hours of audio. Keep every one-shot PCM predecode
+# bounded independently of the compressed input cap;
+# `-fs` limits bytes while ffmpeg is writing and the post-check below is the
+# hard acceptance boundary. 64 MiB retains several 40s analysis windows for
+# common stereo files without letting sparse audio expand until it fills the
+# analyzer's writable layer. There is deliberately no duration cap on FLAC
+# recovery: CLAP can still spread its windows across all recovered audio that
+# fits under the byte ceiling, while head analysis remains limited by
+# ANALYZE_SECONDS downstream.
+PREDECODE_MAX_BYTES = 64 * 1024 * 1024
+# ffmpeg documents that `-fs` may overshoot slightly because it stops at a mux
+# packet boundary. Leave bounded headroom, then enforce the exact ceiling above
+# before accepting the WAV.
+PREDECODE_FFMPEG_MAX_BYTES = PREDECODE_MAX_BYTES - 1024 * 1024
 
 # --- CLAP audio embedding (optional, opt-in) -------------------------------
 # Off unless ANALYZE_AUDIO_EMBEDDING is truthy. CLAP wants 48 kHz mono; the
@@ -1272,17 +1287,29 @@ class VocalActivityDetector:
             raise RuntimeError(f"demucs model {DEMUCS_MODEL} has no 'vocals' stem")
 
     def separate(self, stereo):
-        """stereo: float32 array shaped (2, N) at DEMUCS_SR. One apply_model
+        """audio: float32 array shaped (channels, N) at DEMUCS_SR. One apply_model
         pass → {stem_name: float32 ndarray (channels, N)} for all model stems
         (drums/bass/other/vocals for htdemucs). The single separation is
         shared by vocal-activity detection AND the stem cache (feature:
-        stem-blend transitions) — never run Demucs twice on one window."""
+        stem-blend transitions) — never run Demucs twice on one window.
+
+        Demucs itself accepts exactly two channels. Preserve a real stereo mix;
+        duplicate mono; and fold wider WAVEX layouts to mono before duplicating
+        so every source channel can contribute to vocal detection. This
+        conversion is private to Demucs — baseline loudness still sees the
+        native layout."""
         import numpy as np
         import torch
 
         wav = torch.from_numpy(np.ascontiguousarray(stereo, dtype=np.float32))
         if wav.ndim == 1:
             wav = wav.unsqueeze(0).repeat(2, 1)
+        elif wav.ndim != 2 or wav.shape[0] < 1:
+            raise ValueError(f"Demucs input has invalid shape {tuple(wav.shape)}")
+        elif wav.shape[0] == 1:
+            wav = wav.repeat(2, 1)
+        elif wav.shape[0] > 2:
+            wav = wav.mean(dim=0, keepdim=True).repeat(2, 1)
         from demucs.apply import apply_model
 
         with torch.no_grad():
@@ -1295,7 +1322,7 @@ class VocalActivityDetector:
         }
 
     def detect(self, stereo, sr, librosa, min_loud=0.0, stems=None):
-        """stereo: float32 array shaped (2, N) at DEMUCS_SR. Returns a list of
+        """audio: float32 array shaped (channels, N) at DEMUCS_SR. Returns a list of
         {startMs,endMs} where the isolated vocal stem is active — possibly empty
         (an instrumental). Raises on failure; the caller degrades to None.
         `min_loud` is an absolute RMS floor on the stem's loud reference, on top
@@ -1650,22 +1677,66 @@ def fetch_audio(url):
     analysis (the file's "tail" would be mid-song audio)."""
     suffix = ".audio"
     fd, path = tempfile.mkstemp(suffix=suffix, prefix="swanalyze_")
-    os.close(fd)
-    req = urllib.request.Request(url, headers={"User-Agent": "subwave-analyzer/1"})
-    with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp, open(path, "wb") as out:
-        read = 0
-        while True:
-            chunk = resp.read(65536)
-            if not chunk:
-                break
-            out.write(chunk)
-            read += len(chunk)
-            if read >= ANALYZE_MAX_BYTES:
-                break
-    return path, read < ANALYZE_MAX_BYTES
+    try:
+        with os.fdopen(fd, "wb") as out:
+            req = urllib.request.Request(url, headers={"User-Agent": "subwave-analyzer/1"})
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
+                read = 0
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    read += len(chunk)
+                    if read >= ANALYZE_MAX_BYTES:
+                        break
+        return path, read < ANALYZE_MAX_BYTES
+    except BaseException:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
 
 
-def ensure_fast_decode(path):
+def _is_native_flac(path):
+    try:
+        with open(path, "rb") as source:
+            return source.read(4) == b"fLaC"
+    except OSError:
+        return False
+
+
+def _has_readable_pcm(sf, path):
+    """Validate actual bounded PCM from an ffmpeg-produced WAV."""
+    try:
+        with quiet_decoder_noise(), sf.SoundFile(path) as decoded:
+            if (
+                decoded.format not in ("WAV", "WAVEX")
+                or decoded.subtype != "PCM_16"
+                or decoded.samplerate <= 0
+                or decoded.channels <= 0
+            ):
+                return False
+            block = decoded.read(frames=4096, dtype="int16", always_2d=True)
+            return (
+                len(block.shape) == 2
+                and block.shape[0] > 0
+                and block.shape[1] == decoded.channels
+            )
+    except Exception:  # noqa: BLE001 — invalid recovery output is a normal fallback
+        return False
+
+
+def _usable_recovery_wav(sf, path):
+    try:
+        size = os.path.getsize(path)
+        return 1024 < size <= PREDECODE_MAX_BYTES and _has_readable_pcm(sf, path)
+    except OSError:
+        return False
+
+
+def ensure_fast_decode(path, complete=None):
     """Give libsndfile a file it can open, or fall back to the original path.
 
     librosa's fast path is soundfile/libsndfile; when that can't open the
@@ -1676,43 +1747,84 @@ def ensure_fast_decode(path):
     warning per call, and audioread is removed in librosa 1.0. Probe once; if
     libsndfile can't open the file, decode it ONCE to a temp WAV (native
     rate/channels — the stereo BS.1770 loudness sum needs the real channel
-    layout) and run the whole request off that. Returns (use_path,
-    tmp_wav_or_None); the caller removes the tmp. Any failure — soundfile
-    absent, no ffmpeg on PATH (bare local venv), decode error — returns the
-    original path, i.e. exactly today's behaviour."""
+    layout) and run the whole request off that. A known-incomplete FLAC is also
+    decoded once so its recoverable prefix does not depend on libsndfile
+    reaching a byte-cut final frame. Returns (use_path, tmp_wav_or_None); the
+    caller removes the tmp. Any failure — soundfile absent, no ffmpeg on PATH
+    (bare local venv), decode error — returns the original path, i.e. exactly
+    today's behaviour for inputs outside that narrow recovery case."""
+    sf = None
+    recovery_eligible = False
     try:
         import soundfile as sf
 
         # Quieted like every other decode: libmpg123 narrates its resync over
         # ID3 padding right here, on the probe of a file it goes on to open
         # perfectly well.
-        with quiet_decoder_noise(), sf.SoundFile(path):
-            return path, None
+        with quiet_decoder_noise(), sf.SoundFile(path) as source:
+            recovery_eligible = complete is False and source.format == "FLAC"
+            if not recovery_eligible:
+                return path, None
     except Exception:  # noqa: BLE001 — any open failure routes to the pre-decode
-        pass
+        recovery_eligible = complete is False and _is_native_flac(path)
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return path, None
     fd, wav = tempfile.mkstemp(suffix=".wav", prefix="swanalyze_dec_")
     os.close(fd)
     try:
+        command = [ffmpeg, "-v", "error", "-y", "-i", path]
+        command.extend([
+            "-fs", str(PREDECODE_FFMPEG_MAX_BYTES),
+        ])
+        command.extend([
+            "-map", "0:a:0", "-acodec", "pcm_s16le", "-f", "wav", wav,
+        ])
         subprocess.run(
-            [ffmpeg, "-v", "error", "-y", "-i", path,
-             "-map", "0:a:0", "-acodec", "pcm_s16le", "-f", "wav", wav],
+            command,
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             timeout=FFMPEG_DECODE_TIMEOUT_S,
         )
-        if os.path.getsize(wav) > 1024:
-            log("libsndfile can't open this container; pre-decoded once via ffmpeg")
-            return wav, wav
+        wav_size = os.path.getsize(wav)
+        if wav_size > PREDECODE_MAX_BYTES:
+            log(
+                "ffmpeg pre-decode exceeded its decoded-size limit "
+                f"({wav_size} > {PREDECODE_MAX_BYTES}); falling back"
+            )
+        elif not recovery_eligible and wav_size >= PREDECODE_FFMPEG_MAX_BYTES:
+            # A complete/unknown legacy input must never masquerade as a short
+            # track merely because the temp WAV hit the disk guard. Preserve
+            # the old per-load decoder, which can still seek its real windows.
+            log("ffmpeg pre-decode reached its decoded-size limit; falling back")
+        elif wav_size > 1024:
+            if not recovery_eligible or (sf is not None and _usable_recovery_wav(sf, wav)):
+                if recovery_eligible:
+                    log("incomplete FLAC prefix pre-decoded once via ffmpeg")
+                else:
+                    log("libsndfile can't open this container; pre-decoded once via ffmpeg")
+                return wav, wav
         log("ffmpeg pre-decode produced no audio; falling back to per-load decode")
     except subprocess.CalledProcessError as e:
         err = (e.stderr or b"").decode("utf-8", "replace").strip()[:200]
+        if (
+            recovery_eligible
+            and e.returncode > 0
+            and sf is not None
+            and _usable_recovery_wav(sf, wav)
+        ):
+            log(f"incomplete FLAC prefix recovered despite ffmpeg error ({err or e})")
+            return wav, wav
         log(f"ffmpeg pre-decode failed ({err or e}); falling back to per-load decode")
     except Exception as e:  # noqa: BLE001 — pre-decode is best-effort
         log(f"ffmpeg pre-decode failed ({e}); falling back to per-load decode")
+    except BaseException:
+        try:
+            os.remove(wav)
+        except OSError:
+            pass
+        raise
     try:
         os.remove(wav)
     except OSError:
@@ -1769,19 +1881,21 @@ def analyze(
     # None = unknown (old caller) → outro analysis still runs, relying on its
     # decode-length validation; False = definitively truncated → skipped.
     owned = path is None
-    if owned:
-        path, complete = fetch_audio(url)
-    # Pre-decode ONCE when libsndfile can't open the container (m4a, quirky
-    # MP3s — issue #1073), so every load below takes the fast soundfile path
-    # instead of audioread re-decoding the whole file per call. `src_path`
-    # keeps the original download for the ownership cleanup; the WAV is always
-    # ours to remove.
-    src_path = path
-    path, decoded_tmp = ensure_fast_decode(path)
+    src_path = None
+    decoded_tmp = None
     audio_embedding = None
     vocal_ranges = None
     outro = None
     try:
+        if owned:
+            path, complete = fetch_audio(url)
+        # Pre-decode ONCE when libsndfile can't open the container (m4a, quirky
+        # MP3s — issue #1073), so every load below takes the fast soundfile path
+        # instead of audioread re-decoding the whole file per call. `src_path`
+        # keeps the original download for the ownership cleanup; the WAV is
+        # always ours to remove.
+        src_path = path
+        path, decoded_tmp = ensure_fast_decode(path, complete=complete)
         # One header-duration probe shared by the CLAP windows and the outro
         # tail (both need to know where the file ends). 0.0 = unknown.
         try:
@@ -1904,7 +2018,7 @@ def analyze(
                 os.remove(decoded_tmp)
             except OSError:
                 pass
-        if owned:
+        if owned and src_path is not None:
             try:
                 os.remove(src_path)
             except OSError:
@@ -1913,8 +2027,14 @@ def analyze(
     if y is None or len(y) == 0:
         raise RuntimeError("decoded empty audio")
 
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
-    bpm = float(np.atleast_1d(tempo)[0])
+    bpm = None
+    beat_frames = []
+    try:
+        tempo, tracked_frames = librosa.beat.beat_track(y=y, sr=sr)
+        bpm = float(np.atleast_1d(tempo)[0])
+        beat_frames = tracked_frames
+    except Exception as e:  # noqa: BLE001 — tempo/grid are garnish, never a gate
+        log(f"main beat tracking failed: {e}")
 
     # Per-beat timestamps (ms) — already computed by beat_track, previously
     # discarded. Downbeats are a 4/4 heuristic (every 4th beat from the first):
@@ -1969,10 +2089,13 @@ def analyze(
 
     # Overall confidence: dominated by how cleanly the key resolved, nudged by
     # whether we got a plausible tempo. Kept conservative on purpose.
-    confidence = round(0.5 * key_sep + (0.5 if 40 <= bpm <= 220 else 0.0), 3)
+    confidence = round(
+        0.5 * key_sep + (0.5 if bpm is not None and 40 <= bpm <= 220 else 0.0),
+        3,
+    )
 
     result = {
-        "bpm": round(bpm, 1),
+        "bpm": round(bpm, 1) if bpm is not None else None,
         "key": key,
         "intro_ms": int(intro_ms) if intro_ms is not None else None,
         "confidence": confidence,

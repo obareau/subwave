@@ -3,6 +3,8 @@
 
 import * as settings from '../../settings.js';
 import * as session from '../session.js';
+import type { HostSpeechStamp } from '../session.js';
+import type { Persona } from '../queue/types.js';
 import * as subsonic from '../../music/subsonic.js';
 import * as dj from '../../llm/dj.js';
 import { stripThinking } from '../../llm/sdk.js';
@@ -12,6 +14,29 @@ import { echoesRecentRequest } from '../../util/request-guard.js';
 import { speechPaceScale } from '../../audio/tts.js';
 import { normalizeForDisplay, normalizeForSpeech, spokenWordScale } from '../../audio/speech-text.js';
 import { introMsOf } from './runs.js';
+
+export interface GeneratedHostLink {
+  link: string | null;
+  introPersona: Persona | null;
+  hostSpeech: HostSpeechStamp | null;
+}
+
+// The shared production seam for both picker paths: capture the author at the
+// actual listener-facing model call, then invalidate its result if the active
+// same-show host epoch changed while that call was in flight.
+export async function generatePickLink(
+  args: Record<string, unknown>,
+  generate: (input: Record<string, unknown>) => Promise<string> = dj.generateLink,
+): Promise<GeneratedHostLink> {
+  const hostSpeech = session.captureHostSpeech();
+  const introPersona = session.onAirPersona();
+  const generated = await generate({ ...args, persona: introPersona });
+  return {
+    link: hostSpeech && !session.isHostSpeechCurrent(hostSpeech) ? null : generated,
+    introPersona,
+    hostSpeech,
+  };
+}
 
 export function trackFields(song) {
   return {
@@ -86,14 +111,16 @@ export async function enqueuePick(
   link: string | null = null,
   linkPrev: any = null,
   { sweep = false, washout = false, blend = false, dissolve = false, chop = false, loop = false }: { sweep?: boolean; washout?: boolean; blend?: boolean; dissolve?: boolean; chop?: boolean; loop?: boolean } = {},
-  { linkClockAt = null }: { linkClockAt?: Date | null } = {},
+  { linkClockAt = null, introPersona = null, hostSpeech = null }: { linkClockAt?: Date | null; introPersona?: Persona | null; hostSpeech?: HostSpeechStamp | null } = {},
 ): Promise<number> {
   // Single chokepoint for the intro budget: every pick path funnels its link
   // through here, so a new caller can't skip it. Near-idempotent for callers
   // that already trimmed — this pass recomputes spokenWordScale on the kept
   // text and can trim slightly further, so air always honours the budget while
   // the session turn may carry the marginally longer reading.
-  const introLink = dropEchoedLink(trimLinkToIntro(link, song), queue);
+  const introLink = hostSpeech && !session.isHostSpeechCurrent(hostSpeech)
+    ? null
+    : dropEchoedLink(trimLinkToIntro(link, song), queue);
   const track: any = trackFields(song);
   // Transition effects (DJ mode only); getAnnotatedUri stamps the liq_* flags
   // and radio.liq ramps them. sweep muffles the crossfade INTO this pick;
@@ -111,8 +138,10 @@ export async function enqueuePick(
     intent: reason || 'ai pick',
     introScript: introLink,
     introKind: 'link',
-    // Pin the voice to whoever wrote the line: render and air both happen later.
-    introPersona: session.onAirPersona(),
+    // Pin the author captured at generation. Never relabel an old script with
+    // whoever happens to be live when the queue write finally runs.
+    introPersona: introLink ? introPersona : null,
+    introHostSpeech: introLink ? hostSpeech : null,
     aiPicked: true,
     linkPrev,
     linkClockAt,

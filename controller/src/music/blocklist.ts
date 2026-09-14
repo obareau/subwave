@@ -10,7 +10,7 @@
 import { config } from '../config.js';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { writeFileAtomic } from '../util/atomic-file.js';
+import { createSerialFileWriter } from '../util/atomic-file.js';
 import { zonedParts } from '../time.js';
 import { resolveActiveShow } from '../settings.js';
 import { resolvePlaylistMemberSets } from './show-playlist.js';
@@ -48,6 +48,7 @@ export interface BlockEntry {
 }
 
 const FILE_PATH = `${config.stateDir}/blocklist.json`;
+const writeStore = createSerialFileWriter(FILE_PATH);
 
 let entries: BlockEntry[] = [];
 let rules: BlockRule[] = [];
@@ -192,7 +193,7 @@ export async function load() {
 }
 
 async function persist() {
-  await writeFileAtomic(FILE_PATH, JSON.stringify({ entries, rules }, null, 2));
+  await writeStore(JSON.stringify({ entries, rules }, null, 2));
 }
 
 export function list(): BlockEntry[] {
@@ -254,8 +255,67 @@ export async function removeMany(
   return { removed, missing };
 }
 
-// Which entry blocks this row, or null. Accepts anything song-shaped (a raw
-// Subsonic song, or a library-db row with only id/artist/album).
+// Rewrite ids after a Navidrome ID rotation (music/id-rotation.ts).
+//
+// Entries: track entries move ONLY via the adoption-confirmed map — an
+// unmapped track id stays as-is (the track is genuinely gone; by-id semantics
+// unchanged). Album/artist ids can't be validated against song liveIds, so
+// they go through the raw shape transform — hash-family ids are fixed points,
+// and the normalised-name fallback still covers anything the transform misses.
+//
+// RULES carry ids too, and exactly one field does: `playlist`, whose `values`
+// are Navidrome playlist ids (every other field is free text and must be left
+// alone). A stale playlist id is INERT by design — it resolves to an empty
+// member set and the rule silently stops blocking — so a rotation would turn
+// "never play anything in the Christmas playlist" into a rule that matches
+// nothing, with no error and nothing in the Blocked tab to say so. They go
+// through the caller's playlist mapper, the same one the recipes and show pins
+// use. `showIds` are internal SUB/WAVE show ids and are NOT Navidrome ids —
+// never map them.
+export async function remapIds(
+  trackMap: ReadonlyMap<string, string>,
+  canonical: (id: string) => string,
+  mapPlaylistId: (id: string) => string = (id) => id,
+): Promise<number> {
+  await load();
+  let changed = 0;
+  for (const e of entries) {
+    const next = e.type === 'track' ? (trackMap.get(e.id) ?? e.id) : canonical(e.id);
+    if (next !== e.id) {
+      e.id = next;
+      changed++;
+    }
+  }
+  let playlistRulesTouched = false;
+  for (const r of rules) {
+    if (r.field !== 'playlist') continue;
+    r.values = r.values.map((v) => {
+      const next = mapPlaylistId(v);
+      if (next !== v) {
+        changed++;
+        playlistRulesTouched = true;
+      }
+      return next;
+    });
+  }
+  if (changed) {
+    rebuildIndex();
+    // The pre-resolved member sets are keyed by the OLD playlist ids, so they
+    // no longer answer for anything. Expire rather than refetch: the lazy TTL
+    // path owns that call, and remapping must not start depending on Navidrome
+    // being reachable.
+    if (playlistRulesTouched) playlistMembersAt = 0;
+  }
+  // A previous attempt may have changed the cache but failed its write.
+  // Persist on every replay before the caller acknowledges the recovery map.
+  await persist();
+  return changed;
+}
+
+// Which entry blocks this row, or null. Accepts anything song-shaped — a raw
+// Subsonic song (id/albumId/artistId/artist/album) or a library-db row
+// (id/artist/album only). Synchronous and cheap; isEmpty() lets hot paths skip
+// mapping work.
 //
 // The order is part of the contract: the admin UI offers to remove exactly the
 // entry named, so a row must always resolve to the same one. Ids first, then
