@@ -199,6 +199,34 @@ Loudness: both sides of a rendered seam are gained by `music/loudness.ts` `resol
 ### Product-behaviour rules
 
 - **The station must keep making sound.** Music never stops for a budget, a muted voice switch or an LLM outage: the hard token cap makes no model call at all and lets Liquidsoap coast on `auto.m3u`; `tts.enabled: false` still picks tracks and still honours listener requests, just silently.
+> ⚠️ **DIVERGENCE LOCALE (2026-09-25) — le secours LLM ne rattrapait pas un modèle retiré.**
+> `failover.ts` ne tendait la main vers `fallbackLeg()` que sur quatre causes :
+> injoignable, quota/auth, amont saturé, débit limité. Un modèle **retiré** n'en est
+> aucune — l'hôte répond, la clé est bonne, pas de quota, pas de surcharge — donc
+> `backup` valait `null` et l'appel levait. Le correctif local ajoute
+> `isModelUnavailable()` (`llm/internal/core/pure.ts`) à la condition, avec
+> `model unavailable` comme libellé de raison.
+>
+> **Ce qui rend la panne invisible** : la musique continue. Le sélecteur retombe sur
+> « first pool candidate », Liquidsoap enchaîne, et `/api/health` répond
+> `{"status":"on-air"}` pendant toute la durée. Seule l'oreille le remarque — le DJ
+> s'est tu. Le 2026-09-25, Ollama Cloud a retiré le modèle principal à minuit PDT :
+> **401 échecs, 0 tentative de bascule**, avec `llama3.1:8b` correctement configuré
+> en secours et resté inerte des heures.
+>
+> **Réflexe** : un silence derrière un `on-air` vert, c'est le *modèle* qu'on vérifie
+> d'abord, jamais le code. `docker compose logs controller | grep -i retired` tranche
+> en une seconde. Troisième occurrence — 15 juillet, 31 juillet, 25 septembre.
+>
+> ⚠️ **Le piège de la regex** : la fenêtre de recherche du message ne doit **pas**
+> exclure le point. Les noms de modèles en contiennent — `llama3.1`, `qwen2.5`,
+> `gpt-3.5` — et l'exclure arrête la correspondance *à l'intérieur du nom qu'elle
+> lit*. Deux itérations perdues là-dessus ; un test pinne la forme.
+>
+> Proposé en amont : issue #1713, PR #1714 (base `develop`). **Cette divergence
+> disparaîtra d'elle-même** à la fusion suivante si la PR est acceptée — le
+> cherry-pick et le commit amont portent le même contenu.
+
 - **Manual operator triggers are exempt from every automatic gate** — frequency, budget, voice switch, clock switch. An explicit action always fires.
 - **An operator BLOCK is one press, not a new posture** (#1622 FR 4). `POST /dj/queue-block` queues a whole album — or a run of an artist's tracks — through the SAME `queue.push()` and the SAME two opt-outs `POST /dj/queue-track` already carried (`allowDuplicate` past the #619 dedup guard; `requestedBy: 'studio'` past the length cap, the show-boundary cut and the bed's request reason). It invents no bypass, because none was missing: `picker.albumHours` and the artist guard are PICK paths an operator push never reaches, and the block's presence in `upcoming` feeds `queue.recentAlbumKeys` — the cooldown doing the right thing. **The never-play list is not bypassed**: a blocked track is skipped and NAMED in the response, and `push()` is still what refuses it (`music/blocklist-rules.ts`'s inherited-enforcement rule). Three properties are load-bearing and pull against each other: an album keeps its own disc/track order and is REFUSED `shuffle` and `limit` rather than having them ignored; the 30-track cap TRUNCATES and reports rather than refusing a double album; and a block that outlasts the current show is **warned about, never cut** — cutting it would contradict the rule above, and a mic-pass between two tracks of one record is the worse outcome (`runPickCycle` only fires on an empty queue, so a long block also holds a pending handover past `HANDOFF_MAX_AGE_MS`). `QueueItem.block` is identity only — badge, booth line, `DELETE /dj/queue/block/:id` — and nothing on the air path may branch on it. → [`docs/internals/broadcast.md`](docs/internals/broadcast.md)
 - **`requestedBy` says which EXEMPTIONS a track gets, never who is waiting.** Four air-path behaviours key off its truthiness (length cap, boundary cut, bed reason, sub-crossfade warning) and a studio push sets `'studio'` to earn all four — so `settings.requests.maxPending` counts `queue.pendingListenerRequests()` (`requestedBy && !operator`), never the raw field. Reading one for the other is how six manual Queue presses shut the listener request line with nothing naming the cause.
