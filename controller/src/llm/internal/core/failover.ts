@@ -5,13 +5,16 @@
 // once against the optional fallback leg when the primary leg can't recover this
 // call — either its host is unreachable (connection refused / DNS / timeout —
 // see isUnreachable), it refused with a quota/usage-limit/auth error (see
-// isQuotaOrAuthError; issue #438), or a reachable gateway relayed a saturated
-// upstream that survived same-leg retries (see isUpstreamOverloaded; issue #671).
+// isQuotaOrAuthError; issue #438), a reachable gateway relayed a saturated
+// upstream that survived same-leg retries (see isUpstreamOverloaded; issue #671),
+// or the leg's model itself is gone — retired, removed, or never present (see
+// isModelUnavailable). That last one is permanent: no retry and no wait brings
+// the model back, so the call must move to the fallback leg immediately.
 // record* lives here so a call is logged exactly once, with the leg that ran.
 
 import { primaryLeg, fallbackLeg } from '../provider/legs.js';
 import { record } from '../telemetry/log.js';
-import { isUnreachable, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited } from './pure.js';
+import { isUnreachable, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, isModelUnavailable } from './pure.js';
 
 // Centralised success/failure record writers. Every LLM call goes through one
 // of each. The required-shape args (kind/started/via/sampling/usage for
@@ -122,13 +125,21 @@ export async function withFailover<T>(
     const quotaOrAuth = isQuotaOrAuthError(err);
     const upstreamOverloaded = isUpstreamOverloaded(err);
     const rateLimited = isRateLimited(err);
-    const backup = (isUnreachable(err) || quotaOrAuth || upstreamOverloaded || rateLimited) ? fallbackLeg() : null;
+    const modelGone = isModelUnavailable(err);
+    const backup = (isUnreachable(err) || quotaOrAuth || upstreamOverloaded || rateLimited || modelGone)
+      ? fallbackLeg()
+      : null;
     if (!backup) {
       logFailurePreview(kind, err);
       recordFailure({ kind, started: primaryStarted, via: primaryVia, model: primary.label, error: err?.message, extra: failExtra(err) });
       throw err;
     }
-    const reason = quotaOrAuth ? 'refused (quota/auth)' : upstreamOverloaded ? 'upstream overloaded' : rateLimited ? 'rate limited' : 'unreachable';
+    const reason = modelGone
+      ? 'model unavailable'
+      : quotaOrAuth ? 'refused (quota/auth)'
+      : upstreamOverloaded ? 'upstream overloaded'
+      : rateLimited ? 'rate limited'
+      : 'unreachable';
     const detail = err?.statusCode || err?.cause?.statusCode || err?.code || err?.cause?.code || err?.name || 'unknown';
     console.log(`[${kind}] primary LLM (${primary.label}) ${reason} (${detail}) — failing over to ${backup.label}`);
     recordFailure({ kind, started: primaryStarted, via: `${primaryVia}:failover→${backup.label}`, model: primary.label, error: err?.message, extra: failExtra(err) });

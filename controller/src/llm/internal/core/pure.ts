@@ -295,6 +295,32 @@ function upstreamErrorCode(err: ErrorLike): string {
   const code = (parsed as { error?: { code?: unknown } } | null)?.error?.code;
   return typeof code === 'string' ? code : (typeof err.code === 'string' ? err.code : '');
 }
+// Model retired, removed, or never present on this leg: the host is up and the
+// credentials are good, but THIS model will never answer again — no retry and no
+// wait recovers it, so failover must treat it like host-down. A hosted provider
+// retiring a model otherwise silences every generation until an operator
+// notices, with the fallback leg sitting idle and correctly configured.
+//
+// Detected by the machine-readable code first and by MESSAGE second, the same
+// way QUOTA_RE is, because providers word this very differently. Deliberately
+// NOT by a bare 404: a 404 from a mistyped base URL is unreachability, and
+// isUnreachable already owns that case.
+const MODEL_GONE_CODES = new Set(['model_not_found', 'model_not_available', 'model_terminated']);
+// The `model …` branch allows a few words between the name and the verdict
+// ("model claude-2 is no longer available"). The window must NOT exclude '.',
+// because model names carry dots — llama3.1, qwen2.5, gpt-3.5 — and excluding
+// it stops the match dead inside the name it is trying to read. A short lazy
+// window plus the explicit verdict wordings keep the gate narrow instead.
+const MODEL_GONE_RE = /\bwas retired\b|\bis retired\b|\bhas been (?:retired|removed|decommissioned|deprecated)\b|\b(?:unknown|no such|unsupported) model\b|\bmodel\b[^\n]{0,60}?\b(?:not found|does not exist|(?:is )?not available|no longer available|is unavailable)\b/i;
+
+export function isModelUnavailable(err: ErrorLike | null | undefined): boolean {
+  if (!err) return false;
+  err = unwrapSdkError(err);
+  if (MODEL_GONE_CODES.has(upstreamErrorCode(err))) return true;
+  const msg = String(err.message || err.cause?.message || '');
+  return MODEL_GONE_RE.test(msg);
+}
+
 const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|authentication (failed|error)|forbidden|api key (not|is|was) /i;
 
 export function isQuotaOrAuthError(err: ErrorLike | null | undefined): boolean {
