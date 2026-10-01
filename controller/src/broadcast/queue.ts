@@ -2097,8 +2097,16 @@ class Queue {
   ): Promise<AnnounceOutcome> {
     // Single-voice paths leak the label too — a styled POST /dj/say came back as
     // "Iris : Bonsoir…" with one persona and one voice (#1707).
+    //
+    // Resolve the speaker the same way the voice will be: tts.personaFor()
+    // falls back to settings.getEffectivePersona() when no persona is passed,
+    // so stripping only on an explicit one left every caller that omits it
+    // leaking the label — /dj/say among them. Reading a different source of
+    // truth than _speak is what made the fix miss the very path that reported
+    // the bug.
+    const speaker = persona ?? settings.getEffectivePersona();
     const safeText = normalizeForDisplay(
-      persona?.name ? stripSpeakerLabel(text || '', [persona.name]) : (text || ''),
+      speaker?.name ? stripSpeakerLabel(text || '', [speaker.name]) : (text || ''),
     );
     if (!safeText) return { accepted: false, deferred: false, completed: Promise.resolve(false) };
     if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) {
@@ -2331,7 +2339,13 @@ class Queue {
   // webhook) happens at AIR time, so the DJ's memory reflects what reached the
   // stream, not what was merely scheduled.
   async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {}, daypart = null, hostSpeech = null }: { persona?: Persona | null; meta?: TurnMeta; daypart?: string | null; hostSpeech?: HostSpeechStamp | null } = {}) {
-    const safeText = normalizeForDisplay(text || '');
+    // Scheduled segments reach _speak through here too, so they need the same
+    // guard as announce(): a label the model prefixed would otherwise be read
+    // aloud. Same speaker resolution, for the same reason.
+    const scheduledSpeaker = persona ?? settings.getEffectivePersona();
+    const safeText = normalizeForDisplay(
+      scheduledSpeaker?.name ? stripSpeakerLabel(text || '', [scheduledSpeaker.name]) : (text || ''),
+    );
     if (!safeText) return;
     if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return;
     if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {

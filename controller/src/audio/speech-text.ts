@@ -254,6 +254,14 @@ function normalizeTtsPunctuation(text: string): string {
 // "drop any leading Word:" would eat real speech — "Attention : voici le
 // morceau" would lose its first word — and the cast is exactly what the caller
 // has, because it is what routes each line to its voice.
+// Supported grammar, deliberately narrow (PR #1715 review):
+//   "Iris: hello"  "Iris : hello"  "«Iris»: hello"  — stripped when Iris is cast
+//   "Iris:hello"                                    — NOT stripped: the space
+//     after the colon is required, because "ratio:3" style text is not a label.
+//   "**Iris:** hello"                               — reaches here as
+//     "Iris: hello" only AFTER display normalization; stripping runs first, so
+//     a bold label survives this pass. Prompt instructions remain the first
+//     line of defence for that shape.
 const SPEAKER_LABEL_RE = /^\s*["'«“]?\s*([^\s:][^:\n]{0,30}?)\s*:\s+/;
 
 // Accent- and case-insensitive so "Solene:" still matches the persona Solène.
