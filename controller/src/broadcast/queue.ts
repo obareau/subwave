@@ -435,6 +435,7 @@ class Queue {
   _airVoice = airVoice;
 
   startIntroRender(item: QueueItem) {
+    this.cleanUnrenderedIntro(item);
     const expected = introSpeechIdentity(item);
     const kind = expected.kind || 'dj-speak';
     const render = this._introRenders.start(item, () => this._speak(expected.script!, {
@@ -449,6 +450,18 @@ class Queue {
       }
     });
     return render;
+  }
+
+  // Recovered/legacy scripts may predate the guard. Clean before the render
+  // identity is captured, and keep the displayed/stored line equal to TTS input.
+  // An existing WAV already owns its words and must never be relabelled.
+  cleanUnrenderedIntro(item: QueueItem) {
+    if (item.introLabelChecked) return;
+    if (item.introWav && existsSync(item.introWav)) return;
+    if (!item.introScript) return;
+    const speaker = item.introPersona ?? settings.getEffectivePersona();
+    item.introScript = normalizeForDisplay(stripSpeakerLabel(item.introScript, speaker?.name ? [speaker.name] : []));
+    item.introLabelChecked = true;
   }
 
   // Drop only uncommitted ordinary host speech. The music item remains in the
@@ -887,13 +900,14 @@ class Queue {
   // the line if the real seam lands too far from it — the forecast is made from
   // the on-air track's remaining play and goes badly wrong when the pick misses
   // that seam and auto.m3u fills the slot.
-  async push({ track, requestedBy = null, operator = false, block = null, intent = null, introScript = null, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null }: {
+  async push({ track, requestedBy = null, operator = false, block = null, intent = null, introScript = null, introLabelChecked = false, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null }: {
     track: Track;
     requestedBy?: string | null;
     operator?: boolean;
     block?: QueueItem['block'] | null;
     intent?: string | null;
     introScript?: string | null;
+    introLabelChecked?: boolean;
     introKind?: string;
     introPersona?: Persona | null;
     introHostSpeech?: HostSpeechStamp | null;
@@ -942,8 +956,12 @@ class Queue {
       introPersona = null;
       introHostSpeech = null;
     }
+    if (introScript && !introLabelChecked) {
+      const speaker = introPersona ?? settings.getEffectivePersona();
+      introScript = normalizeForDisplay(stripSpeakerLabel(introScript, speaker?.name ? [speaker.name] : []));
+    }
     const item = {
-      track, requestedBy, operator, intent, introScript, introKind, introPersona, introHostSpeech,
+      track, requestedBy, operator, intent, introScript, introLabelChecked: true, introKind, introPersona, introHostSpeech,
       // Links are editorially scoped to the session that wrote them. Preserve
       // the key alongside the persona: persona alone cannot distinguish two
       // adjacent shows hosted by the same DJ.
@@ -2262,7 +2280,7 @@ class Queue {
   // makes the two-voice persona handoff play cleanly). Each line is booth-
   // logged speaker-prefixed and appended to the session tagged with its
   // speaker, so windowMessages names a guest's words as theirs.
-  async announceExchange(lines: { persona: Persona; text: string }[], kind = 'banter') {
+  async announceExchange(lines: { persona: Persona; text: string }[], kind = 'banter', { castNames = [] }: { castNames?: readonly string[] } = {}) {
     if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
       this.log('scheduler', `Dropped ${kind} exchange — the show handoff has already claimed this boundary`);
       return false;
@@ -2270,10 +2288,10 @@ class Queue {
     const rendered: { persona: Persona; text: string; wavPath: string }[] = [];
     // The whole cast, not just the line's own speaker: a model that prefixes a
     // label picks any name on the call sheet, including the one it is replying to.
-    const castNames = lines.map(l => l.persona?.name).filter(Boolean) as string[];
+    const knownNames = [...castNames, ...lines.map(l => l.persona?.name).filter(Boolean) as string[]];
     try {
       for (const l of lines) {
-        const text = normalizeForDisplay(stripSpeakerLabel(l.text || '', castNames));
+        const text = normalizeForDisplay(stripSpeakerLabel(l.text || '', knownNames));
         if (!text) continue;
         const wavPath = await this._speak(text, { kind, persona: l.persona });
         rendered.push({ ...l, text, wavPath });
@@ -2860,6 +2878,7 @@ class Queue {
     if (!item.introWav || !existsSync(item.introWav)) {
       if (!item.introScript) return;
       try {
+        this.cleanUnrenderedIntro(item);
         item.introWav = await this._speak(item.introScript, {
           kind: item.introKind || 'dj-speak',
           // Same persona the script was written under — speak() would

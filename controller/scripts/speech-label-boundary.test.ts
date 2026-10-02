@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 import { after, beforeEach, test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -20,12 +20,17 @@ process.env.STATE_DIR = root;
 const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
 const { queue } = await import('../src/broadcast/queue.js');
+const { config } = await import('../src/config.js');
+const { enqueuePick, trimLinkToIntro } = await import('../src/broadcast/dj-agent/enqueue.js');
+const { awaitIntroRender } = await import('../src/broadcast/queue/intro-render.js');
 
 const realSpeak = (queue as any)._speak;
 const realAirVoice = (queue as any)._airVoice;
 
 const template = settings.get().personas[0];
 const IRIS = { ...template, id: 'p_iris', name: 'Iris' };
+const LUCIFER = { ...template, id: 'p_lucifer', name: 'Lucifer' };
+const SOLENE = { ...template, id: 'p_solene', name: 'Solène' };
 const SHOW = 's_label';
 
 function week() {
@@ -47,19 +52,28 @@ function ctx() {
 
 /** Captures what actually reaches TTS. */
 let spoken: string[] = [];
+let speakers: string[] = [];
+const wav = join(root, 'test.wav');
+writeFileSync(wav, Buffer.alloc(44));
 
 beforeEach(async () => {
   spoken = [];
+  speakers = [];
   queue.senderBusy = true;
   queue.upcoming = [];
   queue.current = null;
   queue.history = [];
-  (queue as any)._speak = async (text: string) => { spoken.push(text); return null; };
+  (queue as any)._speak = async (text: string, opts: any) => {
+    spoken.push(text);
+    speakers.push(opts.persona?.id ?? 'implicit');
+    return wav;
+  };
   (queue as any)._airVoice = async () => true;
   await settings.update({
     personas: [IRIS], activePersonaId: IRIS.id,
     shows: [{ id: SHOW, name: 'Label Show', topic: 'tests', personaId: IRIS.id }],
     schedule: week(), scheduleOverride: null,
+    tts: { enabled: true },
   } as never);
   session.start(ctx());
 });
@@ -68,7 +82,7 @@ after(async () => {
   (queue as any)._speak = realSpeak;
   (queue as any)._airVoice = realAirVoice;
   queue.senderBusy = false;
-  await new Promise(resolve => setTimeout(resolve, 600));
+  await new Promise(resolve => setTimeout(resolve, 1_100));
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -110,4 +124,140 @@ test('announceAtNextTrack leaves ordinary speech alone', async () => {
   await queue.announceAtNextTrack('Radio Subwave : toute la nuit.', 'station-id');
   assert.equal(spoken[0], 'Radio Subwave : toute la nuit.',
     'a station name that is not a cast member must survive');
+});
+
+test('valid long and quoted persona labels reach TTS without the name', async () => {
+  const long = { ...IRIS, name: 'A'.repeat(40) };
+  await settings.update({ personas: [long] } as never);
+  await queue.announce(`${long.name}: Hello.`, 'dj-speak', { persona: long as never });
+  await queue.announce('«Iris»: Bonsoir.', 'dj-speak', { persona: IRIS as never });
+  assert.deepEqual(spoken, ['Hello.', 'Bonsoir.']);
+});
+
+test('a pick budgets cleaned speech before storage and pre-render', async () => {
+  const host = { ...IRIS, djMode: true };
+  await settings.update({ personas: [host] } as never);
+  const song = { id: 'budget-song', title: 'Budget Song', artist: 'Artist', introMs: 4000 };
+  const words = 'One two three four five six seven eight nine ten.';
+  assert.equal(trimLinkToIntro('Iris : ' + words, song, host as never), words);
+  await enqueuePick(queue, song, 'tests', 'tests', 'Iris : ' + words, null, {}, { introPersona: host as never });
+  const item = queue.upcoming[0];
+  assert.equal(item.introScript, words);
+  await queue.startIntroRender(item);
+  assert.deepEqual(spoken, [words]);
+  assert.deepEqual(speakers, [IRIS.id]);
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  const stored = JSON.parse(readFileSync(config.queue.file, 'utf8'));
+  assert.equal(stored.upcoming[0].introScript, words);
+});
+
+test('a queued request strips once and keeps its author for missing-WAV fallback', async () => {
+  await queue.push({
+    track: { id: 'request-song', title: 'Request Song', artist: 'Artist' },
+    requestedBy: 'alice', introScript: 'Iris: Iris: a title with a colon.',
+    introPersona: IRIS as never,
+  });
+  const item = queue.upcoming[0];
+  assert.equal(item.introScript, 'Iris: a title with a colon.');
+  await settings.update({ personas: [IRIS, LUCIFER], shows: [{ id: SHOW, name: 'Label Show', personaId: LUCIFER.id }] } as never);
+  item.introWav = join(root, 'reaped.wav');
+  await queue.airIntro(item);
+  assert.deepEqual(spoken, ['Iris: a title with a colon.']);
+  assert.deepEqual(speakers, [IRIS.id]);
+  assert.equal(item.requestedBy, 'alice');
+});
+
+test('a recovered unchecked script is cleaned before the render identity is captured', async () => {
+  const item = {
+    track: { id: 'legacy-song', title: 'Legacy Song', artist: 'Artist' },
+    introScript: '«Iris»: Bonsoir.', introPersona: IRIS, introKind: 'link',
+  } as any;
+  await queue.startIntroRender(item);
+  assert.deepEqual(spoken, ['Bonsoir.']);
+  assert.equal(item.introScript, 'Bonsoir.');
+  assert.equal(item.introWav, wav, 'the cleaned render is still accepted by the identity guard');
+});
+
+test('a legacy script rendered only at air time is cleaned using its original speaker', async () => {
+  const item = {
+    track: { id: 'fallback-song', title: 'Fallback Song', artist: 'Artist' },
+    introScript: 'Iris : Bonsoir.', introPersona: IRIS, introKind: 'dj-speak',
+    introWav: join(root, 'missing.wav'),
+  } as any;
+  await queue.airIntro(item);
+  assert.deepEqual(spoken, ['Bonsoir.']);
+  assert.deepEqual(speakers, [IRIS.id]);
+  assert.equal(item.introScript, 'Bonsoir.');
+});
+
+test('a timed-out clean render is reused at air time without stripping or rendering twice', async () => {
+  await queue.push({ track: { id: 'slow', title: 'Slow', artist: 'Artist' }, introScript: 'Iris: Iris: Hello.', introPersona: IRIS as never });
+  const item = queue.upcoming[0];
+  let finish!: (path: string) => void;
+  (queue as any)._speak = async (text: string) => {
+    spoken.push(text);
+    return new Promise<string>(resolve => { finish = resolve; });
+  };
+  const pending = queue.startIntroRender(item);
+  assert.deepEqual(await awaitIntroRender(pending, 5), { status: 'timed-out' });
+  const air = queue.airIntro(item);
+  finish(wav);
+  await air;
+  assert.deepEqual(spoken, ['Iris: Hello.']);
+  assert.equal(item.introScript, 'Iris: Hello.');
+});
+
+test('exchange delivery uses the generation cast even when a member has no speaking turn', async () => {
+  const castNames = [IRIS, LUCIFER, SOLENE].map(p => p.name);
+  // The live roster can change after the model was given its cast.
+  await queue.announceExchange([
+    { persona: IRIS as never, text: 'Solene : Bonsoir.' },
+    { persona: LUCIFER as never, text: 'Iris: Oui.' },
+    { persona: IRIS as never, text: 'Bob: still ordinary speech.' },
+  ], 'banter', { castNames });
+  assert.deepEqual(spoken, ['Bonsoir.', 'Oui.', 'Bob: still ordinary speech.']);
+  assert.deepEqual(speakers, [IRIS.id, LUCIFER.id, IRIS.id]);
+});
+
+test('the banter runner carries its complete captured cast through generation into delivery', async () => {
+  const { runBanter } = await import('../src/broadcast/scheduler.js');
+  await settings.update({
+    personas: [IRIS, LUCIFER, SOLENE],
+    shows: [{ id: SHOW, name: 'Label Show', topic: 'tests', personaId: IRIS.id, guestPersonaIds: [LUCIFER.id, SOLENE.id] }],
+    llm: { provider: 'openai-compatible', baseUrl: 'http://review.invalid/v1', model: 'test', fallback: { enabled: false } },
+  } as never);
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).endsWith('/chat/completions')) throw new Error('external network disabled in speech regression');
+    calls += 1;
+    const request = JSON.parse(String(init?.body));
+    assert.match(JSON.stringify(request.messages), /Solène/);
+    // Change the live cast while the model is in flight. Delivery must keep
+    // the prompt's known names and each returned line's original voice.
+    await settings.update({ shows: [{ id: SHOW, name: 'Label Show', personaId: IRIS.id }] } as never);
+    return new Response(JSON.stringify({
+      id: 'speech-test', object: 'chat.completion', created: 1, model: 'test',
+      choices: [{ index: 0, finish_reason: 'tool_calls', message: {
+        role: 'assistant', content: null,
+        tool_calls: [{ id: 'emit-test', type: 'function', function: {
+          name: request.tools[0].function.name,
+          arguments: JSON.stringify({ lines: [
+            { speaker: IRIS.id, text: 'Solène: Bonsoir.' },
+            { speaker: LUCIFER.id, text: 'Iris : Oui.' },
+            { speaker: IRIS.id, text: 'Et la suite.' },
+          ] }),
+        } }],
+      } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }), { headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    await runBanter();
+    assert.equal(calls, 1);
+    assert.deepEqual(spoken, ['Bonsoir.', 'Oui.', 'Et la suite.']);
+    assert.deepEqual(speakers, [IRIS.id, LUCIFER.id, IRIS.id]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

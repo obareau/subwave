@@ -262,7 +262,17 @@ function normalizeTtsPunctuation(text: string): string {
 //     "Iris: hello" only AFTER display normalization; stripping runs first, so
 //     a bold label survives this pass. Prompt instructions remain the first
 //     line of defence for that shape.
-const SPEAKER_LABEL_RE = /^\s*["'«“]?\s*([^\s:][^:\n]{0,30}?)\s*:\s+/;
+const SPEAKER_LABEL_RE = /^\s*([^:\r\n]+?)\s*:\s+/;
+const SPEAKER_QUOTES: Readonly<Record<string, string>> = { '"': '"', "'": "'", '«': '»', '“': '”' };
+
+function unquoteSpeaker(name: string): string {
+  const trimmed = name.trim();
+  const closing = SPEAKER_QUOTES[trimmed[0]!];
+  if (!closing) return trimmed;
+  // Accept an opening quote around the whole line as well as a quoted name.
+  const rest = trimmed.slice(1).trim();
+  return rest.endsWith(closing) ? rest.slice(0, -1).trim() : rest;
+}
 
 // Accent- and case-insensitive so "Solene:" still matches the persona Solène.
 function foldName(name: string): string {
@@ -280,7 +290,7 @@ export function stripSpeakerLabel(text: string, castNames: Iterable<string>): st
 
   const m = SPEAKER_LABEL_RE.exec(text);
   if (!m) return text;
-  if (!known.has(foldName(m[1]!))) return text;
+  if (!known.has(foldName(m[1]!)) && !known.has(foldName(unquoteSpeaker(m[1]!)))) return text;
 
   // One strip only: a second label deeper in the line is part of what was said
   // ("and then Iris: that was the moment"), not a routing artefact.

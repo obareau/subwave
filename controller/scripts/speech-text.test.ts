@@ -42,6 +42,24 @@ async function main() {
   await test('an opening quote before the label does not hide it', () => {
     assert.equal(stripSpeakerLabel('"Iris: bonsoir', cast), 'bonsoir');
   });
+  await test('paired quotes around the name do not hide a known label', () => {
+    for (const label of ['"Iris"', "'Iris'", '«Iris»', '“Iris”']) {
+      assert.equal(stripSpeakerLabel(`${label}: bonsoir`, cast), 'bonsoir');
+    }
+    assert.equal(stripSpeakerLabel('«Solene» : bonsoir', cast), 'bonsoir');
+    assert.equal(stripSpeakerLabel('«Bob»: bonsoir', cast), '«Bob»: bonsoir');
+    assert.equal(stripSpeakerLabel('«Iris»: ', cast), '«Iris»: ');
+  });
+  await test('long and decomposed known names have no arbitrary prefix limit', () => {
+    for (const name of ['The Midnight Frequency Presenter', 'A'.repeat(40), 'é'.repeat(40).normalize('NFD')]) {
+      assert.equal(stripSpeakerLabel(`${name}: bonsoir`, [name]), 'bonsoir');
+    }
+    assert.equal(stripSpeakerLabel('A'.repeat(40) + ': bonsoir', cast), 'A'.repeat(40) + ': bonsoir');
+  });
+  await test('deliberately unsupported markup and tight colon remain unchanged', () => {
+    assert.equal(stripSpeakerLabel('Iris:bonsoir', cast), 'Iris:bonsoir');
+    assert.equal(stripSpeakerLabel('**Iris:** bonsoir', cast), '**Iris:** bonsoir');
+  });
   await test('REAL SPEECH IS NEVER TOUCHED — this is the whole point', () => {
     // A blanket "drop any leading Word:" would eat the first word of these.
     assert.equal(stripSpeakerLabel('Attention : voici le morceau', cast), 'Attention : voici le morceau');

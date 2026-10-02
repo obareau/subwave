@@ -496,7 +496,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
-  const say = dropEchoedLink(trimLinkToIntro(rawLink, song), queue) || '';
+  const say = dropEchoedLink(trimLinkToIntro(rawLink, song, linkPersona), queue) || '';
   const link = say || null;
   const fxActive = settings.effectsActive();
   // The no-FX schema tells the model to leave transition null, but a model can
@@ -527,7 +527,9 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // the captured pick anchor), instead of immediately over the current track (#189).
   // Stamp `pickAnchor` as the link's intended back-announce target so the queue
   // can drop the link if a request jumps ahead of this pick before it airs.
-  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, pickAnchor, { sweep, washout, blend, dissolve, chop, loop }, { linkClockAt: linkClockStampFor(linkAirAt, clockAllowed), introPersona: linkPersona, hostSpeech: linkHostSpeech });
+  // Re-budget the original output: a second strip of `say` could eat a nested
+  // leading name that the first pass deliberately kept as spoken text.
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', link ? rawLink : null, pickAnchor, { sweep, washout, blend, dissolve, chop, loop }, { linkClockAt: linkClockStampFor(linkAirAt, clockAllowed), introPersona: linkPersona, hostSpeech: linkHostSpeech });
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
